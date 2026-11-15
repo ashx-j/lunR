@@ -54,10 +54,10 @@ describe("permission rule matching", () => {
 			"echo `git push`",
 			"A=1 git push",
 		]) {
-			expect(rules.denied("bash", { command })).toBe("bash(git push*)");
+			expect(rules.denied("bash", { command })?.rule).toBe("bash(git push*)");
 		}
-		expect(rules.denied("bash", { command: "git status" })).toBeUndefined();
-		expect(rules.denied("bash", { command: 'git commit -m "push fix"' })).toBeUndefined();
+		expect(rules.denied("bash", { command: "git status" })?.rule).toBeUndefined();
+		expect(rules.denied("bash", { command: 'git commit -m "push fix"' })?.rule).toBeUndefined();
 	});
 
 	// The rewrites a review ran against `bash(touch *)`, plus two more; only commands built at run time get through.
@@ -94,19 +94,19 @@ describe("permission rule matching", () => {
 		"echo $(touch d31)",
 	];
 	it.each(touchVariants)("denies the rewrite %j", (command) => {
-		expect(globalRules([], ["bash(touch *)"]).denied("bash", { command })).toBe("bash(touch *)");
+		expect(globalRules([], ["bash(touch *)"]).denied("bash", { command })?.rule).toBe("bash(touch *)");
 	});
 
 	it("cannot see commands built while the shell runs", () => {
 		const rules = globalRules([], ["bash(touch *)"]);
-		expect(rules.denied("bash", { command: "T=touch; $T d24" })).toBeUndefined();
+		expect(rules.denied("bash", { command: "T=touch; $T d24" })?.rule).toBeUndefined();
 		expect(rules.denied("bash", { command: "$(echo touch) d22" })).toBeUndefined();
 	});
 
 	it("lets options and their values sit between a deny pattern's words", () => {
 		const rules = globalRules([], ["bash(git push*)"]);
-		expect(rules.denied("bash", { command: "git -C repo push origin" })).toBe("bash(git push*)");
-		expect(rules.denied("bash", { command: "git --no-pager -c x=y push" })).toBe("bash(git push*)");
+		expect(rules.denied("bash", { command: "git -C repo push origin" })?.rule).toBe("bash(git push*)");
+		expect(rules.denied("bash", { command: "git --no-pager -c x=y push" })?.rule).toBe("bash(git push*)");
 	});
 
 	// Quoted text, here-document bodies and comments are data, so a deny rule's words appearing there must not block.
@@ -131,7 +131,7 @@ describe("permission rule matching", () => {
 		["bash(rm -rf*)", `python3 -c "print('rm -rf')"`],
 	];
 	it.each(dataNotCommands)("%s lets %j run", (rule, command) => {
-		expect(globalRules([], [rule]).denied("bash", { command })).toBeUndefined();
+		expect(globalRules([], [rule]).denied("bash", { command })?.rule).toBeUndefined();
 	});
 
 	// Plain and commonly wrapped forms, checked against real bash in review.
@@ -164,21 +164,66 @@ describe("permission rule matching", () => {
 		["bash(touch *)", "bash <<EOF\ntouch x\nEOF"],
 	];
 	it.each(wrappedForms)("%s blocks %j", (rule, command) => {
-		expect(globalRules([], [rule]).denied("bash", { command })).toBe(rule);
+		expect(globalRules([], [rule]).denied("bash", { command })?.rule).toBe(rule);
 	});
 
+	// A `(` or `"` inside a here-document in `$(...)` must not hide the command after it.
+	const afterSubstitution: Array<[boolean, string]> = [
+		[true, `git commit -m "$(cat <<'EOF'\nAdd parser (draft\nEOF\n)" && git push`],
+		[true, `git commit -m "$(cat <<'EOF'\nfix: handle "(" in names\nEOF\n)" && git push`],
+		[true, `git commit -m "$(cat <<'EOF'\nsmile :)\nEOF\n)" && git push`],
+		[false, `git commit -m "$(cat <<'EOF'\n1) git push --force is gone\nEOF\n)"`],
+		[true, "cat <<'E O F'\nx\nE O F\ngit push"],
+		[false, 'bash run.sh -c "git push"'],
+		[true, "bash -euo pipefail -c 'git push'"],
+		[true, `${"true; ".repeat(300)}git push`],
+	];
+	it.each(afterSubstitution)("bash(git push*) case %# blocks: %s", (blocked, command) => {
+		expect(globalRules([], ["bash(git push*)"]).denied("bash", { command })?.rule).toBe(
+			blocked ? "bash(git push*)" : undefined,
+		);
+	});
+
+	it("blocks with any bash deny rule a command nested too deeply to check", () => {
+		let command = "ls";
+		for (let i = 0; i < 6; i++) command = `bash -c ${JSON.stringify(command)}`;
+		expect(globalRules([], ["bash(git push*)"]).denied("bash", { command })).toEqual({
+			rule: "bash(git push*)",
+			uncheckable: true,
+		});
+		expect(globalRules([], ["bash(git push*)"]).denied("bash", { command: "bash -c 'ls'" })).toBeUndefined();
+	});
+
+	// Inputs from review that hung, overflowed the stack or ran out of memory, at about 100 KB each.
 	it("stays fast for pathological rules and commands", () => {
-		const flags = (n: number) => Array.from({ length: n }, (_, i) => `-I/inc/dir${i}`).join(" ");
-		const cases: Array<[string, string, Record<string, unknown>]> = [
-			["bash(gcc -o /usr*)", "bash", { command: `gcc ${flags(400)} -c x.c` }],
-			["bash(rm -rf*)", "bash", { command: `rm ${Array(400).fill("-v").join(" ")} build` }],
-			[`bash(${"*a".repeat(13)}*b)`, "bash", { command: "a".repeat(5000) }],
-			[`edit(${"**/a/".repeat(10)}b)`, "edit", { path: `${"a/".repeat(60)}c` }],
+		const many = (word: string, n: number) => word.repeat(n);
+		const cases: Array<[string[], string, Record<string, unknown>]> = [
+			[["bash(rm -rf*)"], "bash", { command: `rm${many(" -v", 33000)}` }],
+			[["bash(git push0 --force*)"], "bash", { command: `git${many(" -v", 33000)} status` }],
+			[["bash(git push --force*)"], "bash", { command: `git push${many(" -v", 33000)} origin` }],
+			[["bash(rm -rf /*)"], "bash", { command: `rm -rf${many(" -v", 33000)} build` }],
+			[["bash(git -v x*)"], "bash", { command: `git${many(" -v", 33000)}` }],
+			[["bash(touch *)"], "bash", { command: `echo {${many(",", 100000)}` }],
+			[["bash(touch *)"], "bash", { command: `find .${many(" -exec", 16000)}` }],
+			[["bash(rm -rf*)"], "bash", { command: `${many("sudo ", 20000)}rm -rf x` }],
+			[["bash(rm -rf*)"], "bash", { command: `${many("xargs ", 15000)}rm -rf x` }],
+			[["bash(rm -rf*)"], "bash", { command: `${many("$(", 20000)}rm -rf x${many(")", 20000)}` }],
+			[["bash(rm -rf*)"], "bash", { command: `${many('"$(echo ', 10000)}rm -rf x${many(')"', 10000)}` }],
+			[["bash(rm -rf*)"], "bash", { command: `cat${many(" <<a", 20000)}\n${many("x\n", 20000)}` }],
+			[[`bash(${"*a".repeat(13)}*b)`], "bash", { command: "a".repeat(100000) }],
+			[Array.from({ length: 1000 }, (_, i) => `bash(cmd${i} -rf*)`), "bash", { command: "git status && npm test" }],
+			[
+				Array.from({ length: 200 }, (_, i) => `bash(gcc -o /usr${i}*)`),
+				"bash",
+				{ command: `gcc${many(" -Iinclude/dir", 1000)} -c main.c -o main.o` },
+			],
+			[[`edit(${"**/a/".repeat(10)}b)`], "edit", { path: `${"a/".repeat(60)}c` }],
 		];
-		for (const [rule, tool, input] of cases) {
+		for (const [deny, tool, input] of cases) {
+			const rules = globalRules([], deny);
 			const started = performance.now();
-			globalRules([], [rule]).denied(tool, input);
-			expect(performance.now() - started, rule).toBeLessThan(500);
+			rules.denied(tool, input);
+			expect(performance.now() - started, deny[0]).toBeLessThan(100);
 		}
 	});
 
@@ -186,8 +231,10 @@ describe("permission rule matching", () => {
 		const many = Array.from({ length: MAX_RULES + 1 }, (_, i) => `bash(tool${i} *)`);
 		const rules = globalRules(many, many);
 		expect(rules.allowed("bash", { command: `tool${MAX_RULES} x` })).toBe(false);
-		expect(rules.denied("bash", { command: "ls" })).toBe(`bash(tool${MAX_RULES} *)`);
-		expect(globalRules([], [`edit(${"a".repeat(MAX_RULE_LENGTH)})`]).denied("edit", { path: "x" })).toBeDefined();
+		expect(rules.denied("bash", { command: "ls" })?.rule).toBe(`bash(tool${MAX_RULES} *)`);
+		expect(
+			globalRules([], [`edit(${"a".repeat(MAX_RULE_LENGTH)})`]).denied("edit", { path: "x" })?.rule,
+		).toBeDefined();
 		expect(permissionRuleProblems(many, "permissions.deny")).toEqual([
 			`permissions.deny has "bash(tool${MAX_RULES} *)", which is past the first ${MAX_RULES} rules. lunR blocks every bash call until you shorten or remove it.`,
 		]);
@@ -205,26 +252,26 @@ describe("permission rule matching", () => {
 	it("does not let an allow rule follow a symlink out of its folder, but a deny rule still sees the link", () => {
 		const rules = compilePermissionRules({ allow: ["write(src/**)"], deny: ["edit(src/**)"] }, undefined, true, cwd);
 		expect(rules.allowed("write", { path: "src/escape/x.txt" })).toBe(false);
-		expect(rules.denied("edit", { path: "src/escape/x.txt" })).toBe("edit(src/**)");
+		expect(rules.denied("edit", { path: "src/escape/x.txt" })?.rule).toBe("edit(src/**)");
 	});
 
 	it("compares paths without case on macOS", () => {
 		const platform = Object.getOwnPropertyDescriptor(process, "platform");
 		Object.defineProperty(process, "platform", { value: "darwin" });
 		try {
-			expect(globalRules([], ["edit(.env)"]).denied("edit", { path: ".ENV" })).toBe("edit(.env)");
+			expect(globalRules([], ["edit(.env)"]).denied("edit", { path: ".ENV" })?.rule).toBe("edit(.env)");
 		} finally {
 			if (platform) Object.defineProperty(process, "platform", platform);
 		}
 		if (process.platform === "linux")
-			expect(globalRules([], ["edit(.env)"]).denied("edit", { path: ".ENV" })).toBeUndefined();
+			expect(globalRules([], ["edit(.env)"]).denied("edit", { path: ".ENV" })?.rule).toBeUndefined();
 	});
 
 	it("reads tool names in any case and Claude Code's :* suffix, and rejects empty parentheses", () => {
 		const rules = globalRules(["Bash(npm run test:*)"], ["Write(w.txt)", "bash()"]);
 		expect(rules.allowed("bash", { command: "npm run test --watch" })).toBe(true);
-		expect(rules.denied("write", { path: "w.txt" })).toBe("Write(w.txt)");
-		expect(rules.denied("bash", { command: "ls" })).toBeUndefined();
+		expect(rules.denied("write", { path: "w.txt" })?.rule).toBe("Write(w.txt)");
+		expect(rules.denied("bash", { command: "ls" })?.rule).toBeUndefined();
 		expect(parsePermissionRule("bash( )")).toBeUndefined();
 	});
 
@@ -253,7 +300,7 @@ describe("permission rule scopes", () => {
 	it("ignores project allow rules in an untrusted project but keeps its deny rules", () => {
 		const rules = compilePermissionRules(undefined, project, false, cwd);
 		expect(rules.allowed("bash", { command: "make" })).toBe(false);
-		expect(rules.denied("bash", { command: "rm -rf build" })).toBe("bash(rm*)");
+		expect(rules.denied("bash", { command: "rm -rf build" })?.rule).toBe("bash(rm*)");
 	});
 
 	it("honors project allow rules in a trusted project", () => {
@@ -270,7 +317,7 @@ describe("permission rule scopes", () => {
 				const manager = SettingsManager.create(cwd, agentDir, { projectTrusted });
 				const settings = manager.getPermissionRuleSettings();
 				const rules = compilePermissionRules(settings.global, settings.project, settings.projectTrusted, cwd);
-				expect(rules.denied("bash", { command: "rm -rf build" })).toBe("bash(rm*)");
+				expect(rules.denied("bash", { command: "rm -rf build" })?.rule).toBe("bash(rm*)");
 				expect(rules.allowed("bash", { command: "make" })).toBe(projectTrusted);
 				expect(manager.getTheme() === "x").toBe(projectTrusted);
 			}
@@ -302,6 +349,17 @@ describe("permission rule scopes", () => {
 			const manager = SettingsManager.create(cwd, join(root, "agent"), { projectTrusted: false });
 			expect(manager.drainErrors().map(({ scope, error }) => `${scope}: ${error.message}`)).toEqual([
 				'project: permissions.deny has "Bash()", which is not tool or tool(pattern); it is ignored.',
+			]);
+		} finally {
+			rmSync(join(cwd, ".lunr"), { recursive: true, force: true });
+		}
+	});
+	it("warns when an untrusted project's settings file can't be read", () => {
+		mkdirSync(join(cwd, ".lunr", "settings.json"), { recursive: true });
+		try {
+			const manager = SettingsManager.create(cwd, join(root, "agent"), { projectTrusted: false });
+			expect(manager.drainErrors().map(({ error }) => error.message)).toEqual([
+				expect.stringContaining("Could not read the project's deny rules, so none apply"),
 			]);
 		} finally {
 			rmSync(join(cwd, ".lunr"), { recursive: true, force: true });

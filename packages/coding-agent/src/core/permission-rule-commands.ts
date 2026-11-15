@@ -1,26 +1,36 @@
 /**
  * lunR: the commands a bash command line can run, as deny rules see them (`deniedCommandLines`).
  *
- * One left-to-right pass over the text, in this order of priorities:
- * 1. Bounded cost: one pass per text, nesting at most `MAX_NESTING` deep, at most `MAX_LINES` lines.
- * 2. Data is not a command: single-quoted text, double-quoted text outside `$(...)` and backticks,
- *    comments, redirect targets and here-document bodies (unless the here-document feeds a shell).
- * 3. The plain and the common wrapped forms are commands: every `;`/`&&`/`|`/newline/`(`/`)`
- *    segment, `$(...)`/backtick/`<(...)` bodies, after assignments, `!`, `{`, `if`/`then`/`do`, a
- *    leading redirect and `function name`, at every stage of a wrapper (`sudo`, `env`, `timeout 5`,
- *    `xargs`, ...), and the bodies of `sh -c`, `eval`, `env -S` and `find -exec`.
+ * `scan` reads a text once with a small state machine for quotes, comments, here-documents and a
+ * stack of open `$(...)`, backtick and `<(...)` bodies, so nesting needs no recursion. Data is not a
+ * command: single-quoted text, double-quoted text outside substitutions, comments, redirect targets
+ * and here-document bodies. `segmentLines` walks each segment's words with an index and emits a line
+ * at every command start: after assignments, `!`, `{`, `if`/`then`/`do` and `function name`, at
+ * every wrapper stage (`sudo`, `env`, `timeout 5`, `xargs`, ...) and for each `find -exec`. Bodies of
+ * `sh -c`, `eval`, `env -S` and a here-document fed to a shell are queued and scanned the same way.
+ * Past `MAX_DEPTH` queued levels or `MAX_STAGES` lines in one segment the result is `uncheckable`.
  *
  * It does not see commands built while the shell runs (`$T`, `$(echo touch)`), text piped or
  * redirected into a shell, interpreters (`python -c`), `ssh`, `docker`, `su -c` or sourced files. A
- * command word bash expands before running (`{touch,x}`, `$'touch'`) is reported as `wildcard`, so
- * every deny rule's command word matches it.
+ * command word bash expands (`{touch,x}`, `$'touch'`) is a `wildcard`: every rule's command word matches.
  */
 
-/** One command a deny rule checks: its words, the first reduced to its base name. */
+/** One command a deny rule checks: a view of a segment's words from `start` to `end`. */
 export interface DeniedLine {
-	words: string[];
-	/** The command word is expanded by bash before running, so any command name could result. */
+	/** The segment's words, shared by every line cut from it. Arguments are `start + 1` to `end - 1`. */
+	words: readonly string[];
+	start: number;
+	end: number;
+	/** The command word's base name: `/usr/bin/touch` is `touch`. */
+	name: string;
+	/** bash expands the command word before running it, so any command name could result. */
 	wildcard: boolean;
+}
+
+export interface DeniedCommands {
+	lines: DeniedLine[];
+	/** Nested or wrapped past the limits, so the text may run commands not in `lines`. */
+	uncheckable: boolean;
 }
 
 interface Segment {
@@ -30,12 +40,29 @@ interface Segment {
 	heredocBodies: string[];
 }
 
-const MAX_NESTING = 4;
-const MAX_LINES = 256;
+/** One open level of the scan: the top level, or a `$(...)`/backtick/`<(...)` body. */
+interface Frame {
+	closer?: ")" | "`";
+	/** Plain `(` open inside this body, so `$( (a) )` closes at the right `)`. */
+	parens: number;
+	quote?: "'" | '"';
+	segment: Segment;
+	word: string;
+	inWord: boolean;
+	expanded: boolean;
+	/** -1 outside a `{`, 0 inside one, 1 after a `,` or `..` inside one. */
+	brace: number;
+	/** The next word is a redirect target. */
+	skipWord: boolean;
+}
+
+const MAX_DEPTH = 4;
+const MAX_STAGES = 16;
 /** Stands in for a `$(...)` or backtick inside a word; its body is checked on its own. */
 const SUBSTITUTION = "\u0001";
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const HEREDOC_DELIMITER = /'([^']*)'|"([^"]*)"|([^\s;&|<>()'"]*)/y;
 /** Words that start a command without being it. */
 const PREFIX_WORDS = new Set(["!", "{", "}", "if", "then", "do", "else", "elif", "while", "until", "time"]);
 /** Commands that run the command after them: options that take a value, and positionals before it. */
@@ -61,265 +88,250 @@ const WRAPPERS = new Map<string, { valued: ReadonlySet<string>; positionals: num
 ]);
 /** Commands whose `-c` (alone or in a flag cluster) takes a command to run. */
 const C_FLAG_RUNNERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "script"]);
+const C_FLAG = /^-[A-Za-z]*c[A-Za-z]*$/;
+/** A shell option that takes the next word as its value: `-o pipefail`, `-euo pipefail`, `+O extglob`. */
+const VALUED_SHELL_OPTION = /^[-+][A-Za-z]*[oO]$/;
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
-function basenameOf(word: string): string {
-	return word.split(/[\\/]/).pop() ?? word;
-}
-
-/** The body of `$(` / `<(` / `>(` starting at `start` (just after the `(`), by counting parentheses. */
-function readParenBody(text: string, start: number): [body: string, end: number] {
-	let depth = 1;
-	for (let i = start; i < text.length; i++) {
-		if (text[i] === "\\") i++;
-		else if (text[i] === "(") depth++;
-		else if (text[i] === ")" && --depth === 0) return [text.slice(start, i), i];
-	}
-	return [text.slice(start), text.length - 1];
-}
-
-function readBacktickBody(text: string, start: number): [body: string, end: number] {
-	for (let i = start; i < text.length; i++) {
-		if (text[i] === "\\") i++;
-		else if (text[i] === "`") return [text.slice(start, i), i];
-	}
-	return [text.slice(start), text.length - 1];
-}
-
-/** Splits `command` into segments of unquoted words, collecting substitution bodies in `nested`. */
-function scan(command: string, nested: string[]): Segment[] {
-	const segments: Segment[] = [];
-	const pendingHeredocs: Array<{ delimiter: string; stripTabs: boolean; segment: Segment }> = [];
-	let segment: Segment = { words: [], expanded: [], heredocBodies: [] };
-	let word = "";
-	let unquoted = "";
-	let inWord = false;
-	let expanded = false;
-	let quote: "'" | '"' | undefined;
-	let skipNextWord = false;
+/** Adds the segments of `text` to `segments` in one pass (see the module comment). */
+function scan(text: string, segments: Segment[]): void {
+	const newFrame = (closer?: ")" | "`"): Frame => ({
+		closer,
+		parens: 0,
+		segment: { words: [], expanded: [], heredocBodies: [] },
+		word: "",
+		inWord: false,
+		expanded: false,
+		brace: -1,
+		skipWord: false,
+	});
+	const stack = [newFrame()];
+	let f = stack[0];
+	const heredocs: Array<{ delimiter: string; stripTabs: boolean; segment: Segment }> = [];
 
 	const endWord = () => {
-		if (inWord) {
-			if (skipNextWord) skipNextWord = false;
-			else {
-				segment.words.push(word);
-				segment.expanded.push(expanded || /\{[^{}\s]*(?:,|\.\.)[^{}\s]*\}/.test(unquoted));
-			}
+		if (f.inWord && f.skipWord) f.skipWord = false;
+		else if (f.inWord) {
+			f.segment.words.push(f.word);
+			f.segment.expanded.push(f.expanded);
 		}
-		word = "";
-		unquoted = "";
-		inWord = false;
-		expanded = false;
+		f.word = "";
+		f.inWord = false;
+		f.expanded = false;
+		f.brace = -1;
 	};
 	const endSegment = () => {
 		endWord();
-		skipNextWord = false;
-		if (segment.words.length > 0) segments.push(segment);
-		segment = { words: [], expanded: [], heredocBodies: [] };
+		f.skipWord = false;
+		if (f.segment.words.length > 0) segments.push(f.segment);
+		f.segment = { words: [], expanded: [], heredocBodies: [] };
 	};
-	/** After a newline: consumes the bodies of here-documents opened on the line before. */
+	/** Opens a substitution body; `$(...)` and backticks leave a placeholder in the current word. */
+	const open = (closer: ")" | "`", inWord: boolean) => {
+		if (inWord) {
+			f.word += SUBSTITUTION;
+			f.inWord = true;
+		}
+		f = newFrame(closer);
+		stack.push(f);
+	};
+	const close = () => {
+		endSegment();
+		stack.pop();
+		f = stack[stack.length - 1];
+	};
+	/** After a newline: reads the bodies of the here-documents opened before it. */
 	const readHeredocs = (newline: number): number => {
 		let i = newline;
-		for (const heredoc of pendingHeredocs.splice(0)) {
+		for (const heredoc of heredocs.splice(0)) {
 			const body: string[] = [];
-			for (;;) {
-				const end = command.indexOf("\n", i + 1);
-				const line = command.slice(i + 1, end === -1 ? undefined : end);
-				i = end === -1 ? command.length : end;
-				const isDelimiter = (heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter;
-				if (!isDelimiter) body.push(line);
-				if (isDelimiter || end === -1) break;
+			while (i < text.length) {
+				const end = text.indexOf("\n", i + 1);
+				const line = text.slice(i + 1, end === -1 ? text.length : end);
+				i = end === -1 ? text.length : end;
+				if ((heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter) break;
+				body.push(line);
 			}
 			heredoc.segment.heredocBodies.push(body.join("\n"));
 		}
 		return i;
 	};
 
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		const next = command[i + 1];
-		if (quote === "'") {
-			if (ch === "'") quote = undefined;
-			else word += ch;
-			continue;
-		}
-		if (quote === '"') {
-			if (ch === "\\" && next !== undefined && '$`"\\\n'.includes(next)) {
-				if (next !== "\n") word += next;
-				i++;
-			} else if (ch === '"') quote = undefined;
-			else if (ch === "$" && next === "(") {
-				const [body, end] = readParenBody(command, i + 2);
-				nested.push(body);
-				word += SUBSTITUTION;
-				i = end;
-			} else if (ch === "`") {
-				const [body, end] = readBacktickBody(command, i + 1);
-				nested.push(body);
-				word += SUBSTITUTION;
-				i = end;
-			} else word += ch;
-			continue;
-		}
-		if (ch === "\\") {
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		const next = text[i + 1];
+		if (ch === "`" && f.closer === "`") close();
+		else if (f.quote === "'") {
+			if (ch === "'") f.quote = undefined;
+			else f.word += ch;
+		} else if (ch === "\\" && (f.quote === undefined || (next !== undefined && '$`"\\\n'.includes(next)))) {
 			if (next !== undefined && next !== "\n") {
-				word += next;
-				inWord = true;
+				f.word += next;
+				f.inWord = true;
 			}
 			i++;
+		} else if (f.quote === '"') {
+			if (ch === '"') f.quote = undefined;
+			else if (ch === "$" && next === "(") {
+				open(")", true);
+				i++;
+			} else if (ch === "`") open("`", true);
+			else f.word += ch;
 		} else if (ch === "'" || ch === '"') {
-			quote = ch;
-			inWord = true;
+			f.quote = ch;
+			f.inWord = true;
 		} else if (ch === "$" && next === "'") {
-			quote = "'";
-			inWord = true;
-			expanded = true;
+			f.quote = "'";
+			f.inWord = true;
+			f.expanded = true;
 			i++;
 		} else if ((ch === "$" || ch === "<" || ch === ">") && next === "(") {
-			const [body, end] = readParenBody(command, i + 2);
-			nested.push(body);
-			if (ch === "$") {
-				word += SUBSTITUTION;
-				inWord = true;
-			}
-			i = end;
-		} else if (ch === "`") {
-			const [body, end] = readBacktickBody(command, i + 1);
-			nested.push(body);
-			word += SUBSTITUTION;
-			inWord = true;
-			i = end;
-		} else if (ch === "#" && !inWord) {
-			while (i + 1 < command.length && command[i + 1] !== "\n") i++;
-		} else if (ch === " " || ch === "\t" || ch === "\r") {
-			endWord();
-		} else if (ch === "\n") {
+			open(")", ch === "$");
+			i++;
+		} else if (ch === "`") open("`", true);
+		else if (ch === "#" && !f.inWord) {
+			const end = text.indexOf("\n", i);
+			i = (end === -1 ? text.length : end) - 1;
+		} else if (ch === " " || ch === "\t" || ch === "\r") endWord();
+		else if (ch === "\n") {
 			// A pending here-document keeps the segment that opened it, so its body reaches that command.
 			endSegment();
-			if (pendingHeredocs.length > 0) i = readHeredocs(i);
+			if (heredocs.length > 0) i = readHeredocs(i);
 		} else if (ch === "<" || ch === ">" || (ch === "&" && next === ">")) {
 			// A digit word right before is the redirect's file descriptor, not an argument.
-			if (inWord && /^\d+$/.test(word)) {
-				word = "";
-				unquoted = "";
-				inWord = false;
-			} else endWord();
-			if (ch === "<" && next === "<" && command[i + 2] !== "<") {
+			if (f.inWord && /^\d+$/.test(f.word)) f.inWord = false;
+			endWord();
+			if (ch === "<" && next === "<" && text[i + 2] !== "<") {
 				i += 2;
-				const stripTabs = command[i] === "-";
+				const stripTabs = text[i] === "-";
 				if (stripTabs) i++;
-				while (command[i] === " " || command[i] === "\t") i++;
-				const match = /^(['"]?)([^\s;&|<>'"]*)\1/.exec(command.slice(i));
-				const delimiter = match?.[2] ?? "";
-				pendingHeredocs.push({ delimiter, stripTabs, segment });
-				i += Math.max((match?.[0].length ?? 0) - 1, 0);
+				while (text[i] === " " || text[i] === "\t") i++;
+				HEREDOC_DELIMITER.lastIndex = i;
+				const match = HEREDOC_DELIMITER.exec(text);
+				heredocs.push({ delimiter: match?.[1] ?? match?.[2] ?? match?.[3] ?? "", stripTabs, segment: f.segment });
+				i = HEREDOC_DELIMITER.lastIndex - 1;
 				continue;
 			}
-			while (command[i + 1] === "<" || command[i + 1] === ">" || command[i + 1] === "&" || command[i + 1] === "|") {
-				i++;
-			}
-			skipNextWord = true;
-		} else if (ch === ";" || ch === "&" || ch === "|" || ch === "(" || ch === ")") {
+			while (text[i + 1] === "<" || text[i + 1] === ">" || text[i + 1] === "&" || text[i + 1] === "|") i++;
+			f.skipWord = true;
+		} else if (ch === ")" && f.closer === ")" && f.parens === 0) close();
+		else if (ch === "(" || ch === ")") {
 			endSegment();
-		} else {
-			word += ch;
-			unquoted += ch;
-			inWord = true;
+			f.parens = Math.max(f.parens + (ch === "(" ? 1 : -1), 0);
+		} else if (ch === ";" || ch === "&" || ch === "|") endSegment();
+		else {
+			if (ch === "{") f.brace = 0;
+			else if (f.brace >= 0 && (ch === "," || (ch === "." && next === "."))) f.brace = 1;
+			else if (ch === "}") {
+				f.expanded ||= f.brace === 1;
+				f.brace = -1;
+			}
+			f.word += ch;
+			f.inWord = true;
 		}
 	}
+	while (stack.length > 1) close();
 	endSegment();
-	return segments;
 }
 
-/** Index of the first word after a wrapper's options and positionals. */
-function skipWrapper(name: string, words: string[], start: number): number {
-	const wrapper = WRAPPERS.get(name);
-	let i = start;
-	while (i < words.length && (words[i].startsWith("-") || (name === "env" && ASSIGNMENT.test(words[i])))) {
-		if (words[i] === "--") return i + 1 + (wrapper?.positionals ?? 0);
-		i += wrapper?.valued.has(words[i]) ? 2 : 1;
-	}
-	return i + (wrapper?.positionals ?? 0);
+function basenameOf(word: string): string {
+	return word.slice(Math.max(word.lastIndexOf("/"), word.lastIndexOf("\\")) + 1);
 }
 
-/** `env -S 'cmd'` / `env --split-string=cmd`: the command text env splits and runs. */
-function envSplitString(args: string[]): string | undefined {
-	for (let i = 0; i < args.length; i++) {
-		if (args[i] === "-S" || args[i] === "--split-string") return args[i + 1];
-		if (args[i].startsWith("--split-string=")) return args[i].slice("--split-string=".length);
-		if (args[i].startsWith("-S") && args[i].length > 2) return args[i].slice(2);
-	}
-	return undefined;
+/** `env -S 'cmd'` / `-Scmd` / `--split-string=cmd`: the command text env splits and runs. */
+function envSplitString(option: string, value: string | undefined): string | undefined {
+	if (option === "-S" || option === "--split-string") return value;
+	if (option.startsWith("--split-string=")) return option.slice("--split-string=".length);
+	return option.startsWith("-S") && option.length > 2 ? option.slice(2) : undefined;
 }
 
-function linesFromSegment(segment: Segment, depth: number, out: DeniedLine[]): void {
+/** Adds the commands one segment runs to `result`, queuing the bodies other shells run. */
+function segmentLines(
+	segment: Segment,
+	depth: number,
+	result: DeniedCommands,
+	queue: Array<{ text: string; depth: number }>,
+): void {
 	const { words, expanded } = segment;
-	let i = 0;
-	let viaXargs = false;
-	let commandName: string | undefined;
-	while (i < words.length && out.length < MAX_LINES) {
-		const word = words[i];
-		if (PREFIX_WORDS.has(word) || ASSIGNMENT.test(word)) {
-			i++;
-			continue;
+	const nested = (text: string | undefined) => {
+		if (text !== undefined) queue.push({ text, depth: depth + 1 });
+	};
+	// `find -exec` adds ranges while the loop runs.
+	const ranges: Array<[start: number, end: number]> = [[0, words.length]];
+	let stages = 0;
+	for (const [start, end] of ranges) {
+		let i = start;
+		let command: string | undefined;
+		while (i < end) {
+			const word = words[i];
+			if (PREFIX_WORDS.has(word) || ASSIGNMENT.test(word)) {
+				i++;
+				continue;
+			}
+			if (word === "function") {
+				i += 2;
+				continue;
+			}
+			if (++stages > MAX_STAGES) {
+				result.uncheckable = true;
+				return;
+			}
+			const name = basenameOf(word);
+			result.lines.push({ words, start: i, end, name, wildcard: expanded[i] === true });
+			const wrapper = WRAPPERS.get(name);
+			if (!wrapper) {
+				command = name;
+				break;
+			}
+			for (i++; i < end && (words[i].startsWith("-") || (name === "env" && ASSIGNMENT.test(words[i]))); ) {
+				if (words[i] === "--") {
+					i++;
+					break;
+				}
+				if (name === "env") nested(envSplitString(words[i], words[i + 1]));
+				i += wrapper.valued.has(words[i]) ? 2 : 1;
+			}
+			i += wrapper.positionals;
 		}
-		if (word === "function") {
-			i += 2;
-			continue;
+		if (command === undefined) continue;
+		const arg = (k: number) => (k < end ? words[k] : undefined);
+		if (C_FLAG_RUNNERS.has(command)) {
+			// Only options before the first other word: `bash run.sh -c x` passes `-c` to run.sh.
+			for (let k = i + 1; k < end && /^[-+]/.test(words[k]); k++) {
+				if (C_FLAG.test(words[k])) {
+					nested(arg(k + 1) === "--" ? arg(k + 2) : arg(k + 1));
+					break;
+				}
+				if (VALUED_SHELL_OPTION.test(words[k])) k++;
+			}
 		}
-		const name = basenameOf(word);
-		const args = words.slice(i + 1);
-		const wildcard = expanded[i] === true;
-		out.push({ words: [name, ...args], wildcard });
-		// xargs adds arguments from its input, so the command may get more than the text shows.
-		if (viaXargs) out.push({ words: [name, ...args, "_"], wildcard });
-		if (name === "env") {
-			const split = envSplitString(args);
-			if (split !== undefined) nestedLines(split, depth + 1, out);
+		if (SHELLS.has(command)) for (const body of segment.heredocBodies) nested(body);
+		if (command === "eval") nested(words.slice(i + 1, end).join(" "));
+		if (command === "find") {
+			let exec = -1;
+			for (let k = i + 1; k < end; k++) {
+				if (exec === -1 && FIND_EXEC.has(words[k])) exec = k;
+				else if (exec !== -1 && (words[k] === ";" || words[k] === "+")) {
+					ranges.push([exec + 1, k]);
+					exec = -1;
+				}
+			}
+			if (exec !== -1) ranges.push([exec + 1, end]);
 		}
-		if (!WRAPPERS.has(name)) {
-			commandName = name;
-			break;
-		}
-		viaXargs ||= name === "xargs";
-		i = skipWrapper(name, words, i + 1);
 	}
-	if (commandName === undefined || depth >= MAX_NESTING) return;
-	const args = words.slice(i + 1);
-	if (C_FLAG_RUNNERS.has(commandName)) {
-		const flag = args.findIndex((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg));
-		const body = args[flag + 1] === "--" ? args[flag + 2] : args[flag + 1];
-		if (flag !== -1 && body !== undefined) nestedLines(body, depth + 1, out);
-	}
-	if (SHELLS.has(commandName)) {
-		for (const body of segment.heredocBodies) nestedLines(body, depth + 1, out);
-	}
-	if (commandName === "eval") nestedLines(args.join(" "), depth + 1, out);
-	if (commandName === "find") {
-		args.forEach((arg, index) => {
-			if (!FIND_EXEC.has(arg)) return;
-			const end = args.findIndex((word, after) => after > index && (word === ";" || word === "+"));
-			const execWords = args.slice(index + 1, end === -1 ? undefined : end);
-			linesFromSegment(
-				{ words: execWords, expanded: execWords.map(() => false), heredocBodies: [] },
-				depth + 1,
-				out,
-			);
-		});
-	}
-}
-
-function nestedLines(command: string, depth: number, out: DeniedLine[]): void {
-	if (depth > MAX_NESTING || out.length >= MAX_LINES) return;
-	const nested: string[] = [];
-	for (const segment of scan(command, nested)) linesFromSegment(segment, depth, out);
-	for (const body of nested) nestedLines(body, depth + 1, out);
 }
 
 /** The commands `command` can run, normalized for deny rules (see the module comment). */
-export function deniedCommandLines(command: string): DeniedLine[] {
-	const out: DeniedLine[] = [];
-	nestedLines(command, 0, out);
-	return out.slice(0, MAX_LINES);
+export function deniedCommandLines(command: string): DeniedCommands {
+	const result: DeniedCommands = { lines: [], uncheckable: false };
+	const queue = [{ text: command, depth: 0 }];
+	for (const { text, depth } of queue) {
+		if (depth > MAX_DEPTH) result.uncheckable = true;
+		if (result.uncheckable) break;
+		const segments: Segment[] = [];
+		scan(text, segments);
+		for (const segment of segments) segmentLines(segment, depth, result, queue);
+	}
+	return result;
 }

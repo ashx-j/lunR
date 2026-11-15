@@ -262,6 +262,16 @@ describe("ask mode", () => {
 		expect(asked).toHaveLength(2);
 	});
 
+	it("asks before a read-only child's result replaces a file, as a write would", async () => {
+		const asked = answer("once");
+		const inspect = { task: "inspect", description: "Inspector", permissions: "read-only" };
+		expect(await gateToolCall("subagent", inspect, "/cwd")).toBeUndefined();
+		expect(asked).toHaveLength(0);
+		await gateToolCall("subagent", { tasks: [inspect], output: "README.md" }, "/cwd");
+		expect(asked).toMatchObject([{ toolName: "subagent", detail: "Inspector" }]);
+		expect(asked[0]?.title).toContain("saves its result to a file");
+	});
+
 	it("remembers a session answer for the exact command only", async () => {
 		const asked = answer("session");
 		await gateToolCall("bash", { command: "npm test" }, "/cwd");

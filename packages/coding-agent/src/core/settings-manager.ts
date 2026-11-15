@@ -285,8 +285,8 @@ export interface SettingsManagerCreateOptions {
 
 export interface SettingsStorage {
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
-	/** Reads a scope without locking or writing anything; undefined when it is missing or unreadable. */
-	readWithoutLock?(scope: SettingsScope): string | undefined;
+	/** Reads a scope without locking or writing anything; undefined when it is missing, throws when unreadable. */
+	readWithoutLock(scope: SettingsScope): string | undefined;
 }
 
 export interface SettingsError {
@@ -308,8 +308,9 @@ export class FileSettingsStorage implements SettingsStorage {
 	readWithoutLock(scope: SettingsScope): string | undefined {
 		try {
 			return readFileSync(scope === "global" ? this.globalSettingsPath : this.projectSettingsPath, "utf-8");
-		} catch {
-			return undefined;
+		} catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+			throw error;
 		}
 	}
 
@@ -414,7 +415,7 @@ class SessionOnlySettingsStorage extends InMemorySettingsStorage {
 	}
 
 	override readWithoutLock(scope: SettingsScope): string | undefined {
-		return this.copiedScopes.has(scope) ? super.readWithoutLock(scope) : this.source.readWithoutLock?.(scope);
+		return this.copiedScopes.has(scope) ? super.readWithoutLock(scope) : this.source.readWithoutLock(scope);
 	}
 }
 
@@ -1375,13 +1376,17 @@ export class SettingsManager {
 	 * warning (printed at startup) for every rule that can never match.
 	 */
 	private loadPermissionRules(): void {
-		// A plain read: an untrusted repository gets no lock folder, and an unreadable one is skipped.
-		let project: unknown;
-		try {
-			const content = this.storage.readWithoutLock?.("project");
-			project = content ? JSON.parse(content) : undefined;
-		} catch {
-			// A trusted project's parse error is already reported by the normal load.
+		// A trusted project's file is already loaded, and its errors reported. An untrusted one gets a
+		// plain read, so lunR writes no lock folder into it.
+		let project: unknown = this.projectSettings;
+		if (!this.projectTrusted) {
+			try {
+				const content = this.storage.readWithoutLock("project");
+				project = content ? JSON.parse(content) : undefined;
+			} catch (error) {
+				const why = error instanceof Error ? error.message : String(error);
+				this.recordError("project", new Error(`Could not read the project's deny rules, so none apply: ${why}`));
+			}
 		}
 		const projectPermissions =
 			project && typeof project === "object" && "permissions" in project ? project.permissions : undefined;

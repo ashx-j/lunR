@@ -284,13 +284,24 @@ function protectedFileWriteReason(toolName: string, input: Record<string, unknow
 interface RequestedChildLaunch {
 	description: string;
 	permissions: "full" | "read-only";
+	/** The child's `output` (its own or inherited) asks lunR to write its result to a file. */
+	writesOutput: boolean;
 }
 
-function collectRequestedChildLaunches(value: unknown, launches: RequestedChildLaunch[]): void {
+function collectRequestedChildLaunches(
+	value: unknown,
+	launches: RequestedChildLaunch[],
+	inheritedOutput = false,
+): void {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return;
 	const input = value as Record<string, unknown>;
+	const writesOutput =
+		input.output === undefined
+			? inheritedOutput
+			: input.output !== false && input.output !== "false" && input.output !== "";
 	if (typeof input.task === "string" && input.task.trim()) {
 		launches.push({
+			writesOutput,
 			description:
 				typeof input.description === "string" && input.description.trim()
 					? input.description.trim()
@@ -302,9 +313,9 @@ function collectRequestedChildLaunches(value: unknown, launches: RequestedChildL
 	for (const key of ["tasks", "chain", "parallel"] as const) {
 		const children = input[key];
 		if (Array.isArray(children)) {
-			for (const child of children) collectRequestedChildLaunches(child, launches);
+			for (const child of children) collectRequestedChildLaunches(child, launches, writesOutput);
 		} else if (key === "parallel") {
-			collectRequestedChildLaunches(children, launches);
+			collectRequestedChildLaunches(children, launches, writesOutput);
 		}
 	}
 }
@@ -458,7 +469,15 @@ function askApprovalKey(toolName: string, input: Record<string, unknown>, cwd: s
 
 function askQuestion(toolName: string, input: Record<string, unknown>): { title: string; detail: string } {
 	if (toolName === "subagent") {
-		const children = getRequestedChildLaunches(input).filter((child) => child.permissions === "full");
+		const launches = getRequestedChildLaunches(input);
+		const children = launches.filter((child) => child.permissions === "full");
+		const writers = launches.filter((child) => child.writesOutput);
+		if (children.length === 0 && writers.length > 0) {
+			return {
+				title: "Launch a read-only subagent that saves its result to a file? lunR writes the file, replacing any file there.",
+				detail: sanitizeDetail(writers.map((child) => child.description).join("\n")),
+			};
+		}
 		if (children.length === 0) {
 			return {
 				// Steering or resuming may target a read-only child, so don't claim it runs commands.
@@ -501,7 +520,9 @@ async function gateAskMode(
 	ctx: PermissionContext,
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
-	if (REVIEW_FREE_TOOLS.has(toolName) || !readOnlyModeBlock(toolName, input)) return undefined;
+	// A read-only child's output file is a write lunR makes for it, so it asks like `write` does.
+	const savesOutput = toolName === "subagent" && getRequestedChildLaunches(input).some((child) => child.writesOutput);
+	if (REVIEW_FREE_TOOLS.has(toolName) || (!readOnlyModeBlock(toolName, input) && !savesOutput)) return undefined;
 	if (options?.rules?.allowed(toolName, input)) return undefined;
 	const key = askApprovalKey(toolName, input, cwd);
 	if (key && ctx.approvals.has(key)) return undefined;
@@ -571,11 +592,13 @@ export async function gateToolCall(
 	if (protectedWriteReason) {
 		return { block: true, reason: protectedWriteReason };
 	}
-	const deniedBy = options?.rules?.denied(toolName, input);
-	if (deniedBy) {
+	const denial = options?.rules?.denied(toolName, input);
+	if (denial) {
 		return {
 			block: true,
-			reason: `The deny rule "${deniedBy}" in settings blocks this call. Don't reach the same result another way; tell the user what you need.`,
+			reason: denial.uncheckable
+				? `This command nests shells or wrappers too deeply to check against the deny rule "${denial.rule}" in settings, so the rule blocks it. Run its parts as simpler commands.`
+				: `The deny rule "${denial.rule}" in settings blocks this call. Don't reach the same result another way; tell the user what you need.`,
 		};
 	}
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
