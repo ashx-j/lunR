@@ -45,7 +45,7 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", async () => {
 	const extra = JSON.parse(JSON.parse(readFileSync(flag("--settings"), "utf8")).env.CLAUDE_CODE_EXTRA_BODY);
 	writeFileSync(join(__dirname, "pid"), String(process.pid));
-	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL }));
+	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL, autoMemoryOff: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY }));
 	if (__dirname.endsWith("signed-out") || !process.env.ANTHROPIC_BASE_URL) {
 		result({ is_error: true, result: "Not logged in. Please run /login and include this private detail" });
 		process.exit(1);
@@ -229,6 +229,8 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(record.argv[record.argv.indexOf("--tools") + 1]).toBe("");
 		// Claude Code reaches the upstream itself; lunR is not in between.
 		expect(record.baseUrl).toBe(upstream);
+		// Otherwise Claude Code adds the user's own auto-memory MEMORY.md to every request.
+		expect(record.autoMemoryOff).toBe("1");
 		// The MCP config is a file, and its secret path does not appear on the command line.
 		const mcpUrl = new URL(JSON.parse(record.mcp).mcpServers.lunr.url);
 		const mcpSecret = mcpUrl.pathname.split("/")[1];
