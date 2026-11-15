@@ -135,6 +135,8 @@ describe("isMutatingBashCommand", () => {
 		"cd src && ls",
 		"cd /abs/path; rg foo",
 		"cd 'dir with space' && ls 2>/dev/null",
+		"ls # list files",
+		'echo "a # b"; ls',
 	])("allows %s, which only discards output, duplicates a descriptor or changes directory", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(false);
 	});
@@ -170,6 +172,15 @@ describe("isMutatingBashCommand", () => {
 		"cd src && npm ls",
 		"cd /tmp/x; /usr/bin/git log",
 		"ls; cd src; FOO=1 git status",
+		// `{name}>` and `{name}<` put a new fd number in PATH or HOME
+		"true {PATH}>/dev/null; ls",
+		"echo {HOME}>&2; git status",
+		"true {PATH}<f; ls",
+		"true {PATH}<<<x; ls",
+		// a quote inside a comment must not hide the next line
+		"ls #'\nrm x\n'",
+		"ls 2>/dev/null #'\nrm x\n'",
+		"true # note\ntouch x",
 	])("still blocks %s", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(true);
 	});

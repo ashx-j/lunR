@@ -224,10 +224,16 @@ function isPlainCd(segment: string, tokens: string[]): boolean {
 /**
  * The command with each unquoted `[n]>/dev/null`, `&>/dev/null` and `[n]>&m` blanked out, or
  * undefined when any other output redirect remains (`>file`, `>>`, `>|`, `<>`, `>&-`, a quoted or
- * expanded target). Blanking keeps the `&` of `2>&1` from reading as an operator later.
+ * expanded target) or any redirect names its fd (`{PATH}>`, `{HOME}<`). Comments are blanked too.
+ * Blanking keeps the `&` of `2>&1` from reading as an operator later.
  */
 function withoutHarmlessRedirects(command: string): string | undefined {
-	let out = command;
+	const parts: string[] = [];
+	let copied = 0;
+	const blank = (start: number, end: number) => {
+		parts.push(command.slice(copied, start), " ".repeat(end - start));
+		copied = end;
+	};
 	let quote: "'" | '"' | undefined;
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
@@ -243,20 +249,37 @@ function withoutHarmlessRedirects(command: string): string | undefined {
 			quote = ch;
 			continue;
 		}
-		if (ch !== ">") continue;
+		// A comment runs to the end of its line, so a quote inside it can't hide the next line.
+		if (ch === "#" && (i === 0 || /[\s;|&()]/.test(command[i - 1]))) {
+			const lineEnd = command.indexOf("\n", i);
+			const end = lineEnd < 0 ? command.length : lineEnd;
+			blank(i, end);
+			i = end - 1;
+			continue;
+		}
+		if (ch !== ">" && ch !== "<") continue;
+		// `{name}>` and `{name}<` store the new fd number in a variable such as PATH or HOME.
+		if (command[fdStart(command, i) - 1] === "}") return undefined;
+		if (ch === "<") continue;
 		const end = harmlessRedirectEnd(command, i);
 		if (end === undefined) return undefined;
-		const start = redirectStart(command, i);
-		out = `${out.slice(0, start)}${" ".repeat(end - start)}${out.slice(end)}`;
+		blank(redirectStart(command, i), end);
 		i = end - 1;
 	}
-	return out;
+	parts.push(command.slice(copied));
+	return parts.join("");
+}
+
+/** Index of the fd digits before the redirect operator at `at`, or `at` when there are none. */
+function fdStart(command: string, at: number): number {
+	let start = at;
+	while (start > 0 && /\d/.test(command[start - 1])) start--;
+	return start;
 }
 
 /** Where the redirect whose `>` is at `at` begins: a whole-word fd number or a lone `&` before it. */
 function redirectStart(command: string, at: number): number {
-	let start = at;
-	while (start > 0 && /\d/.test(command[start - 1])) start--;
+	const start = fdStart(command, at);
 	if (start < at) return start === 0 || /[\s;|&(]/.test(command[start - 1]) ? start : at;
 	return command[at - 1] === "&" && (at === 1 || /\s/.test(command[at - 2])) ? at - 1 : at;
 }
