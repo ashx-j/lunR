@@ -6,6 +6,10 @@ import lspExtension from "../src/builtin-extensions/pi-lsp-extension/src/index.t
 import { CREDENTIAL_BLOCK_REASON, credentialWalkFilter } from "../src/core/credential-files.ts";
 import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
 import { gateToolCall, resetAllPermissionContexts, setPermissionMode } from "../src/core/permissions.ts";
+import {
+	CREDENTIALS_FILE_WRITE_BLOCK_REASON,
+	LUNR_MANAGED_STATE_WRITE_BLOCK_REASON,
+} from "../src/core/protected-targets.ts";
 import { createAllToolDefinitions, createFindTool, createGrepTool, createReadTool } from "../src/core/tools/index.ts";
 
 let root: string;
@@ -89,12 +93,20 @@ describe("lunR's saved logins", () => {
 			]) {
 				for (const param of params) {
 					const input = { [param.name]: param.array ? [location] : location };
-					for (const mode of ["yolo", "auto", "read-only"] as const) {
+					for (const mode of ["yolo", "auto", "ask", "read-only"] as const) {
 						setPermissionMode(mode);
-						expect(await gate(tool.name, input), `${tool.name}.${param.name} = ${location} (${mode})`).toEqual({
-							block: true,
-							reason: CREDENTIAL_BLOCK_REASON,
-						});
+						const result = await gate(tool.name, input);
+						const label = `${tool.name}.${param.name} = ${location} (${mode})`;
+						expect(result?.block, label).toBe(true);
+						// A write tool aimed at one of these meets the write protection of that file or tree first.
+						expect(
+							[
+								CREDENTIAL_BLOCK_REASON,
+								CREDENTIALS_FILE_WRITE_BLOCK_REASON,
+								LUNR_MANAGED_STATE_WRITE_BLOCK_REASON,
+							],
+							label,
+						).toContain(result?.reason);
 					}
 				}
 			}
