@@ -9,7 +9,23 @@ export interface ClaudeCodeTool {
 	inputSchema: Record<string, unknown>;
 }
 
+/** An MCP `tools/call` result, as lunR's live session hands it back to Claude Code. */
+export interface ClaudeCodeToolResult {
+	content: { type: "text"; text: string }[];
+	isError?: true;
+}
+
+/**
+ * Answers one held `tools/call` from a live Claude Code process. `id` is Claude Code's `tool_use` id from
+ * the call's `_meta`; undefined when the call carried none. Rejecting ends the call without an answer.
+ */
+export type ClaudeCodeToolHandler = (id: string | undefined) => Promise<ClaudeCodeToolResult>;
+
 const MAX_MCP_BODY = 1024 * 1024;
+/** Claude Code saves larger MCP results to a file and sends a preview; lunR's history must keep the text. */
+const MAX_RESULT_SIZE_CHARS = 1_000_000_000;
+/** An SSE comment on a held tool call, so no idle timeout ends a long lunR tool run. */
+const KEEPALIVE_MS = 15_000;
 
 async function listenOnLoopback(server: Server | TcpServer): Promise<number> {
 	await new Promise<void>((resolve, reject) => {
@@ -24,9 +40,10 @@ async function listenOnLoopback(server: Server | TcpServer): Promise<number> {
 }
 
 /**
- * Loopback MCP endpoint that lists lunR's tools so Claude Code accepts their `tool_use` blocks. Calls are
- * always refused; lunR runs tools itself. Claude Code sends its Messages request straight to Anthropic,
- * so nothing here ever sees its sign-in.
+ * Loopback MCP endpoint that lists lunR's tools so Claude Code accepts their `tool_use` blocks. lunR runs
+ * tools itself: without a tool handler every call is refused; a live session's handler holds each call
+ * until lunR's next request brings the result. Claude Code sends its Messages request straight to
+ * Anthropic, so nothing here ever sees its sign-in.
  *
  * The URL carries a random path prefix; keep it off command lines (write it to a private config file).
  * The Origin check keeps web pages out.
@@ -37,20 +54,33 @@ export class ClaudeCodeLoopback {
 	private readonly server: Server;
 	private readonly prefix: string;
 	private readonly tools: readonly ClaudeCodeTool[];
+	private readonly onToolCall: ClaudeCodeToolHandler | undefined;
 	private closed = false;
 
-	private constructor(server: Server, port: number, prefix: string, tools: readonly ClaudeCodeTool[]) {
+	private constructor(
+		server: Server,
+		port: number,
+		prefix: string,
+		tools: readonly ClaudeCodeTool[],
+		onToolCall: ClaudeCodeToolHandler | undefined,
+	) {
 		this.server = server;
 		this.prefix = prefix;
-		this.tools = tools;
+		this.tools = onToolCall
+			? tools.map((tool) => ({ ...tool, _meta: { "anthropic/maxResultSizeChars": MAX_RESULT_SIZE_CHARS } }))
+			: tools;
+		this.onToolCall = onToolCall;
 		this.mcpUrl = `http://127.0.0.1:${port}${prefix}/mcp`;
 		server.on("request", (req, res) => this.handle(req, res));
 	}
 
-	static async open(tools: readonly ClaudeCodeTool[] = []): Promise<ClaudeCodeLoopback> {
+	static async open(
+		tools: readonly ClaudeCodeTool[] = [],
+		onToolCall?: ClaudeCodeToolHandler,
+	): Promise<ClaudeCodeLoopback> {
 		const server = createServer();
 		const port = await listenOnLoopback(server);
-		return new ClaudeCodeLoopback(server, port, `/${randomBytes(32).toString("base64url")}`, tools);
+		return new ClaudeCodeLoopback(server, port, `/${randomBytes(32).toString("base64url")}`, tools, onToolCall);
 	}
 
 	close(): void {
@@ -88,6 +118,10 @@ export class ClaudeCodeLoopback {
 				res.writeHead(400).end();
 				return;
 			}
+			if (this.onToolCall && isToolCall(parsed)) {
+				this.holdToolCall(parsed, this.onToolCall, res);
+				return;
+			}
 			const replies = (Array.isArray(parsed) ? parsed : [parsed]).flatMap((message) => this.mcpReply(message) ?? []);
 			if (!replies.length) {
 				res.writeHead(202).end();
@@ -97,6 +131,33 @@ export class ClaudeCodeLoopback {
 			res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
 			res.end(body);
 		});
+	}
+
+	/**
+	 * Answers a tools/call as an SSE stream: headers go out at once and comments keep the connection busy
+	 * while lunR runs the tool. Closing the connection without an answer makes Claude Code fail the call,
+	 * which the live session's failure hook turns into a stop when lunR is gone.
+	 */
+	private holdToolCall(
+		call: { id: string | number; params?: unknown },
+		onToolCall: ClaudeCodeToolHandler,
+		res: ServerResponse,
+	): void {
+		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+		const keepalive = setInterval(() => res.write(": keepalive\n\n"), KEEPALIVE_MS);
+		keepalive.unref();
+		const meta = isRecord(call.params) && isRecord(call.params._meta) ? call.params._meta : undefined;
+		const id = typeof meta?.["claudecode/toolUseId"] === "string" ? meta["claudecode/toolUseId"] : undefined;
+		onToolCall(id).then(
+			(result) => {
+				clearInterval(keepalive);
+				res.end(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: call.id, result })}\n\n`);
+			},
+			() => {
+				clearInterval(keepalive);
+				res.destroy();
+			},
+		);
 	}
 
 	private mcpReply(message: unknown): object | undefined {
@@ -119,6 +180,19 @@ export class ClaudeCodeLoopback {
 						: {};
 		return { jsonrpc: "2.0", id: message.id, result };
 	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/** A single JSON-RPC tools/call request; batches never carry one from Claude Code. */
+function isToolCall(message: unknown): message is { id: string | number; params?: unknown } {
+	return (
+		isRecord(message) &&
+		message.method === "tools/call" &&
+		(typeof message.id === "string" || typeof message.id === "number")
+	);
 }
 
 /**
