@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 	spawn: vi.fn(),
 	connect: vi.fn(),
 	createConnection: vi.fn(),
+	debug: vi.fn(),
 	connection: {
 		onNotification: vi.fn(),
 		onRequest: vi.fn(),
@@ -27,6 +28,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("node:child_process", () => ({ spawn: mocks.spawn }));
 vi.mock("node:net", () => ({ connect: mocks.connect }));
+vi.mock("../src/builtin-extensions/pi-lsp-extension/src/shared/debug.ts", () => ({ debug: mocks.debug }));
 vi.mock("vscode-languageserver-protocol/node", () => ({
 	createMessageConnection: mocks.createConnection,
 	StreamMessageReader: class {},
@@ -149,6 +151,8 @@ describe("LSP owned client lifecycle", () => {
 	});
 	it("rejects a failed spawn without constructing a transport or signalling a missing child", async () => {
 		const { client, child, unexpected } = setup();
+		// A console write would land under the interactive TUI and leave stale rows on screen.
+		const log = vi.spyOn(console, "error").mockImplementation(() => {});
 		const starting = expect(client.start()).rejects.toThrow(/Failed to spawn/);
 		child.exitCode = -2;
 		child.emit("error", Object.assign(new Error("missing command"), { code: "ENOENT" }));
@@ -157,6 +161,7 @@ describe("LSP owned client lifecycle", () => {
 		expect(mocks.createConnection).not.toHaveBeenCalled();
 		expect(child.kill).not.toHaveBeenCalled();
 		expect(unexpected).not.toHaveBeenCalled();
+		expect(log).not.toHaveBeenCalled();
 	});
 
 	it("cancels initialization and cannot initialize after a late server reply", async () => {
@@ -222,7 +227,8 @@ describe("LSP owned client lifecycle", () => {
 		mocks.connection.sendNotification.mockRejectedValueOnce(pipeError);
 		client.didClose("file:///test.ts");
 		await vi.advanceTimersByTimeAsync(0);
-		expect(log).toHaveBeenCalledWith(expect.stringContaining("Notification failed"));
+		expect(mocks.debug).toHaveBeenCalledWith("LSP test", "Notification failed", "broken pipe");
+		expect(log).not.toHaveBeenCalled();
 		expect(process.listeners("uncaughtException")).toEqual(listeners);
 		child.exit();
 		await client.shutdown();
@@ -233,7 +239,6 @@ describe("LSP owned client lifecycle", () => {
 			"vscode-languageserver-protocol/node",
 		);
 		const { client, child } = setup();
-		const log = vi.spyOn(console, "error").mockImplementation(() => {});
 		mocks.createConnection.mockImplementation(() =>
 			protocol.createMessageConnection(
 				new protocol.StreamMessageReader(child.stdout),
@@ -257,7 +262,9 @@ describe("LSP owned client lifecycle", () => {
 		await startDirect(client, child);
 		child.stdin.destroy(Object.assign(new Error("broken pipe"), { code: "EPIPE" }));
 		client.didClose("file:///test.ts");
-		await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining("Notification failed")));
+		await vi.waitFor(() =>
+			expect(mocks.debug).toHaveBeenCalledWith("LSP test", "Notification failed", expect.any(String)),
+		);
 		child.exit();
 		await client.shutdown();
 	});
