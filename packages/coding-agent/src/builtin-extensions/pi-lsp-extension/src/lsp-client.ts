@@ -265,7 +265,7 @@ export class LspClient {
       const onSpawn = () => { cleanup(); resolve(); };
       const onError = (err: Error) => {
         cleanup();
-        reject(new Error(`Failed to spawn LSP server "${this.options.command}": ${err.message}`));
+        reject(new Error(`Failed to spawn LSP server "${this.options.command}": ${err.message}`, { cause: err }));
       };
       const cleanup = () => {
         child.removeListener("spawn", onSpawn);
