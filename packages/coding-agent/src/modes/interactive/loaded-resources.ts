@@ -12,10 +12,10 @@ import type { ExtensionRunner } from "../../core/extensions/index.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
-import { shortenPath } from "../../core/tools/render-utils.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { type ThemeColor, theme } from "./theme/theme.ts";
+import { shortenPath } from "./tool-renderers/render-utils.ts";
 
 /** What the listing needs from InteractiveMode, read once per render. */
 export interface LoadedResourcesHost {

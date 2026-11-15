@@ -11,11 +11,12 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { stripAnsi } from "../../utils/ansi.ts";
-import { resolvePath } from "../../utils/paths.ts";
-import { sanitizeBinaryOutput } from "../../utils/shell.ts";
-import type { ToolGroupRole } from "../extensions/types.ts";
+import type { TSchema } from "typebox";
+import type { ToolDefinition, ToolGroupRole } from "../../../core/extensions/types.ts";
+import { stripAnsi } from "../../../utils/ansi.ts";
+import { resolvePath } from "../../../utils/paths.ts";
+import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
+import type { Theme } from "../theme/theme.ts";
 
 /**
  * Shows a path under the home directory as `~/...`. Only whole directory names match, so with home
@@ -75,6 +76,21 @@ export function getTextOutput(
 
 	return output;
 }
+
+/**
+ * The drawing members of a tool definition. Built-in tools keep them in this directory, not in core;
+ * `getBuiltinToolRenderer` in `index.ts` looks them up by tool name. The `any` defaults match `ToolDef`.
+ */
+export interface ToolRenderer<TParams extends TSchema = any, TDetails = any, TState = any> {
+	renderCall?: ToolDefinition<TParams, TDetails, TState>["renderCall"];
+	renderResult?: ToolDefinition<TParams, TDetails, TState>["renderResult"];
+	renderShell?: ToolDefinition<TParams, TDetails, TState>["renderShell"];
+}
+
+/** The `ToolRenderer` for a core definition type `TDef`, with `TState` as the per-call render state. */
+export type ToolRendererFor<TDef, TState = unknown> = TDef extends ToolDefinition<infer TParams, infer TDetails>
+	? ToolRenderer<TParams, TDetails, TState>
+	: never;
 
 export type ToolRenderResultLike<TDetails> = {
 	content: (TextContent | ImageContent)[];

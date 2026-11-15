@@ -4372,16 +4372,22 @@ export class AgentSession {
 	 * @returns Path to exported file
 	 */
 	async exportToHtml(outputPath?: string): Promise<string> {
-		const [{ exportSessionToHtml }, { createToolHtmlRenderer }] = await Promise.all([
+		const [{ exportSessionToHtml }, { createToolHtmlRenderer }, { getBuiltinToolRenderer }] = await Promise.all([
 			import("./export-html/index.ts"),
 			import("./export-html/tool-renderer.ts"),
+			import("../modes/interactive/tool-renderers/index.ts"),
 		]);
 		const configuredThemeName = this.settingsManager.getTheme();
 		const themeName = configuredThemeName && getThemeByName(configuredThemeName) ? configuredThemeName : undefined;
 
 		// Create tool renderer if we have an extension runner (for custom tool HTML rendering)
 		const toolRenderer: ToolHtmlRenderer = createToolHtmlRenderer({
-			getToolDefinition: (name) => this.getToolDefinition(name),
+			// Built-in definitions carry no renderers; the export draws them as the TUI does.
+			getToolDefinition: (name) => {
+				const definition = this.getToolDefinition(name);
+				if (!definition || definition !== this._baseToolDefinitions.get(name)) return definition;
+				return { ...definition, ...getBuiltinToolRenderer(name) };
+			},
 			theme,
 			cwd: this.sessionManager.getCwd(),
 		});

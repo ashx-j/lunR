@@ -1,6 +1,25 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import ts from "typescript";
+
+// Fails on relative `.js` specifiers in .ts files, and on imports from coding-agent `core/` into `modes/`
+// (core must load without the TUI). The pairs below are the only core-to-modes imports allowed.
+const codingAgentSrc = "packages/coding-agent/src";
+const themeReason =
+	"the theme is shared state: the extension API exposes Theme and ctx.ui.theme in every mode, and the " +
+	"resource loader and HTML export read it. It stays in modes/ because user theme files link theme-schema.json by that path";
+const allowedCoreToModes = new Map([
+	["core/agent-session.ts -> modes/interactive/theme/theme.ts", themeReason],
+	["core/resource-loader.ts -> modes/interactive/theme/theme.ts", themeReason],
+	["core/extensions/runner.ts -> modes/interactive/theme/theme.ts", themeReason],
+	["core/extensions/types.ts -> modes/interactive/theme/theme.ts", themeReason],
+	["core/export-html/index.ts -> modes/interactive/theme/theme.ts", themeReason],
+	["core/export-html/tool-renderer.ts -> modes/interactive/theme/theme.ts", themeReason],
+	[
+		"core/agent-session.ts -> modes/interactive/tool-renderers/index.ts",
+		"HTML export draws built-in tools with the TUI renderers; exportToHtml imports them lazily",
+	],
+]);
 
 const ignoredDirectories = new Set([".git", "builtin-extensions", "coverage", "dist", "node_modules"]);
 const ignoredRootDirectories = new Set(["codex", "extension-repos", "hermes-agent", "kimi-cli", "pi"]);
@@ -32,6 +51,7 @@ function getImportTypeSpecifier(node) {
 }
 
 const failures = [];
+const layerFailures = [];
 
 collectTypescriptFiles(".");
 
@@ -39,10 +59,17 @@ for (const file of files.sort()) {
 	const sourceText = readFileSync(file, "utf8");
 	const sourceFile = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true);
 
+	const fromSrc = relative(codingAgentSrc, file);
+	const inCore = fromSrc.startsWith("core/");
+
 	function checkSpecifier(node) {
-		if (!isRelativeJavaScriptSpecifier(node.text)) return;
 		const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-		failures.push(`${file}:${line + 1}:${character + 1}: ${node.text}`);
+		if (isRelativeJavaScriptSpecifier(node.text)) failures.push(`${file}:${line + 1}:${character + 1}: ${node.text}`);
+		if (!inCore || !/^\.\.?\//.test(node.text)) return;
+		const target = relative(codingAgentSrc, join(dirname(file), node.text));
+		if (target.startsWith("modes/") && !allowedCoreToModes.has(`${fromSrc} -> ${target}`)) {
+			layerFailures.push(`${file}:${line + 1}:${character + 1}: ${node.text}`);
+		}
 	}
 
 	function visit(node) {
@@ -71,5 +98,11 @@ for (const file of files.sort()) {
 if (failures.length > 0) {
 	console.error("Relative .js imports are not allowed in non-declaration .ts files:");
 	for (const failure of failures) console.error(`  ${failure}`);
-	process.exit(1);
 }
+if (layerFailures.length > 0) {
+	console.error(
+		"coding-agent core/ must not import modes/. Move drawing code to modes/interactive (see tool-renderers/):",
+	);
+	for (const failure of layerFailures) console.error(`  ${failure}`);
+}
+if (failures.length > 0 || layerFailures.length > 0) process.exit(1);
