@@ -3,10 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
-import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
+import { CLAUDE_CODE_HISTORY_REPLAYED, CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
-import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
+import { type AssistantMessageEventStream, createAssistantMessageEventStream } from "../utils/event-stream.ts";
 import { stream as streamMessages, streamSimple as streamSimpleMessages } from "./anthropic-messages.ts";
 import { ClaudeCodeLoopback, type ClaudeCodeTool } from "./claude-code-loopback.ts";
 import {
@@ -572,12 +573,16 @@ export function claudeCodeFetch(
 	connection: ExternalClaudeCodeCredential,
 	idleMs: number,
 	upstream?: string,
+	/** Called when a request's history is too large for the body and is replayed uncached. */
+	onHistoryReplay?: () => void,
 ): (input: string | URL | Request, init?: RequestInit) => Promise<Response> {
 	return async (_input, init) => {
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			return await runClaudeCode(connection, claudeCodeRequest(body, connection), signal, idleMs, upstream);
+			const request = claudeCodeRequest(body, connection);
+			if (!("messages" in request.extraBody)) onHistoryReplay?.();
+			return await runClaudeCode(connection, request, signal, idleMs, upstream);
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));
@@ -645,11 +650,14 @@ export function streamClaudeCode(
 	if (!connection) throw new Error("Claude Code subscription setup is required. Run /login anthropic.");
 	if (connection.version !== 3) throw new Error(CLAUDE_CODE_UPDATE_REQUIRED);
 	const idleMs = Math.min(300_000, Math.max(1000, options.timeoutMs ?? 180_000));
+	let replayed = false;
 	const client = new Anthropic({
 		// Never sent anywhere: the fetch override replaces HTTP, and Claude Code supplies its own sign-in.
 		apiKey: "claude-code-subscription",
 		maxRetries: 0,
-		fetch: claudeCodeFetch(connection, idleMs, upstream),
+		fetch: claudeCodeFetch(connection, idleMs, upstream, () => {
+			replayed = true;
+		}),
 	});
 	const transportModel: Model<"anthropic-messages"> = {
 		...model,
@@ -666,7 +674,21 @@ export function streamClaudeCode(
 		client,
 		cacheRetention: "none" as const,
 	};
-	return simple
+	const source = simple
 		? streamSimpleMessages(transportModel, context, transportOptions)
 		: streamMessages(transportModel, context, transportOptions);
+	// The final message records an uncached replay, so lunR can tell the user once and show it in /context.
+	const output = createAssistantMessageEventStream();
+	void (async () => {
+		for await (const event of source) {
+			if (replayed && (event.type === "done" || event.type === "error"))
+				appendAssistantMessageDiagnostic(event.type === "done" ? event.message : event.error, {
+					type: CLAUDE_CODE_HISTORY_REPLAYED,
+					timestamp: Date.now(),
+				});
+			output.push(event);
+		}
+		output.end();
+	})();
+	return output;
 }
