@@ -8,6 +8,7 @@ import {
 	CLAUDE_CODE_UPDATE_REQUIRED,
 	streamClaudeCode,
 } from "../src/api/anthropic-claude-code-bridge.ts";
+import { claudeCodeHistoryReplayed } from "../src/auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../src/auth/types.ts";
 import { ANTHROPIC_MODELS } from "../src/providers/anthropic.models.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
@@ -218,6 +219,7 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 
 		expect(result.errorMessage).toBeUndefined();
 		expect(result.stopReason).toBe("toolUse");
+		expect(claudeCodeHistoryReplayed(result)).toBe(false);
 		expect(result.content).toEqual([
 			{ type: "thinking", thinking: "Next file.", thinkingSignature: "sig-new" },
 			{ type: "toolCall", id: "toolu_2", name: "read", arguments: { path: "b.txt" } },
@@ -275,6 +277,8 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		const result = await streamClaudeCode(model, large, { externalClaudeCode: connection }, true, upstream).result();
 
 		expect(result.errorMessage).toBeUndefined();
+		// The reply records the uncached replay so lunR can tell the user to compact.
+		expect(claudeCodeHistoryReplayed(result)).toBe(true);
 		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
 		expect(record.extra.messages).toBeUndefined();
 		expect(

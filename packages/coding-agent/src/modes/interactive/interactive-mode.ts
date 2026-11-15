@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { CLAUDE_CODE_HISTORY_REPLAYED_NOTE, claudeCodeHistoryReplayed } from "@earendil-works/pi-ai";
 import {
 	type Api,
 	type AssistantMessage,
@@ -2925,6 +2926,7 @@ export class InteractiveMode {
 					updateThinkingRunTimings(this.thinkingRunTimings, this.streamingMessage.content, Date.now(), true);
 					this.thinkingTimingsByMessage.set(this.streamingMessage, this.thinkingRunTimings);
 					this.streamingComponent.updateContent(this.streamingMessage);
+					this.maybeShowHistoryReplayNotice(this.streamingMessage);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
@@ -3404,6 +3406,20 @@ export class InteractiveMode {
 		// Entries don't contain `message` yet: message_end fires before persistence.
 		const miss = detectCacheMiss(this.sessionManager.getEntries(), message, this.session.modelRuntime);
 		if (miss) this.addCacheMissNotice(miss);
+	}
+
+	/** Warns when a Claude subscription session first grows past what Claude Code can send prompt-cached. */
+	private maybeShowHistoryReplayNotice(message: AssistantMessage): void {
+		if (!claudeCodeHistoryReplayed(message)) return;
+		// Entries don't contain `message` yet: message_end fires before persistence.
+		const entries = this.sessionManager.getEntries();
+		for (let index = entries.length - 1; index >= 0; index--) {
+			const entry = entries[index];
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			if (claudeCodeHistoryReplayed(entry.message)) return;
+			break;
+		}
+		this.showWarning(CLAUDE_CODE_HISTORY_REPLAYED_NOTE);
 	}
 
 	private addCacheMissNotice(miss: CacheMiss): void {
@@ -5886,7 +5902,18 @@ export class InteractiveMode {
 			return;
 		}
 
-		const lines = renderContextBox({ breakdown, model: `${model.provider}/${model.id}` }, this.ui.terminal.columns);
+		const lastReply = [...this.session.messages].reverse().find((message) => message.role === "assistant");
+		const lines = renderContextBox(
+			{
+				breakdown,
+				model: `${model.provider}/${model.id}`,
+				notice:
+					lastReply?.role === "assistant" && claudeCodeHistoryReplayed(lastReply)
+						? CLAUDE_CODE_HISTORY_REPLAYED_NOTE
+						: undefined,
+			},
+			this.ui.terminal.columns,
+		);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		this.ui.requestRender();
