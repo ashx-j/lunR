@@ -66,7 +66,9 @@ export function readSessionOwner(file: string): SessionOwner | undefined {
 			typeof value.instance === "string"
 		)
 			return value;
-	} catch {}
+	} catch {
+		// Unreadable owner file: treated as unknown and refused below.
+	}
 	throw new SessionOwnershipError(file, "Session owner is incomplete or unknown; automatic takeover is unsafe.");
 }
 

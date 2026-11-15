@@ -122,7 +122,7 @@ export function killAll(sessionId?: string): void {
 		try {
 			killProcessTree(pid);
 		} catch {
-			// ignore
+			// The process already exited; the liveness check below records it.
 		}
 		if (!isAlive(pid)) markExited(pid, null);
 	}
@@ -159,7 +159,7 @@ export function restart(pid: number): number | undefined {
 	try {
 		killProcessTree(pid);
 	} catch {
-		// ignore
+		// The old process already exited; restart spawns the command again anyway.
 	}
 	processes.delete(pid);
 

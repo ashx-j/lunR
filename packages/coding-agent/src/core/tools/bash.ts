@@ -121,11 +121,7 @@ export function createLocalBashOperations(options?: { shellPath?: string; sessio
 			}
 			if (child.pid) trackDetachedChildPid(child.pid);
 			// lunr: register the process for /processes tracking.
-			if (child.pid) {
-				try {
-					registerProcess(child.pid, command, cwd, options?.sessionId);
-				} catch {}
-			}
+			if (child.pid) registerProcess(child.pid, command, cwd, options?.sessionId);
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
 			const onAbort = () => {
@@ -163,13 +159,9 @@ export function createLocalBashOperations(options?: { shellPath?: string; sessio
 				if (child.pid && !timedOut && !signal?.aborted) noteLeftoverProcesses(child.pid, command);
 				// lunr: unregister from /processes if the process has exited; keep it if still
 				// alive (detached/backgrounded dev servers survive the shell call).
-				if (child.pid) {
-					try {
-						// lunr: keep finished processes visible briefly so /processes can show
-						// their exit state; markExited deletes trivial fast commands immediately.
-						markProcessExited(child.pid, child.exitCode);
-					} catch {}
-				}
+				// lunr: keep finished processes visible briefly so /processes can show
+				// their exit state; markExited deletes trivial fast commands immediately.
+				if (child.pid) markProcessExited(child.pid, child.exitCode);
 				if (timeoutHandle) clearTimeout(timeoutHandle);
 				if (signal) signal.removeEventListener("abort", onAbort);
 			}

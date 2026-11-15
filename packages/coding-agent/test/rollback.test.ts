@@ -681,6 +681,35 @@ describe("rollback", () => {
 		}
 	});
 
+	it("warns once when snapshots cannot be saved to disk and still rolls back in memory", async () => {
+		const rollback = await import("../src/core/rollback.ts");
+		const warnings: string[] = [];
+		rollback.setRollbackWarningHandler((message) => warnings.push(message));
+		const rollbackDir = join(homedir(), ".lunr", "rollback");
+		vi.mocked(fs.writeFileSync).mockImplementation((file, ...args) => {
+			if (String(file).startsWith(rollbackDir)) throw new Error("ENOSPC: no space left on device");
+			return realFs.writeFileSync(file, ...args);
+		});
+		try {
+			const a = join(testDir, "a.txt");
+			const b = join(testDir, "b.txt");
+			writeFileSync(a, "a original");
+			writeFileSync(b, "b original");
+			rollback.beginTurn(testDir);
+			rollback.rollbackSnapshotBeforeWrite(a);
+			rollback.rollbackSnapshotBeforeWrite(b);
+			writeFileSync(a, "a modified");
+
+			expect(warnings).toEqual([expect.stringContaining("could not be saved to disk (ENOSPC")]);
+			// The disk recovers; the rollback itself records its progress there.
+			vi.mocked(fs.writeFileSync).mockImplementation(realFs.writeFileSync);
+			expect(rollback.rollbackLastTurn().restored).toContain(a);
+			expect(readFileSync(a, "utf8")).toBe("a original");
+		} finally {
+			rollback.setRollbackWarningHandler(undefined);
+		}
+	});
+
 	// B9: a turn auto-started by a mid-turn snapshot inherits the last known cwd,
 	// so the root check still constrains what it can restore.
 	it("auto-started turns reuse the last cwd for the root check", async () => {
