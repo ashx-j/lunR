@@ -243,9 +243,12 @@ export class PermissionModeController {
 		fromCycle?: boolean,
 		onSettled?: (applied: boolean) => void,
 	): void {
+		// Before any model is picked the session holds the "unknown" placeholder, which names no provider.
 		const note =
 			reviewer?.kind === "missing"
-				? `${reviewer.provider}'s own coding agent has no review model, so auto mode needs one.`
+				? reviewer.provider === "unknown"
+					? "No model is selected yet, so auto mode needs a review model picked here."
+					: `${reviewer.provider}'s own coding agent has no review model, so auto mode needs one.`
 				: reviewer
 					? `Auto review model ${reviewer.ref} isn't available.`
 					: undefined;
