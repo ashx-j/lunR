@@ -35,7 +35,7 @@ Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trus
 
 ## No Built-in Sandbox
 
-lunR does not include a built-in sandbox. Built-in tools can read files, write files, edit files, and run shell commands with the permissions of the lunR process. Extensions are TypeScript modules that run with the same permissions. Package installs, shell commands, language servers, test commands, and other developer tools behave as ordinary local processes.
+lunR does not include a built-in sandbox. Built-in tools can read files, write files, edit files, and run shell commands with the permissions of the lunR process. The edit and write tools refuse lunR's own settings, credentials, memory and instruction files, but a shell command can still change them. Extensions are TypeScript modules that run with the same permissions. Package installs, shell commands, language servers, test commands, and other developer tools behave as ordinary local processes.
 
 This is intentional. lunR is designed to operate on local source trees, invoke project toolchains, and integrate with the user's existing development environment. A partial in-process sandbox would be easy to misunderstand as a security boundary while still depending on the host shell, filesystem, package managers, credentials, and extension code. Real isolation needs to come from the operating system or a virtualization/container boundary.
 
