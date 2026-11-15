@@ -35,7 +35,7 @@ describe("resolveDirectTools", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			expect(resolve({ lsp: ["hover", "format"], goal: ["complete"] }, "server")).toEqual(["lsp_format"]);
-			expect(resolve({ any: ["todo", "browser", "subagent", "web_fetch", "lookup"] }, "none")).toEqual(["lookup"]);
+			expect(resolve({ any: ["todo", "browser", "subagent", "ls", "lookup"] }, "none")).toEqual(["lookup"]);
 			expect(warn).toHaveBeenCalledWith(expect.stringContaining('"lsp_hover"'));
 		} finally {
 			warn.mockRestore();

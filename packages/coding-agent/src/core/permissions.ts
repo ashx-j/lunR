@@ -83,7 +83,6 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"find",
 	"ls",
 	"web_search",
-	"web_fetch",
 	"fetch_content",
 	"get_search_content",
 	"code_overview",
