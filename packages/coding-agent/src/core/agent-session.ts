@@ -150,6 +150,7 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import { measureStartup } from "./timings.ts";
 import { TODO_TOOL_NAMES } from "./todo-settings.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
+import { BashJobs } from "./tools/bash-jobs.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -432,6 +433,8 @@ export class AgentSession {
 	private _followUpMessages: string[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
+	/** `run_in_background` jobs. They survive tool rebuilds and stop when the session is disposed. */
+	readonly bashJobs = new BashJobs();
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
@@ -722,9 +725,14 @@ export class AgentSession {
 		};
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+			// A job that exited during the run is announced in the next tool result, which the
+			// next request carries anyway. Steering would cost an extra request after a final answer.
+			const jobNotice = this.bashJobs.takeExitNotices();
+			if (jobNotice) result = { ...result, content: [...result.content, { type: "text", text: jobNotice }] };
+			const unchanged = jobNotice ? { content: result.content } : undefined;
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_result")) {
-				return undefined;
+				return unchanged;
 			}
 
 			const hookResult = await runner.emitToolResult({
@@ -738,7 +746,7 @@ export class AgentSession {
 			});
 
 			if (!hookResult) {
-				return undefined;
+				return unchanged;
 			}
 
 			return {
@@ -1183,6 +1191,7 @@ export class AgentSession {
 		);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
+		this.bashJobs.stopAll();
 		cleanupSessionResources(this.sessionId);
 		deletePermissionContext(this.sessionId);
 		this.sessionManager.dispose();
@@ -1436,6 +1445,11 @@ export class AgentSession {
 	setActiveToolsByName(toolNames: string[]): void {
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
+		// bash_job is the only way to read or stop what bash starts in the background, so it comes with bash.
+		const bashIndex = toolNames.indexOf("bash");
+		if (bashIndex !== -1 && !toolNames.includes("bash_job")) {
+			toolNames = [...toolNames.slice(0, bashIndex + 1), "bash_job", ...toolNames.slice(bashIndex + 1)];
+		}
 		for (const name of toolNames) {
 			const tool = this._toolRegistry.get(name);
 			if (tool) {
@@ -1912,6 +1926,16 @@ export class AgentSession {
 		if (input.fromExtension) this._extensionUserMessages.add(userMessage);
 		const messages: AgentMessage[] = [userMessage, ...this._pendingNextTurnMessages];
 		this._pendingNextTurnMessages = [];
+		const jobNotice = this.bashJobs.takeExitNotices();
+		if (jobNotice) {
+			messages.push({
+				role: "custom",
+				customType: "bash-job",
+				content: jobNotice,
+				display: true,
+				timestamp: Date.now(),
+			});
+		}
 
 		const result = await this._extensionRunner.emitBeforeAgentStart(
 			input.text,
@@ -3389,9 +3413,12 @@ export class AgentSession {
 		const previousActiveToolNames = this.getActiveToolNames();
 		const allowedToolNames = this._allowedToolNames;
 		const excludedToolNames = this._excludedToolNames;
+		// bash_job follows bash, so `--tools read,bash` keeps a way to read background jobs.
+		const isListed = (names: Set<string>, name: string): boolean =>
+			names.has(name) || (name === "bash_job" && names.has("bash"));
 		const isAllowedTool = (name: string): boolean =>
-			(!allowedToolNames || allowedToolNames.has(name)) &&
-			!excludedToolNames?.has(name) &&
+			(!allowedToolNames || isListed(allowedToolNames, name)) &&
+			!(excludedToolNames && isListed(excludedToolNames, name)) &&
 			(this.settingsManager.getMemoryEnabled() || !MEMORY_TOOL_NAMES.has(name)) &&
 			(this.settingsManager.getTodosEnabled() || !TODO_TOOL_NAMES.has(name)) &&
 			(name !== "browser" || this.settingsManager.getBrowserEnabled());
@@ -3499,7 +3526,7 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath, defaultTimeout },
+					bash: { commandPrefix: shellCommandPrefix, shellPath, defaultTimeout, jobs: this.bashJobs },
 				});
 
 		this._baseToolDefinitions = new Map(

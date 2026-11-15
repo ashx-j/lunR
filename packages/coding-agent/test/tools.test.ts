@@ -5,7 +5,9 @@ import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
 import { type BashOperations, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
+import { BashJobs } from "../src/core/tools/bash-jobs.ts";
 import { computeEditsDiff } from "../src/core/tools/edit-diff.ts";
+import { createAllTools } from "../src/core/tools/index.ts";
 import {
 	createEditTool,
 	createFindTool,
@@ -517,6 +519,39 @@ describe("Coding Agent Tools", () => {
 			expect(timeouts).toEqual([undefined]);
 			expect(bash.description).toContain("Commands have no default timeout");
 			expect(bash.description).not.toContain("stopped after");
+		});
+
+		it("runs a background job, reads only new output, stops its process group and announces other exits once", async () => {
+			const jobs = new BashJobs();
+			const tools = createAllTools(testDir, { bash: { jobs } });
+			const startedAt = Date.now();
+			const start = await tools.bash.execute("bg-start", {
+				command: "echo first; echo second; sleep 60",
+				run_in_background: true,
+			});
+			expect(Date.now() - startedAt).toBeLessThan(1000);
+			expect(getTextOutput(start)).toBe("Started job j1.");
+			const job = jobs.get("j1");
+			if (!job?.pid) throw new Error("job did not start");
+			await vi.waitFor(() => expect(readFileSync(job.logPath, "utf-8")).toContain("second"));
+			expect(getTextOutput(await tools.bash_job.execute("bg-read-1", { id: "j1" }))).toBe(
+				"first\nsecond\n[running]",
+			);
+			expect(getTextOutput(await tools.bash_job.execute("bg-read-2", { id: "j1" }))).toBe(
+				"(no new output)\n[running]",
+			);
+
+			expect(getTextOutput(await tools.bash_job.execute("bg-stop", { id: "j1", action: "stop" }))).toBe(
+				"Stopped job j1.",
+			);
+			await vi.waitFor(() => expect(job.exit).toBeDefined());
+			expect(() => process.kill(-job.pid!, 0)).toThrow();
+
+			await tools.bash.execute("bg-exit", { command: "exit 3", run_in_background: true });
+			await vi.waitFor(() => expect(jobs.running()).toEqual([]));
+			expect(jobs.takeExitNotices()).toBe("[Background job j2 exited with code 3: exit 3]");
+			expect(jobs.takeExitNotices()).toBeUndefined();
+			jobs.stopAll();
 		});
 
 		it("runs commands with editors, pagers and git prompts disabled", async () => {
