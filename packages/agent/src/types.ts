@@ -250,13 +250,22 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	/**
 	 * Tool execution mode.
 	 * - "sequential": execute tool calls one by one
-	 * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently;
+	 * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently
+	 *   (calls flagged by `toolCallMutates` run in source order);
 	 *   emit `tool_execution_end` in tool completion order after each tool is finalized,
 	 *   then emit tool-result message artifacts later in assistant source order
 	 *
 	 * Default: "parallel"
 	 */
 	toolExecution?: ToolExecutionMode;
+
+	/**
+	 * Says whether a tool call can change state, given its validated arguments.
+	 * In parallel mode such a call waits for every earlier call in the message to finish,
+	 * and no later call starts until it is done. Other calls still run concurrently.
+	 * Without this hook every call is concurrent, as before.
+	 */
+	toolCallMutates?: (toolCall: AgentToolCall, args: unknown) => boolean;
 
 	/**
 	 * Called before a tool is executed, after arguments have been validated.
