@@ -3,27 +3,27 @@
  *
  * A rule is `tool` (every call of that tool) or `tool(pattern)`. Tool names match in any case, and
  * Claude Code's `:*` suffix reads as `*`.
- * - `bash(pattern)` is a glob over the command, where `*` matches anything, flags included
- *   (`bash(npm test)` is exactly `npm test`, `bash(git diff*)` also matches `git diff --output=f`).
+ * - `bash(pattern)`: `*` matches any text, flags included (`bash(npm test)` is exactly `npm test`,
+ *   `bash(git diff*)` also matches `git diff --output=f` and `git diff-tree`).
  * - For the path tools (`PATH_TOOLS`) the pattern is a path glob resolved against the working
- *   directory: `*` stays inside one folder, `**` crosses folders, `~/` is home.
+ *   directory: `*` and `?` stay inside one folder, `**` spans any number of folders, `~/` is home.
  * - Other tools take no pattern; such a rule never matches, and settings load warns about it.
  *
- * Allow rules match strictly: never a command with shell control or expansion characters, and only
- * a path whose real location matches, so `bash(npm test*)` can't approve `npm test; rm -rf ~`.
- * Deny rules over-match, because a deny that blocks too much fails closed: they check every command
- * the text could run after normalizing it (see `deniedCommandLines`) and let options sit between the
- * pattern's words (`bash(git push*)` matches `git -C repo push`). Both read the command text; a
- * command built at run time (`T=touch; $T f`) or a hard link to a denied file gets past them. They
- * stop a cooperating model from running something by accident, they are not a sandbox.
+ * Allow rules match strictly: the whole command text, never one with shell control or expansion
+ * characters, and only a path whose real location matches. Deny rules match each command the text
+ * can run (`deniedCommandLines`, with its limits), let options and one value each sit between the
+ * pattern's words (`git -C repo push`), and read a short-flag word as a set (`-rf` matches `-r -f`).
+ * Rules stop a cooperating model from running something by accident; they are not a sandbox.
  *
- * Rules compile once per settings change and working directory (`compilePermissionRules`).
+ * Every match is linear in the rule and the command: globs never backtrack, word matching is
+ * memoized, and `MAX_RULES` / `MAX_RULE_LENGTH` cap each list. A deny rule past a cap still blocks
+ * every call of its tool, so dropping it fails closed, and settings load warns about it.
  */
 
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { canonicalizeTargetPath } from "../utils/paths.ts";
-import { shellWords, splitShellSegments } from "./plan-mode.ts";
+import { type DeniedLine, deniedCommandLines } from "./permission-rule-commands.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 
 export interface PermissionRuleSettings {
@@ -33,14 +33,16 @@ export interface PermissionRuleSettings {
 
 /** Tools whose rule pattern is a path glob over their `path` argument. */
 export const PATH_TOOLS: ReadonlySet<string> = new Set(["read", "edit", "write", "ls", "grep", "find", "code_rewrite"]);
+/** Rules read from one settings list (global allow, project deny, ...). */
+export const MAX_RULES = 200;
+export const MAX_RULE_LENGTH = 300;
 
 /** One call as rules see it. Each part is computed at most once per call, and only when a rule asks. */
 interface CallView {
 	command(): string | undefined;
-	/** Normalized commands the text can run, for deny rules. */
-	deniedCommandLines(): string[];
-	/** The resolved path and its real location, for path rules. */
-	paths(): { target: string; real: string | undefined } | undefined;
+	deniedLines(): DeniedLine[];
+	/** The resolved path and its real location as segments, for path rules. */
+	paths(): { target: string[]; real: string[] | undefined } | undefined;
 }
 
 type Matcher = (call: CallView) => boolean;
@@ -60,168 +62,159 @@ export interface CompiledPermissionRules {
 const RULE_SYNTAX = /^([A-Za-z0-9_.:-]+)(?:\((.*)\))?$/s;
 /** Shell characters that chain, redirect or expand; an allow rule never matches a command with one. */
 const SHELL_CONTROL = /[;&|<>$`()\n\r\\]/;
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-/** Words that start a command without being it. */
-const COMMAND_PREFIX_WORDS = new Set(["!", "{", "(", "if", "then", "do", "else", "elif", "while", "until"]);
-/** Commands that run the command after them, with the options of each that take a value. */
-const WRAPPERS = new Map<string, ReadonlySet<string>>([
-	["command", new Set()],
-	["builtin", new Set()],
-	["exec", new Set(["-a"])],
-	["env", new Set(["-u", "-C", "-S", "--unset", "--chdir"])],
-	["nohup", new Set()],
-	["time", new Set()],
-	["timeout", new Set(["-s", "-k", "--signal", "--kill-after"])],
-	["nice", new Set(["-n", "--adjustment"])],
-	["stdbuf", new Set(["-i", "-o", "-e"])],
-	["xargs", new Set(["-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a"])],
-	["sudo", new Set(["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U"])],
-]);
-const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
-const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
-const MAX_NESTING = 4;
+const SHORT_FLAGS = /^-[A-Za-z]+$/;
 
-function escapeRegex(text: string): string {
-	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** True when `text` matches `glob`, where `*` is any text. Greedy piece search, so it never backtracks. */
+function globMatch(glob: string, text: string): boolean {
+	const pieces = glob.split("*");
+	if (pieces.length === 1) return glob === text;
+	const first = pieces[0];
+	const last = pieces[pieces.length - 1];
+	if (text.length < first.length + last.length || !text.startsWith(first) || !text.endsWith(last)) return false;
+	let at = first.length;
+	const end = text.length - last.length;
+	for (const piece of pieces.slice(1, -1)) {
+		const found = text.indexOf(piece, at);
+		if (found === -1 || found + piece.length > end) return false;
+		at = found + piece.length;
+	}
+	return true;
 }
 
-function globRegex(pattern: string): RegExp {
-	return new RegExp(`^${pattern.split("*").map(escapeRegex).join(".*")}$`, "s");
-}
-
-function basenameOf(word: string): string {
-	return word.split(/[\\/]/).pop() ?? word;
-}
-
-/** Bodies of `$(...)`, `<(...)`, `>(...)` and backticks, which bash runs as commands of their own. */
-function substitutionBodies(command: string): string[] {
-	const bodies: string[] = [];
-	for (let i = 0; i < command.length; i++) {
-		const opens = (command[i] === "$" || command[i] === "<" || command[i] === ">") && command[i + 1] === "(";
-		if (opens) {
-			let depth = 1;
-			let j = i + 2;
-			for (; j < command.length && depth > 0; j++) {
-				if (command[j] === "(") depth++;
-				else if (command[j] === ")") depth--;
+/** `glob` against one path segment, where `*` is any text and `?` one character, without backtracking. */
+function segmentMatch(glob: string, segment: string): boolean {
+	const pieces = glob.split("*");
+	const pieceAt = (piece: string, at: number) =>
+		[...piece].every((ch, k) => ch === "?" || ch === segment[at + k]) && at + piece.length <= segment.length;
+	if (pieces.length === 1) return glob.length === segment.length && pieceAt(glob, 0);
+	const first = pieces[0];
+	const last = pieces[pieces.length - 1];
+	const end = segment.length - last.length;
+	if (end < first.length || !pieceAt(first, 0) || !pieceAt(last, end)) return false;
+	let at = first.length;
+	for (const piece of pieces.slice(1, -1)) {
+		let found = -1;
+		for (let i = at; i + piece.length <= end; i++) {
+			if (pieceAt(piece, i)) {
+				found = i;
+				break;
 			}
-			bodies.push(command.slice(i + 2, j - 1));
-			i = j - 1;
-		} else if (command[i] === "`") {
-			const end = command.indexOf("`", i + 1);
-			bodies.push(command.slice(i + 1, end === -1 ? undefined : end));
-			if (end === -1) break;
-			i = end;
 		}
+		if (found === -1) return false;
+		at = found + piece.length;
 	}
-	return bodies;
+	return true;
 }
 
-/** Index of the first word after a wrapper's own options (and timeout's duration). */
-function skipWrapper(name: string, words: string[], start: number): number {
-	const valued = WRAPPERS.get(name) ?? new Set<string>();
-	let i = start;
-	while (i < words.length && (words[i].startsWith("-") || (name === "env" && ASSIGNMENT.test(words[i])))) {
-		if (words[i] === "--") return i + 1;
-		i += valued.has(words[i]) ? 2 : 1;
+/** Path segments against glob segments, `**` spanning any number of them. Memoized, so O(P × S). */
+function segmentsMatch(glob: readonly string[], path: readonly string[]): boolean {
+	// Most rules differ from the path in a literal folder near the start; settle those without the table.
+	let start = 0;
+	while (start < glob.length && !/[*?]/.test(glob[start])) {
+		if (start >= path.length || glob[start] !== path[start]) return false;
+		start++;
 	}
-	if (name === "timeout" && i < words.length) i++;
-	return i;
+	if (start === glob.length) return start === path.length;
+	return segmentsMatchFrom(glob.slice(start), path.slice(start));
 }
 
-/** The commands one segment's words can run, each normalized to `name arg...`. */
-function commandLinesFromWords(input: string[], depth: number): string[] {
-	const words = input.map((word) => word.replace(/^[({]+/, "").replace(/[)}]+$/, "")).filter(Boolean);
-	let i = 0;
-	let viaXargs = false;
-	while (i < words.length) {
-		const name = basenameOf(words[i]);
-		if (COMMAND_PREFIX_WORDS.has(words[i]) || ASSIGNMENT.test(words[i])) i++;
-		else if (WRAPPERS.has(name)) {
-			viaXargs ||= name === "xargs";
-			i = skipWrapper(name, words, i + 1);
-		} else break;
+function segmentsMatchFrom(glob: readonly string[], path: readonly string[]): boolean {
+	const memo = new Int8Array((glob.length + 1) * (path.length + 1));
+	const at = (g: number, s: number): boolean => {
+		const key = g * (path.length + 1) + s;
+		if (memo[key] !== 0) return memo[key] === 1;
+		let result: boolean;
+		if (g === glob.length) result = s === path.length;
+		else if (glob[g] === "**") result = at(g + 1, s) || (s < path.length && at(g, s + 1));
+		else result = s < path.length && segmentMatch(glob[g], path[s]) && at(g + 1, s + 1);
+		memo[key] = result ? 1 : 2;
+		return result;
+	};
+	return at(0, 0);
+}
+
+type PatternWord = { kind: "glob"; glob: string } | { kind: "flags"; flags: ReadonlySet<string> };
+
+interface DenyPattern {
+	words: PatternWord[];
+	/** A starred last word: a glob over the rest of the line. */
+	tail?: string;
+	/** A starred last flag word (`-rf*`): any text may follow the flags. */
+	restAllowed: boolean;
+}
+
+function patternWord(word: string): PatternWord {
+	return SHORT_FLAGS.test(word) && word.length > 2
+		? { kind: "flags", flags: new Set(word.slice(1)) }
+		: { kind: "glob", glob: word };
+}
+
+function compileDenyPattern(pattern: string): DenyPattern {
+	const words = pattern.split(/\s+/);
+	const last = words[words.length - 1];
+	// One starred word (`sudo*`, `curl*`) is a glob over the command name, followed by anything.
+	if (words.length === 1 && last.endsWith("*")) return { words: [patternWord(last)], restAllowed: true };
+	if (last.endsWith("*")) {
+		words.pop();
+		const flags = last.slice(0, -1);
+		if (SHORT_FLAGS.test(flags) && flags.length > 2) {
+			return { words: [...words.map(patternWord), patternWord(flags)], restAllowed: true };
+		}
+		return { words: words.map(patternWord), tail: last, restAllowed: false };
 	}
-	if (i >= words.length) return [];
-	const name = basenameOf(words[i]);
-	const args = words.slice(i + 1);
-	const line = [name, ...args].join(" ");
-	// xargs adds arguments from its input, so the command may get more than the text shows.
-	const lines = viaXargs ? [line, `${line} _`] : [line];
-	if (depth >= MAX_NESTING) return lines;
-	if (SHELLS.has(name)) {
-		const flag = args.findIndex((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg));
-		if (flag !== -1 && args[flag + 1] !== undefined) lines.push(...commandLines(args[flag + 1], depth + 1));
-	} else if (name === "eval") {
-		lines.push(...commandLines(args.join(" "), depth + 1));
-	} else if (name === "find") {
-		args.forEach((arg, index) => {
-			if (!FIND_EXEC.has(arg)) return;
-			const end = args.findIndex((word, after) => after > index && (word === ";" || word === "+"));
-			lines.push(...commandLinesFromWords(args.slice(index + 1, end === -1 ? undefined : end), depth + 1));
-		});
-	}
-	return lines;
+	return { words: words.map(patternWord), restAllowed: false };
 }
 
 /**
- * Every command the text can run, normalized for deny rules: split into segments the way read-only
- * mode splits them, unquoted, with substitutions, `sh -c`, `eval` and `find -exec` bodies opened,
- * leading assignments and wrappers (`command`, `env`, `timeout 5`, `xargs`, ...) dropped and the
- * command word reduced to its base name.
+ * Deny matching over one line's words, memoized on (pattern word, line word) so it stays O(P × W²):
+ * the first pattern word is the command name, later ones may have option words (and one value after
+ * each) before them, a flag word takes a run of short options, and a starred last word takes the rest.
  */
-function commandLines(command: string, depth = 0): string[] {
-	const lines =
-		depth < MAX_NESTING ? substitutionBodies(command).flatMap((body) => commandLines(body, depth + 1)) : [];
-	for (const segment of splitShellSegments(command)) {
-		lines.push(...commandLinesFromWords(shellWords(segment) ?? segment.split(/\s+/), depth));
-	}
-	return lines;
-}
-
-/**
- * Deny matching over words: the first pattern word is the command name, later ones may have option
- * words (and one value after each) before them, and a last word ending in `*` takes the rest.
- */
-function wordsMatch(
-	pattern: readonly RegExp[],
-	last: RegExp | undefined,
-	words: readonly string[],
-	p = 0,
-	w = 0,
-): boolean {
-	if (p === pattern.length) {
-		if (!last) return w === words.length;
-		if (last.test(words.slice(w).join(" "))) return true;
-	} else if (w < words.length && pattern[p].test(words[w]) && wordsMatch(pattern, last, words, p + 1, w + 1)) {
-		return true;
-	}
-	if (p === 0 || w >= words.length || !words[w].startsWith("-")) return false;
-	if (wordsMatch(pattern, last, words, p, w + 1)) return true;
-	return !words[w].includes("=") && w + 1 < words.length && wordsMatch(pattern, last, words, p, w + 2);
+function denyLineMatch(pattern: DenyPattern, line: DeniedLine): boolean {
+	const { words } = line;
+	const P = pattern.words.length;
+	const W = words.length;
+	const memo = new Int8Array((P + 1) * (W + 1));
+	const at = (p: number, w: number): boolean => {
+		const key = p * (W + 1) + w;
+		if (memo[key] !== 0) return memo[key] === 1;
+		let result = false;
+		if (p === P) {
+			result =
+				pattern.restAllowed ||
+				(pattern.tail === undefined ? w === W : globMatch(pattern.tail, words.slice(w).join(" ")));
+		} else if (w < W) {
+			const word = pattern.words[p];
+			if (p === 0) {
+				result = (line.wildcard || (word.kind === "glob" ? globMatch(word.glob, words[0]) : false)) && at(1, 1);
+			} else if (word.kind === "glob") {
+				result = globMatch(word.glob, words[w]) && at(p + 1, w + 1);
+			} else {
+				const seen = new Set<string>();
+				for (let k = w; k < W && SHORT_FLAGS.test(words[k]) && !result; k++) {
+					for (const flag of words[k].slice(1)) seen.add(flag);
+					if ([...word.flags].every((flag) => seen.has(flag))) result = at(p + 1, k + 1);
+				}
+			}
+		}
+		if (!result && p > 0 && w < W && words[w].startsWith("-")) {
+			result = at(p, w + 1) || (!words[w].includes("=") && w + 1 < W && at(p, w + 2));
+		}
+		memo[key] = result ? 1 : 2;
+		return result;
+	};
+	return P === 0 ? false : at(0, 0);
 }
 
 function bashMatcher(pattern: string, kind: "allow" | "deny"): Matcher {
-	const whole = globRegex(pattern);
 	if (kind === "allow") {
 		return (call) => {
 			const command = call.command();
-			return command !== undefined && !SHELL_CONTROL.test(command) && whole.test(command);
+			return command !== undefined && !SHELL_CONTROL.test(command) && globMatch(pattern, command);
 		};
 	}
-	const words = pattern.split(/\s+/);
-	const tail = words.at(-1)?.endsWith("*") ? words.pop() : undefined;
-	const regexes = words.map(globRegex);
-	const last = tail === undefined ? undefined : globRegex(tail);
-	return (call) => {
-		const command = call.command();
-		if (command === undefined) return false;
-		if (whole.test(command)) return true;
-		// A one-word starred pattern (`git*`) matches the whole line.
-		return call
-			.deniedCommandLines()
-			.some((line) => (regexes.length === 0 ? whole.test(line) : wordsMatch(regexes, last, line.split(" "))));
-	};
+	const compiled = compileDenyPattern(pattern);
+	return (call) => call.deniedLines().some((line) => denyLineMatch(compiled, line));
 }
 
 function toSlashes(path: string): string {
@@ -229,24 +222,12 @@ function toSlashes(path: string): string {
 }
 
 /** Windows and macOS file systems ignore case by default, as `protected-targets.ts` assumes. */
-function caseFlags(): string {
-	return process.platform === "win32" || process.platform === "darwin" ? "si" : "s";
+function foldCase(path: string): string {
+	return process.platform === "win32" || process.platform === "darwin" ? path.toLowerCase() : path;
 }
 
-function pathGlobRegex(absoluteGlob: string): RegExp {
-	let body = "";
-	const glob = toSlashes(absoluteGlob);
-	for (let i = 0; i < glob.length; i++) {
-		const ch = glob[i];
-		if (ch === "*" && glob[i + 1] === "*") {
-			const slash = glob[i + 2] === "/";
-			body += slash ? "(?:.*/)?" : ".*";
-			i += slash ? 2 : 1;
-		} else if (ch === "*") body += "[^/]*";
-		else if (ch === "?") body += "[^/]";
-		else body += escapeRegex(ch);
-	}
-	return new RegExp(`^${body}$`, caseFlags());
+function pathSegments(path: string): string[] {
+	return foldCase(toSlashes(path)).split("/");
 }
 
 function safeCanonical(path: string): string | undefined {
@@ -269,15 +250,14 @@ function canonicalGlob(absoluteGlob: string): string {
 function pathMatcher(pattern: string, cwd: string, kind: "allow" | "deny"): Matcher {
 	const expanded = pattern === "~" || pattern.startsWith("~/") ? `${homedir()}${pattern.slice(1)}` : pattern;
 	const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
-	const raw = pathGlobRegex(absolute);
-	const canonical = pathGlobRegex(canonicalGlob(absolute));
+	const raw = pathSegments(absolute);
+	const canonical = pathSegments(canonicalGlob(absolute));
 	return (call) => {
 		const paths = call.paths();
 		if (!paths) return false;
-		const real = paths.real === undefined ? undefined : toSlashes(paths.real);
 		// Allow needs the real path to match, so a symlink inside an allowed folder can't reach outside it.
-		if (kind === "allow") return real !== undefined && canonical.test(real);
-		return raw.test(toSlashes(paths.target)) || (real !== undefined && canonical.test(real));
+		if (kind === "allow") return paths.real !== undefined && segmentsMatch(canonical, paths.real);
+		return segmentsMatch(raw, paths.target) || (paths.real !== undefined && segmentsMatch(canonical, paths.real));
 	};
 }
 
@@ -291,24 +271,56 @@ export function parsePermissionRule(source: string): { tool: string; pattern?: s
 	return pattern ? { tool, pattern } : undefined;
 }
 
-/** Settings-load warnings for rules that would never match, one per rule. */
+/** Splits a list into the rules lunR reads and those past `MAX_RULES` or `MAX_RULE_LENGTH`. */
+function capRules(list: readonly unknown[]): { kept: string[]; dropped: string[] } {
+	const strings = list.filter((source): source is string => typeof source === "string");
+	const kept: string[] = [];
+	const dropped: string[] = [];
+	for (const source of strings) {
+		if (kept.length < MAX_RULES && source.length <= MAX_RULE_LENGTH) kept.push(source);
+		else dropped.push(source);
+	}
+	return { kept, dropped };
+}
+
+/** The tool a rule names, read even from a rule too long to compile. */
+function ruleTool(source: string): string | undefined {
+	return /^\s*([A-Za-z0-9_.:-]+)/.exec(source)?.[1]?.toLowerCase();
+}
+
+/** Settings-load warnings for rules that would never match or that a cap drops, one per rule. */
 export function permissionRuleProblems(list: unknown, name: string): string[] {
 	if (list === undefined) return [];
 	if (!Array.isArray(list)) return [`${name} must be a list of rules such as "bash(npm test)"; it is ignored.`];
-	return list.flatMap((source): string[] => {
-		if (typeof source !== "string")
-			return [`${name} has ${JSON.stringify(source)}, which is not a rule; it is ignored.`];
-		const parsed = parsePermissionRule(source);
-		if (!parsed) {
-			return [`${name} has "${source}", which is not tool or tool(pattern); it is ignored.`];
-		}
-		if (parsed.pattern && parsed.tool !== "bash" && !PATH_TOOLS.has(parsed.tool)) {
-			return [
-				`${name} has "${source}", but ${parsed.tool} rules take no pattern, so it never matches. Write "${parsed.tool}".`,
-			];
-		}
-		return [];
+	const deny = name.endsWith("deny");
+	const { dropped } = capRules(list);
+	const cap = dropped.map((source) => {
+		const label = source.length > 60 ? `${source.slice(0, 60)}…` : source;
+		const why =
+			source.length > MAX_RULE_LENGTH
+				? `is over ${MAX_RULE_LENGTH} characters`
+				: `is past the first ${MAX_RULES} rules`;
+		return deny
+			? `${name} has "${label}", which ${why}. lunR blocks every ${ruleTool(source) ?? "matching"} call until you shorten or remove it.`
+			: `${name} has "${label}", which ${why}; it is ignored.`;
 	});
+	const kept = new Set(capRules(list).kept);
+	return [
+		...list.flatMap((source): string[] => {
+			if (typeof source !== "string")
+				return [`${name} has ${JSON.stringify(source)}, which is not a rule; it is ignored.`];
+			if (!kept.has(source)) return [];
+			const parsed = parsePermissionRule(source);
+			if (!parsed) return [`${name} has "${source}", which is not tool or tool(pattern); it is ignored.`];
+			if (parsed.pattern && parsed.tool !== "bash" && !PATH_TOOLS.has(parsed.tool)) {
+				return [
+					`${name} has "${source}", but ${parsed.tool} rules take no pattern, so it never matches. Write "${parsed.tool}".`,
+				];
+			}
+			return [];
+		}),
+		...cap,
+	];
 }
 
 function compileRule(source: string, cwd: string, kind: "allow" | "deny"): [string, CompiledRule] | undefined {
@@ -320,32 +332,44 @@ function compileRule(source: string, cwd: string, kind: "allow" | "deny"): [stri
 	return [parsed.tool, { source, matches: () => false }];
 }
 
-function compileList(rules: readonly unknown[], cwd: string, kind: "allow" | "deny"): Map<string, CompiledRule[]> {
+function compileList(lists: readonly unknown[][], cwd: string, kind: "allow" | "deny"): Map<string, CompiledRule[]> {
 	const byTool = new Map<string, CompiledRule[]>();
-	for (const source of rules) {
-		if (typeof source !== "string") continue;
-		const compiled = compileRule(source, cwd, kind);
-		if (!compiled) continue;
-		const [tool, rule] = compiled;
-		byTool.set(tool, [...(byTool.get(tool) ?? []), rule]);
+	const add = (tool: string, rule: CompiledRule) => byTool.set(tool, [...(byTool.get(tool) ?? []), rule]);
+	for (const list of lists) {
+		const { kept, dropped } = capRules(list);
+		for (const source of kept) {
+			const compiled = compileRule(source, cwd, kind);
+			if (compiled) add(...compiled);
+		}
+		// A deny rule lunR can't read blocks every call of its tool rather than nothing.
+		if (kind === "deny") {
+			for (const source of dropped) {
+				const tool = ruleTool(source);
+				if (tool) add(tool, { source });
+			}
+		}
 	}
 	return byTool;
 }
 
 function callView(input: Record<string, unknown>, cwd: string): CallView {
-	let lines: string[] | undefined;
-	let paths: { target: string; real: string | undefined } | undefined | null = null;
+	let lines: DeniedLine[] | undefined;
+	let paths: { target: string[]; real: string[] | undefined } | undefined | null = null;
 	const command = () => (typeof input.command === "string" ? input.command.trim() : undefined);
 	return {
 		command,
-		deniedCommandLines: () => {
-			lines ??= commandLines(command() ?? "");
+		deniedLines: () => {
+			lines ??= deniedCommandLines(command() ?? "");
 			return lines;
 		},
 		paths: () => {
 			if (paths === null) {
 				const target = typeof input.path === "string" && input.path ? resolveToCwd(input.path, cwd) : undefined;
-				paths = target === undefined ? undefined : { target, real: safeCanonical(target) };
+				const real = target === undefined ? undefined : safeCanonical(target);
+				paths =
+					target === undefined
+						? undefined
+						: { target: pathSegments(target), real: real === undefined ? undefined : pathSegments(real) };
 			}
 			return paths;
 		},
@@ -363,7 +387,7 @@ function firstMatch(
 	return candidates.find((rule) => !rule.matches || rule.matches(call));
 }
 
-function asList(value: unknown): readonly unknown[] {
+function asList(value: unknown): unknown[] {
 	return Array.isArray(value) ? value : [];
 }
 
@@ -383,12 +407,8 @@ export function compilePermissionRules(
 	const key = [global?.allow, global?.deny, project?.allow, project?.deny, projectTrusted, process.platform];
 	const cached = memo.get(cwd);
 	if (cached?.key.every((part, i) => part === key[i])) return cached.rules;
-	const allow = compileList(
-		[...asList(global?.allow), ...(projectTrusted ? asList(project?.allow) : [])],
-		cwd,
-		"allow",
-	);
-	const deny = compileList([...asList(global?.deny), ...asList(project?.deny)], cwd, "deny");
+	const allow = compileList([asList(global?.allow), projectTrusted ? asList(project?.allow) : []], cwd, "allow");
+	const deny = compileList([asList(global?.deny), asList(project?.deny)], cwd, "deny");
 	// The gate asks deny, then allow, about the same arguments object; both share one view of it.
 	const views = new WeakMap<Record<string, unknown>, CallView>();
 	const view = (input: Record<string, unknown>) => () => {

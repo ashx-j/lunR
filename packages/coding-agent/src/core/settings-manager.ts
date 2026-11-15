@@ -285,6 +285,8 @@ export interface SettingsManagerCreateOptions {
 
 export interface SettingsStorage {
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
+	/** Reads a scope without locking or writing anything; undefined when it is missing or unreadable. */
+	readWithoutLock?(scope: SettingsScope): string | undefined;
 }
 
 export interface SettingsError {
@@ -301,6 +303,14 @@ export class FileSettingsStorage implements SettingsStorage {
 		const resolvedAgentDir = resolvePath(agentDir);
 		this.globalSettingsPath = join(resolvedAgentDir, "settings.json");
 		this.projectSettingsPath = join(resolvedCwd, CONFIG_DIR_NAME, "settings.json");
+	}
+
+	readWithoutLock(scope: SettingsScope): string | undefined {
+		try {
+			return readFileSync(scope === "global" ? this.globalSettingsPath : this.projectSettingsPath, "utf-8");
+		} catch {
+			return undefined;
+		}
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {
@@ -376,6 +386,10 @@ export class InMemorySettingsStorage implements SettingsStorage {
 			}
 		}
 	}
+
+	readWithoutLock(scope: SettingsScope): string | undefined {
+		return scope === "global" ? this.global : this.project;
+	}
 }
 
 // copy a scope on its first trusted read so later writes and reloads stay in memory.
@@ -397,6 +411,10 @@ class SessionOnlySettingsStorage extends InMemorySettingsStorage {
 			this.copiedScopes.add(scope);
 		}
 		super.withLock(scope, fn);
+	}
+
+	override readWithoutLock(scope: SettingsScope): string | undefined {
+		return this.copiedScopes.has(scope) ? super.readWithoutLock(scope) : this.source.readWithoutLock?.(scope);
 	}
 }
 
@@ -1357,13 +1375,10 @@ export class SettingsManager {
 	 * warning (printed at startup) for every rule that can never match.
 	 */
 	private loadPermissionRules(): void {
-		let content: string | undefined;
-		this.storage.withLock("project", (current) => {
-			content = current;
-			return undefined;
-		});
+		// A plain read: an untrusted repository gets no lock folder, and an unreadable one is skipped.
 		let project: unknown;
 		try {
+			const content = this.storage.readWithoutLock?.("project");
 			project = content ? JSON.parse(content) : undefined;
 		} catch {
 			// A trusted project's parse error is already reported by the normal load.

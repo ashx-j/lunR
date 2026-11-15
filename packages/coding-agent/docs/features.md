@@ -21,9 +21,10 @@ Permission modes: `yolo | auto | ask | read-only`. Shift+Tab cycles in that orde
 
 `permissions.allow` and `permissions.deny` in settings.json list rules. A rule is a tool name, which matches every call of that tool, or `tool(pattern)`. Tool names match in any case, and Claude Code's `bash(npm run test:*)` form works too.
 
-- `bash(pattern)` matches the command, where `*` matches any text, flags included: `bash(npm test)` is exactly `npm test`, while `bash(git diff*)` would also allow `git diff --output=../file`, which writes a file.
-- For `read`, `edit`, `write`, `ls`, `grep`, `find` and `code_rewrite` the pattern is a path glob relative to the working directory: `*` stays inside one folder, `**` crosses folders, `~/` is your home folder. `edit(src/**)` covers every file under `src`. Paths compare without case on macOS and Windows.
+- `bash(pattern)` matches the command, where `*` matches any text, flags included: `bash(npm test)` is exactly `npm test`, while `bash(git diff*)` would also allow `git diff --output=../file`, which writes a file. A `*` right after a word also matches longer words: `bash(git push*)` blocks `git push-docs` too, so write `bash(git push)` plus `bash(git push *)` when that matters.
+- For `read`, `edit`, `write`, `ls`, `grep`, `find` and `code_rewrite` the pattern is a path glob relative to the working directory: `*` and `?` stay inside one folder, `**` spans any number of folders, `~/` is your home folder. `edit(src/**)` covers every file under `src`. Paths compare without case on macOS and Windows.
 - Other tools take no pattern. lunR warns at startup about a rule that can never match, such as `mcp(github)` or `bash()`.
+- Each settings list reads at most 200 rules of up to 300 characters. lunR warns about the rest; a deny rule it can't read blocks every call of its tool until you shorten or remove it.
 
 ```json
 {
@@ -36,9 +37,11 @@ Permission modes: `yolo | auto | ask | read-only`. Shift+Tab cycles in that orde
 
 Deny rules block in every mode, including yolo, and win over allow rules. Allow rules skip the question in ask mode and the review request in auto mode. No rule lets a call past read-only mode or a protected file.
 
-Deny rules match generously, because blocking too much is the safe mistake. A denied command is also caught inside a chain (`make && git push`), a subshell, `$(...)` or backticks, `sh -c '...'`, `eval`, `find -exec`, `if`/`then` blocks, after `VAR=1`, behind `command`, `env`, `sudo`, `nohup`, `time`, `timeout 5`, `nice`, `stdbuf` or `xargs`, with quotes or backslashes in its name, as `/usr/bin/touch`, and with options between its words (`bash(git push*)` matches `git -C repo push`). Allow rules match strictly: never a command with `;`, `&`, `|`, `<`, `>`, `$`, backticks, parentheses or backslashes, so `bash(npm test*)` can't approve `npm test; rm -rf ~`, and only the real path, so a link inside `src` can't approve a write outside it.
+A deny rule checks every command the line runs, and only commands: quoted text, commit messages, here-document bodies and comments are data, so `git commit -m "explain git push"` is not blocked by `bash(git push*)`. A denied command is caught in a chain (`make && git push`), a subshell, a function or `case` body, `$(...)` or backticks, `sh -c '...'`, `bash <<EOF`, `eval`, `env -S`, `find -exec`, `if`/`then` blocks, after `VAR=1` or a redirect, behind wrappers such as `sudo`, `env`, `command`, `nohup`, `timeout 5`, `nice`, `ionice`, `setsid`, `flock`, `taskset`, `strace`, `stdbuf`, `busybox` or `xargs` (a rule naming the wrapper, like `bash(sudo*)`, matches too), with quotes or backslashes in its name and as `/usr/bin/touch`. Options and one value each may sit between a pattern's words, so `bash(git push*)` matches `git -C repo push`, and also `git -C push-repo log`. A short-flag word is a set: `bash(rm -rf*)` matches `rm -r -f`. A command name bash expands before running (`{touch,x}`, `$'touch'`) matches every deny rule.
 
-Rules read the command text and the path. A command built while it runs (`T=touch; $T file`) or a hard link to a denied file gets past them. They stop a model from running something by accident; they are not a sandbox.
+Allow rules match strictly: never a command with `;`, `&`, `|`, `<`, `>`, `$`, backticks, parentheses or backslashes, so `bash(npm test*)` can't approve `npm test; rm -rf ~`, and only the real path, so a link inside `src` can't approve a write outside it.
+
+Rules stop a model from running something by accident; they are not a sandbox. Deny rules don't see commands built while the shell runs (`$(echo touch)`, `$T`, `${X:-touch}`, globs in the command name), text piped or redirected into a shell (`echo 'touch x' | bash`, `bash <<< '...'`), interpreters (`python -c`, `node -e`, `perl -e`, `awk`'s `system`), `git -c alias...`, `sed`'s `e` command, `ssh`, `docker`, `su -c` or sourced files. A hard link to a denied file gets past a path rule.
 
 Rules in global settings apply everywhere. A project's `.lunr/settings.json` can always add deny rules, trusted or not; its allow rules count only when you trust the project, so a cloned repository can't grant itself permissions.
 

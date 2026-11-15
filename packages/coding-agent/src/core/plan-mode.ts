@@ -228,7 +228,7 @@ function hasUnquotedRedirect(command: string): boolean {
 	return false;
 }
 
-export function splitShellSegments(command: string): string[] {
+function splitShellSegments(command: string): string[] {
 	const segments: string[] = [];
 	let quote: "'" | '"' | undefined;
 	let escaped = false;
@@ -325,7 +325,7 @@ function hasShellExpansion(command: string): boolean {
 }
 
 /** Unquote shell words so quoted option spellings receive the same classification. */
-export function shellWords(segment: string): string[] | undefined {
+function shellWords(segment: string): string[] | undefined {
 	const words: string[] = [];
 	let word = "";
 	let inWord = false;

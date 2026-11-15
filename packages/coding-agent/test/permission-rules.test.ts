@@ -1,9 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
 	compilePermissionRules,
+	MAX_RULE_LENGTH,
+	MAX_RULES,
 	parsePermissionRule,
 	permissionRuleProblems,
 	suggestAllowRule,
@@ -107,6 +109,90 @@ describe("permission rule matching", () => {
 		expect(rules.denied("bash", { command: "git --no-pager -c x=y push" })).toBe("bash(git push*)");
 	});
 
+	// Quoted text, here-document bodies and comments are data, so a deny rule's words appearing there must not block.
+	const dataNotCommands: Array<[string, string]> = [
+		["bash(rm -rf*)", `git commit -m "$(cat <<'EOF'\nchore: rm -rf build is no longer needed\nEOF\n)"`],
+		["bash(git push*)", "git commit -m 'docs: explain `git push` flags'"],
+		["bash(git push*)", `gh pr create --body "$(cat <<'EOF'\ngit push --force was removed.\nEOF\n)"`],
+		["bash(npm publish*)", "git commit -F - <<'EOF'\nnpm publish runs from CI\nEOF"],
+		["bash(git push*)", 'echo "see \\`git push\\` docs"'],
+		["bash(curl*)", "echo 'use $(curl -s x) carefully'"],
+		["bash(rm -rf*)", "grep -rn '`rm -rf' src/"],
+		["bash(npm publish*)", "node -e 'console.log(`npm publish`)'"],
+		["bash(rm -rf*)", 'echo "x" # && rm -rf build'],
+		["bash(git push*)", "git log --grep push"],
+		["bash(git push*)", 'git commit -m "push the fix"'],
+		["bash(rm -rf*)", 'echo "rm -rf is dangerous"'],
+		["bash(npm publish*)", 'grep -r "npm publish" .'],
+		["bash(git push*)", "git stash push"],
+		["bash(curl*)", "rg curl"],
+		["bash(sudo*)", "cat sudoers.md"],
+		["bash(npm publish*)", "npm run publish-docs"],
+		["bash(rm -rf*)", `python3 -c "print('rm -rf')"`],
+	];
+	it.each(dataNotCommands)("%s lets %j run", (rule, command) => {
+		expect(globalRules([], [rule]).denied("bash", { command })).toBeUndefined();
+	});
+
+	// Plain and commonly wrapped forms, checked against real bash in review.
+	const wrappedForms: Array<[string, string]> = [
+		["bash(rm -rf*)", "rm -r -f build"],
+		["bash(sudo*)", "ls; sudo touch x"],
+		["bash(sudo*)", "echo x | sudo tee /etc/x"],
+		["bash(sudo*)", "env sudo touch x"],
+		["bash(sudo*)", "timeout 5 sudo ls"],
+		["bash(sudo*)", "command sudo ls"],
+		["bash(sudo*)", "true; sudo -n true; echo sudo-ran"],
+		["bash(touch *)", "setsid touch x"],
+		["bash(touch *)", "ionice -c 3 touch x"],
+		["bash(touch *)", "flock /tmp/l touch x"],
+		["bash(touch *)", "taskset -c 0 touch x"],
+		["bash(touch *)", "strace -o /dev/null touch x"],
+		["bash(touch *)", "busybox touch x"],
+		["bash(touch *)", "script -qc 'touch x'"],
+		["bash(touch *)", "bash -c -- 'touch x'"],
+		["bash(touch *)", "env -S 'touch x'"],
+		["bash(touch *)", "env --split-string='touch x'"],
+		["bash(touch *)", "2>/dev/null touch x"],
+		["bash(touch *)", ">f touch x"],
+		["bash(touch *)", "</dev/null touch x"],
+		["bash(touch *)", "case x in x) touch y;; esac"],
+		["bash(touch *)", "f(){ touch x; }; f"],
+		["bash(touch *)", "function f { touch x; }; f"],
+		["bash(touch *)", "{touch,x}"],
+		["bash(touch *)", "$'touch' x"],
+		["bash(touch *)", "bash <<EOF\ntouch x\nEOF"],
+	];
+	it.each(wrappedForms)("%s blocks %j", (rule, command) => {
+		expect(globalRules([], [rule]).denied("bash", { command })).toBe(rule);
+	});
+
+	it("stays fast for pathological rules and commands", () => {
+		const flags = (n: number) => Array.from({ length: n }, (_, i) => `-I/inc/dir${i}`).join(" ");
+		const cases: Array<[string, string, Record<string, unknown>]> = [
+			["bash(gcc -o /usr*)", "bash", { command: `gcc ${flags(400)} -c x.c` }],
+			["bash(rm -rf*)", "bash", { command: `rm ${Array(400).fill("-v").join(" ")} build` }],
+			[`bash(${"*a".repeat(13)}*b)`, "bash", { command: "a".repeat(5000) }],
+			[`edit(${"**/a/".repeat(10)}b)`, "edit", { path: `${"a/".repeat(60)}c` }],
+		];
+		for (const [rule, tool, input] of cases) {
+			const started = performance.now();
+			globalRules([], [rule]).denied(tool, input);
+			expect(performance.now() - started, rule).toBeLessThan(500);
+		}
+	});
+
+	it("caps each list, and a deny rule past the cap blocks every call of its tool", () => {
+		const many = Array.from({ length: MAX_RULES + 1 }, (_, i) => `bash(tool${i} *)`);
+		const rules = globalRules(many, many);
+		expect(rules.allowed("bash", { command: `tool${MAX_RULES} x` })).toBe(false);
+		expect(rules.denied("bash", { command: "ls" })).toBe(`bash(tool${MAX_RULES} *)`);
+		expect(globalRules([], [`edit(${"a".repeat(MAX_RULE_LENGTH)})`]).denied("edit", { path: "x" })).toBeDefined();
+		expect(permissionRuleProblems(many, "permissions.deny")).toEqual([
+			`permissions.deny has "bash(tool${MAX_RULES} *)", which is past the first ${MAX_RULES} rules. lunR blocks every bash call until you shorten or remove it.`,
+		]);
+	});
+
 	it("matches path globs against the resolved path, with * inside one folder and ** across folders", () => {
 		const rules = globalRules(["edit(src/*.ts)", "write(src/**)"]);
 		expect(rules.allowed("edit", { path: "src/a.ts" })).toBe(true);
@@ -190,6 +276,22 @@ describe("permission rule scopes", () => {
 			}
 		} finally {
 			rmSync(join(cwd, ".lunr"), { recursive: true, force: true });
+		}
+	});
+
+	it("starts in an untrusted project whose .lunr folder can't be written, and writes nothing there", () => {
+		const lunrDir = join(cwd, ".lunr");
+		mkdirSync(lunrDir, { recursive: true });
+		writeFileSync(join(lunrDir, "settings.json"), JSON.stringify({ permissions: { deny: ["bash(rm*)"] } }));
+		chmodSync(lunrDir, 0o555);
+		try {
+			const manager = SettingsManager.create(cwd, join(root, "agent"), { projectTrusted: false });
+			const settings = manager.getPermissionRuleSettings();
+			expect(settings.project?.deny).toEqual(["bash(rm*)"]);
+			expect(readdirSync(lunrDir)).toEqual(["settings.json"]);
+		} finally {
+			chmodSync(lunrDir, 0o755);
+			rmSync(lunrDir, { recursive: true, force: true });
 		}
 	});
 

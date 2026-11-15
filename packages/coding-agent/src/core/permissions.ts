@@ -461,7 +461,8 @@ function askQuestion(toolName: string, input: Record<string, unknown>): { title:
 		const children = getRequestedChildLaunches(input).filter((child) => child.permissions === "full");
 		if (children.length === 0) {
 			return {
-				title: `Allow subagent ${String(input.action)}? The child runs commands and edits files without asking you.`,
+				// Steering or resuming may target a read-only child, so don't claim it runs commands.
+				title: `Allow subagent ${String(input.action)}? It changes what a child does or when it runs.`,
 				detail: sanitizeDetail(JSON.stringify(input)),
 			};
 		}
