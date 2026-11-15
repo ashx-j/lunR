@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
@@ -41,8 +41,12 @@ const REQUEST_ENV = {
 	DISABLE_COMPACT: "1",
 	// lunR owns token budgets; Claude Code's replayed reminder would invalidate cached history.
 	CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
-	// Empty --setting-sources does not stop Claude Code adding the user's auto-memory MEMORY.md to the request.
+	// Each request is a new process, so this startup work repeats per request: git status, log and user name
+	// for a git note, and memory and CLAUDE.md files. lunR's history replaces all of it; on the replay route
+	// it is context lunR did not ask for.
+	CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
 	CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+	CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
 } as const;
 const NOT_SIGNED_IN = "Claude Code is not signed in to a Claude subscription. Run /login anthropic.";
 /** Anthropic's error type for each HTTP status, used when rebuilding an error Claude Code reported. */
@@ -454,10 +458,15 @@ async function runClaudeCode(
 			...(upstream ? { ANTHROPIC_BASE_URL: upstream } : {}),
 			...(request.maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(request.maxTokens) } : {}),
 		};
+		// The replay route keeps Claude Code's environment note, which names the working directory, so it runs in
+		// lunR's own directory there. lunR's history replaces that note otherwise, and an empty directory skips
+		// Claude Code's per-start git checks and file listing of the project. Empty setting sources keep the
+		// directory's CLAUDE.md and settings out.
+		const historyInBody = "messages" in request.extraBody;
+		const cwd = historyInBody ? join(directory, "cwd") : process.cwd();
+		if (historyInBody) await mkdir(cwd);
 		// Cleanup that already ran during the writes above had no process to stop, so never start one.
 		if (signal?.aborted) throw new Error("Claude Code request cancelled");
-		// Claude Code tells the model its working directory in an environment note it adds to every request,
-		// so it runs in lunR's own directory. Empty setting sources keep that directory's CLAUDE.md and settings out.
 		const child = spawnClaudeCode(
 			connection.command,
 			[
@@ -490,7 +499,7 @@ async function runClaudeCode(
 				"--no-session-persistence",
 			],
 			env,
-			process.cwd(),
+			cwd,
 		);
 		pid = child.pid;
 		// Output already written stays readable after the process closes, so cleanup is safe here too.
