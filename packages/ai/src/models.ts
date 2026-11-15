@@ -382,6 +382,11 @@ class ModelsImpl implements MutableModels {
 			// An older record is kept on disk but unusable until /login anthropic replaces it.
 			return credential.version === 3 ? { source: "Claude Code subscription", type: "oauth" } : undefined;
 		}
+		// A Google OAuth record is unused (lunR has no Google sign-in), so only an API key counts.
+		if (credential?.type === "oauth" && provider.id === "google") {
+			const resolution = await provider.auth.apiKey?.resolve({ ctx: this.authContext, credential: undefined });
+			return resolution ? { source: resolution.source, type: "api_key" } : undefined;
+		}
 		if (credential?.type === "oauth") {
 			return provider.auth.oauth ? { source: "OAuth", type: "oauth" } : undefined;
 		}
