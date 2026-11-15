@@ -229,7 +229,7 @@ const HANDLERS: ReadonlyArray<SlashCommandHandler & { readonly names: readonly s
 		},
 	},
 	{
-		names: ["read", "yolo", "auto"],
+		names: ["read", "yolo", "auto", "ask"],
 		run: (host, text) => {
 			host.editor.setText("");
 			host.applyPermissionMode(text === "/read" ? "read-only" : (text.slice(1) as PermissionMode));

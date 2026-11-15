@@ -494,7 +494,7 @@ A session starts in the mode from the `defaultPermissionMode` setting, which is 
 import { createAgentSession } from "@ashx-j/lunr";
 
 const { session } = await createAgentSession({
-  permissionMode: "read-only", // "yolo" (default), "auto", or "read-only"
+  permissionMode: "read-only", // "yolo" (default), "auto", "ask", or "read-only"
 });
 ```
 

@@ -114,25 +114,27 @@ export class PermissionModeController {
 			return;
 		}
 
-		if (sub === "yolo" || sub === "auto" || sub === "read-only" || sub === "read") {
+		if (sub === "yolo" || sub === "auto" || sub === "ask" || sub === "read-only" || sub === "read") {
 			this.applyPermissionMode(sub === "read" ? "read-only" : sub);
 			return;
 		}
 
 		if (sub !== "") {
-			this.host.showStatus("Usage: /mode [yolo|auto|read] — bare /mode opens the selector.");
+			this.host.showStatus("Usage: /mode [yolo|auto|ask|read] — bare /mode opens the selector.");
 			return;
 		}
 
 		const options = [
 			"YOLO — auto-approve tools, agent may still ask",
 			"Auto — a review model checks risky actions",
+			"Ask — you approve each change before it runs",
 			"Read — inspect without making changes",
 		];
 		void this.host.showExtensionSelector("Permission mode", options).then((choice) => {
 			if (!choice) return;
 			if (choice.startsWith("YOLO")) this.applyPermissionMode("yolo");
 			else if (choice.startsWith("Auto")) this.applyPermissionMode("auto");
+			else if (choice.startsWith("Ask")) this.applyPermissionMode("ask");
 			else if (choice.startsWith("Read")) this.applyPermissionMode("read-only");
 		});
 	}
@@ -177,16 +179,25 @@ export class PermissionModeController {
 	/**
 	 * `cancelMode` is where to go if auto needs a review model and the user cancels the picker; without it
 	 * the mode stays as it was. `fromCycle` (Shift+Tab) lets the cycle key skip past auto from that picker.
+	 * `onSettled` reports whether `mode` was applied, after the review model picker closes if auto opened it.
 	 */
 	applyPermissionMode(
 		mode: PermissionMode,
-		opts?: { silent?: boolean; cancelMode?: PermissionMode; fromCycle?: boolean },
+		opts?: {
+			silent?: boolean;
+			cancelMode?: PermissionMode;
+			fromCycle?: boolean;
+			onSettled?: (applied: boolean) => void;
+		},
 	): void {
-		if (this.host.isSessionDetached()) return;
+		if (this.host.isSessionDetached()) {
+			opts?.onSettled?.(false);
+			return;
+		}
 		if (mode === "auto") {
 			const reviewer = this.host.session.resolveAutoReviewer();
 			if (reviewer.kind !== "ready") {
-				this.showAutoReviewModelPicker(reviewer, opts?.cancelMode, opts?.fromCycle);
+				this.showAutoReviewModelPicker(reviewer, opts?.cancelMode, opts?.fromCycle, opts?.onSettled);
 				return;
 			}
 		}
@@ -203,6 +214,7 @@ export class PermissionModeController {
 		} else if (mode !== "auto" && prev === "auto") {
 			disableRollbackForSession(this.host.session.sessionManager.getSessionId());
 		}
+		opts?.onSettled?.(true);
 
 		if (opts?.silent) return;
 
@@ -212,6 +224,8 @@ export class PermissionModeController {
 			this.host.showStatus(`Auto mode active. ${by} checks risky actions. Rollback enabled for this session.`);
 		} else if (mode === "read-only") {
 			this.host.showStatus("Read mode active. Changes are blocked.");
+		} else if (mode === "ask") {
+			this.host.showStatus("Ask mode active. lunR asks before each change; reads run straight away.");
 		} else {
 			this.host.showStatus(`Permission mode: ${mode}`);
 		}
@@ -227,10 +241,13 @@ export class PermissionModeController {
 		reviewer?: Exclude<AutoReviewer, { kind: "ready" }>,
 		cancelMode?: PermissionMode,
 		fromCycle?: boolean,
+		onSettled?: (applied: boolean) => void,
 	): void {
 		const note =
 			reviewer?.kind === "missing"
-				? `${reviewer.provider}'s own coding agent has no review model, so auto mode needs one.`
+				? reviewer.provider === undefined
+					? "No model is selected yet, so auto mode needs a review model picked here."
+					: `${reviewer.provider}'s own coding agent has no review model, so auto mode needs one.`
 				: reviewer
 					? `Auto review model ${reviewer.ref} isn't available.`
 					: undefined;
@@ -245,7 +262,7 @@ export class PermissionModeController {
 				(model) => {
 					done();
 					this.host.session.settingsManager.setAutoReviewModel(`${model.provider}/${model.id}`);
-					if (reviewer) this.applyPermissionMode("auto");
+					if (reviewer) this.applyPermissionMode("auto", { onSettled });
 					else this.host.showStatus(`Auto review model: ${model.provider}/${model.id}`);
 				},
 				() => {
@@ -259,6 +276,7 @@ export class PermissionModeController {
 							`No review model picked. ${switched ? "Switched to" : "Still in"} ${mode} mode.`,
 						);
 					}
+					onSettled?.(false);
 					this.host.ui.requestRender();
 				},
 				undefined,
@@ -269,6 +287,7 @@ export class PermissionModeController {
 					onCyclePermissionMode: fromCycle
 						? () => {
 								done();
+								onSettled?.(false);
 								this.applyPermissionMode(nextPermissionMode("auto"), { silent: true });
 								this.host.ui.requestRender();
 							}
@@ -285,7 +304,7 @@ export class PermissionModeController {
 		const reviewer = this.host.session.resolveAutoReviewer();
 		if (reviewer.kind === "ready") return;
 		this.host.showWarning(
-			`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /mode auto to pick one.`,
+			`Auto mode has no ${reviewer.kind === "missing" ? `review model${reviewer.provider ? ` for ${reviewer.provider}` : ""}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /mode auto to pick one.`,
 		);
 	}
 
