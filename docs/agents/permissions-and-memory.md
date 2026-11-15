@@ -19,5 +19,6 @@ Read before changing permission modes, the auto reviewer, protected files, globa
 ## Global instructions and memory
 
 - Global behavior is optional `~/.lunr/agent/agents/AGENTS.md`: never auto-create it, add an in-app editor, or let model file tools modify it. A leftover `~/.lunr/agent/AGENTS.md` migrates there when the new path is empty. Per-model files are `~/.lunr/agent/agents/<model>/AGENTS.md` behind `/settings` Model instructions. Context breakdown labels it `Global AGENTS.md`. `behavior.md` is inert.
+- `core/credential-files.ts` is the read side for the active profile's `auth.json`, `subscriptions.json` and `mcp-oauth/`: `gateToolCall` refuses `read`/`grep` paths and bash words naming them in every mode, and the grep tool drops matches in them. Only a credential name (`mcp-oauth` and `tokens.json` included) or a symlinked last component pays for realpath; other paths cost one lstat. Bash bails after one substring scan when no credential name appears, so variables, globs and differently named symlinks pass.
 - Memory (`~/.lunr/simple-memory/memory.md`) is durable facts only; the toggle removes injection/tools but keeps the file.
 - `core/protected-targets.ts` blocks direct file-tool writes to global instructions, memory, settings.json, `pr-watches/` and `install-features.json`.

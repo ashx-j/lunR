@@ -41,6 +41,12 @@ This is intentional. lunR is designed to operate on local source trees, invoke p
 
 Project trust is only an input-loading guard. It prevents a repository from silently changing lunR's settings or extensions before you approve it. It does not make untrusted code, untrusted prompts, or untrusted model output safe. Prompt injection from repository files, comments, documentation, context files, or build output is expected local-agent risk and cannot be reliably prevented by lunR.
 
+## Saved Logins
+
+The `read` and `grep` tools refuse lunR's own saved logins in the active profile: `auth.json`, `subscriptions.json` and the `mcp-oauth/` tree. This covers relative paths, `..` and symlinks, and `grep` over a parent directory skips their lines. The `bash` tool refuses a command that names one of these paths as a plain word, such as `cat ~/.lunr/agent/auth.json` or `jq . <auth.json`, in every permission mode. The refusal tells the model to ask you for a specific value.
+
+This stops an accidental read or a web page telling the model to read them. It is not a sandbox. Bash still reads these files through a variable (`cat "$HOME/.lunr/agent/auth.json"`), a glob (`cat ~/.lunr/agent/a*.json`), a script, or a symlink under another name. Other secrets on the machine, such as `~/.ssh`, `.env` files and cloud credentials, are not covered. lunR itself (login, `lunr doctor`) reads the files directly and is not affected.
+
 ## Running Untrusted or Unmonitored Work
 
 For untrusted repositories, generated code you do not intend to monitor closely, or unattended automation, run lunr in a contained environment. Use a container, VM, micro-VM, remote sandbox, or policy-controlled sandbox with only the files and credentials required for the task.

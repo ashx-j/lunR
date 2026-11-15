@@ -8,6 +8,7 @@ import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
+import { CREDENTIAL_SHARE_HINT, credentialReadReason } from "../credential-files.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import {
@@ -281,6 +282,20 @@ export function createGrepToolDefinition(
 						};
 
 						// Collect matches during streaming, then format them after rg exits.
+						// A search over the profile dir or home must not print lunR's saved logins.
+						const credentialChecks = new Map<string, boolean>();
+						const isCredentialFile = (filePath: string): boolean => {
+							let skip = credentialChecks.get(filePath);
+							if (skip === undefined) {
+								skip = credentialReadReason(filePath, searchPath) !== undefined;
+								credentialChecks.set(filePath, skip);
+							}
+							return skip;
+						};
+						const skippedNotice = () =>
+							[...credentialChecks.values()].some(Boolean)
+								? `\n\n[Skipped matches in lunR's saved logins (auth.json, subscriptions.json, mcp-oauth/). ${CREDENTIAL_SHARE_HINT}]`
+								: "";
 						const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
 						rl.on("line", (line) => {
 							if (!line.trim() || matchCount >= effectiveLimit) return;
@@ -291,8 +306,9 @@ export function createGrepToolDefinition(
 								return;
 							}
 							if (event.type === "match") {
-								matchCount++;
 								const filePath = event.data?.path?.text;
+								if (filePath && isCredentialFile(filePath)) return;
+								matchCount++;
 								const lineNumber = event.data?.line_number;
 								const lineText = event.data?.lines?.text;
 								if (filePath && typeof lineNumber === "number")
@@ -321,7 +337,10 @@ export function createGrepToolDefinition(
 							}
 							if (matchCount === 0) {
 								settle(() =>
-									resolve({ content: [{ type: "text", text: "No matches found" }], details: undefined }),
+									resolve({
+										content: [{ type: "text", text: `No matches found${skippedNotice()}` }],
+										details: undefined,
+									}),
 								);
 								return;
 							}
@@ -367,6 +386,7 @@ export function createGrepToolDefinition(
 								details.linesTruncated = true;
 							}
 							if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
+							output += skippedNotice();
 							settle(() =>
 								resolve({
 									content: [{ type: "text", text: output }],
