@@ -23,6 +23,8 @@ Use `/login` in interactive mode, then select a provider:
 
 Use `/logout` to remove the lunR connection. Most subscription providers store refreshable tokens in `~/.lunr/agent/auth.json`. Anthropic uses a non-secret Claude Code connection record instead.
 
+There is no Google sign-in, because Google often bans accounts used this way. lunR ignores a Google OAuth record left in `auth.json` by another tool. Use a Gemini API key instead.
+
 ### OpenAI Codex
 
 - Requires ChatGPT Plus or Pro subscription
@@ -37,7 +39,7 @@ Claude Code owns your account session. lunR does not read its credentials or cop
 
 `/logout anthropic` removes only lunR's connection and cached provider models. Your Claude Code login stays, and so does the downloaded binary; delete `~/.lunr/agent/claude-code/` to remove it. `ANTHROPIC_OAUTH_TOKEN` does not work. Run `/login anthropic` instead. Genuine `ANTHROPIC_API_KEY` values continue using the Messages API. No subscription route falls back to direct OAuth.
 
-The displayed token cost is an estimated API list-price equivalent, not a subscription bill or a remaining-plan meter. Models and routes come from Claude Code's model picker during setup, which lists what your plan offers. lunR skips variants that Claude Code bills from usage credits. A `[1m]` route gets a 1M context window, and every other model uses the window from lunR's model catalog. Setup sends nothing to Anthropic. New Claude models usually need a newer Claude Code: when lunR pins a newer one, `/refresh` says so, and `/login anthropic` downloads it and lists the new models.
+The displayed token cost is an estimated API list-price equivalent, not a subscription bill or a remaining-plan meter. Models and routes come from Claude Code's model picker during setup, which lists what your plan offers. lunR skips variants that Claude Code bills from usage credits. A `[1m]` route gets a 1M context window, and every other model uses the window from lunR's model catalog. A model your login offers before lunR's catalog has it is listed anyway: it takes its name from Claude Code's picker and its thinking settings and output limit from the newest catalog model of the same family. lunR has no price for it, so the picker marks its price as unavailable and its turns add nothing to the displayed cost. Setup sends nothing to Anthropic. New Claude models usually need a newer Claude Code: when lunR pins a newer one, `/refresh` says so, and `/login anthropic` downloads it and lists the new models. A model lunR's catalog knows but your login does not list yet still works by id, with `--model anthropic/<id>` or `/model <id>`; if your plan does not include it, the error says so. `lunr doctor` names catalog models newer than your login.
 
 ### GitHub Copilot
 

@@ -35,6 +35,9 @@ export class ModelsError extends Error {
  * nothing is stored. No silent env fallback after a failed refresh or for a
  * credential type without a matching handler.
  */
+export const GOOGLE_SIGN_IN_REMOVED =
+	"Google sign-in was removed from lunR, so the saved Google login is ignored. A Gemini API key still works: run /login google or set GEMINI_API_KEY.";
+
 export async function resolveProviderAuth(
 	provider: { id: string; auth: ProviderAuth },
 	credentials: CredentialStore,
@@ -55,6 +58,14 @@ export async function resolveProviderAuth(
 	}
 
 	const stored = await readCredential(credentials, provider.id);
+	// lunR has no Google sign-in. A Google OAuth record from an older tool stays on disk, unused.
+	if (provider.id === "google" && stored?.type === "oauth") {
+		const resolution =
+			provider.auth.apiKey &&
+			(await resolveApiKey(requestAuthContext, provider.auth.apiKey, provider.id, undefined));
+		if (resolution) return resolution;
+		throw new ModelsError("auth", GOOGLE_SIGN_IN_REMOVED);
+	}
 	if (stored) {
 		if (provider.id === "anthropic" && stored.type === "oauth") {
 			throw new ModelsError("auth", ANTHROPIC_SETUP_REQUIRED);

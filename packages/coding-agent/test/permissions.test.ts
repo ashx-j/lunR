@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { buildProxyDescription } from "../src/builtin-extensions/pi-mcp-adapter/direct-tools.ts";
@@ -18,6 +19,7 @@ import {
 	NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON,
 	nextPermissionMode,
 	PERMISSION_MODES,
+	READ_ONLY_TOOLS,
 	registerApprovalHandler,
 	resetAllPermissionContexts,
 	resetPermissions,
@@ -128,6 +130,29 @@ describe("permission modes", () => {
 		expect(restorePermissionModeAfterPlan("auto", "read-only")).toBe("auto");
 		expect(restorePermissionModeAfterPlan(undefined, "read-only")).toBe("read-only");
 		expect(restorePermissionModeAfterPlan(undefined, "auto")).toBe("auto");
+	});
+});
+
+describe("read-only tool list", () => {
+	// A stale name lets a future or extension tool with that name skip the read-only gate.
+	it("names only tools lunR registers", () => {
+		const registered = new Set<string>();
+		const scan = (dir: string) => {
+			for (const entry of readdirSync(dir, { withFileTypes: true })) {
+				const path = join(dir, entry.name);
+				if (entry.isDirectory()) scan(path);
+				else if (path.endsWith(".ts") && !path.endsWith(join("core", "permissions.ts"))) {
+					// Tool definitions use `name: "x"`; a few take the name from a `*_TOOL_NAME` constant.
+					for (const match of readFileSync(path, "utf8").matchAll(
+						/(?:\bname:|TOOL_NAME =)\s*["']([a-z_]+)["']/g,
+					)) {
+						registered.add(match[1]!);
+					}
+				}
+			}
+		};
+		scan(join(import.meta.dirname, "..", "src"));
+		expect([...READ_ONLY_TOOLS].filter((tool) => !registered.has(tool))).toEqual([]);
 	});
 });
 

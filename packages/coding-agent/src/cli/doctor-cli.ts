@@ -6,6 +6,7 @@
 
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { claudeModelsNewerThanLogin } from "@earendil-works/pi-ai";
 import { isKeyRelease, ProcessTerminal, parseKey } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { LOCAL_SERVERS } from "../builtin-extensions/lunr-local-providers/local-servers.ts";
@@ -71,7 +72,7 @@ export async function collectDoctorChecks(agentDir: string = getAgentDir()): Pro
 		...checkProviders(ready),
 		checkDefaultModel(settings.getDefaultProvider(), settings.getDefaultModel(), ready, loginIds),
 		checkCatalog(officialCatalogCachePath(agentDir), Date.now()),
-		await checkClaudeCode(auth),
+		await checkClaudeCode(auth, runtime.getModels("anthropic")),
 		await checkBrowser(settings.getBrowserEnabled()),
 		await checkGateway(),
 		checkTerminal(process.env, getDocsPath()),
@@ -251,7 +252,10 @@ export function checkCatalog(cachePath: string, now: number): DoctorCheck {
 		: { status: "ok", label: "Model catalog", detail: `last refreshed ${age}` };
 }
 
-async function checkClaudeCode(auth: AuthStorage): Promise<DoctorCheck | undefined> {
+async function checkClaudeCode(
+	auth: AuthStorage,
+	catalog: readonly { id: string }[],
+): Promise<DoctorCheck | undefined> {
 	const credential = await auth.read("anthropic");
 	if (credential?.type !== "external_claude_code") return undefined;
 	const label = "Claude subscription";
@@ -269,6 +273,15 @@ async function checkClaudeCode(auth: AuthStorage): Promise<DoctorCheck | undefin
 			label,
 			detail: `Claude Code is missing at ${credential.command}`,
 			fix: "Run /login anthropic to install it again.",
+		};
+	}
+	const newer = claudeModelsNewerThanLogin(credential, catalog);
+	if (newer.length > 0) {
+		return {
+			status: "warn",
+			label,
+			detail: `the saved login predates ${newer.join(", ")}`,
+			fix: `Run /login anthropic to refresh the models it offers. Until then, pick one by id, for example /model ${newer[0]}.`,
 		};
 	}
 	return { status: "ok", label, detail: `Claude Code at ${credential.command}` };

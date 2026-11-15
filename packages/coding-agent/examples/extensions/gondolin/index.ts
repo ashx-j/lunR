@@ -521,11 +521,13 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		await ensureVm(ctx);
-		const localLine = `Current working directory: ${localCwd}`;
-		const guestLine = `Current working directory: ${GUEST_WORKSPACE} (Gondolin VM; host workspace mounted from ${localCwd})`;
-		const systemPrompt = event.systemPrompt.includes(localLine)
-			? event.systemPrompt.replace(localLine, guestLine)
-			: `${event.systemPrompt}\n\n${guestLine}`;
+		// The environment block's directory, git and OS lines describe the host; tools run in the VM.
+		const guestLine = `- Working directory: ${GUEST_WORKSPACE} (Gondolin VM; host workspace mounted from ${localCwd})`;
+		const prompt = event.systemPrompt;
+		const start = prompt.indexOf(`- Working directory: ${localCwd.replace(/\\/g, "/")}\n`);
+		const end = start < 0 ? -1 : prompt.indexOf("\n- Session started:", start);
+		const systemPrompt =
+			end < 0 ? `${prompt}\n\n${guestLine}` : `${prompt.slice(0, start)}${guestLine}${prompt.slice(end)}`;
 		return { systemPrompt };
 	});
 }
