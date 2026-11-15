@@ -15,15 +15,15 @@
  * pattern's words (`git -C repo push`), and read a short-flag word as a set (`-rf` matches `-r -f`).
  * Rules stop a cooperating model from running something by accident; they are not a sandbox.
  *
- * Every match is linear in the rule and the command: globs never backtrack, word matching is
- * memoized, and `MAX_RULES` / `MAX_RULE_LENGTH` cap each list. A deny rule past a cap still blocks
- * every call of its tool, so dropping it fails closed, and settings load warns about it.
+ * Matching is linear in the command for each rule (see `bashMatcher`), and `MAX_RULES` /
+ * `MAX_RULE_LENGTH` cap each list. A deny rule past a cap still blocks every call of its tool, so
+ * dropping it fails closed, and settings load warns about it.
  */
 
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { canonicalizeTargetPath } from "../utils/paths.ts";
-import { type DeniedLine, deniedCommandLines } from "./permission-rule-commands.ts";
+import { type DeniedCommands, type DeniedLine, deniedCommandLines } from "./permission-rule-commands.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 
 export interface PermissionRuleSettings {
@@ -40,7 +40,7 @@ export const MAX_RULE_LENGTH = 300;
 /** One call as rules see it. Each part is computed at most once per call, and only when a rule asks. */
 interface CallView {
 	command(): string | undefined;
-	deniedLines(): DeniedLine[];
+	deniedLines(): DeniedCommands;
 	/** The resolved path and its real location as segments, for path rules. */
 	paths(): { target: string[]; real: string[] | undefined } | undefined;
 }
@@ -52,9 +52,15 @@ interface CompiledRule {
 	matches?: Matcher;
 }
 
+export interface DenyMatch {
+	rule: string;
+	/** The bash command nests or wraps too deeply to check, so every bash deny rule matches it. */
+	uncheckable: boolean;
+}
+
 export interface CompiledPermissionRules {
-	/** The first deny rule matching this call, if any. */
-	denied(toolName: string, input: Record<string, unknown>): string | undefined;
+	/** The first deny rule matching this call, if any, as a label of at most 60 characters. */
+	denied(toolName: string, input: Record<string, unknown>): DenyMatch | undefined;
 	/** True when an allow rule matches this call. */
 	allowed(toolName: string, input: Record<string, unknown>): boolean;
 }
@@ -64,19 +70,18 @@ const RULE_SYNTAX = /^([A-Za-z0-9_.:-]+)(?:\((.*)\))?$/s;
 const SHELL_CONTROL = /[;&|<>$`()\n\r\\]/;
 const SHORT_FLAGS = /^-[A-Za-z]+$/;
 
-/** True when `text` matches `glob`, where `*` is any text. Greedy piece search, so it never backtracks. */
-function globMatch(glob: string, text: string): boolean {
-	const pieces = glob.split("*");
-	if (pieces.length === 1) return glob === text;
+/** True when `text` matches the glob split on `*` into `pieces`. Greedy piece search, so it never backtracks. */
+function globMatch(pieces: readonly string[], text: string): boolean {
+	if (pieces.length === 1) return pieces[0] === text;
 	const first = pieces[0];
 	const last = pieces[pieces.length - 1];
 	if (text.length < first.length + last.length || !text.startsWith(first) || !text.endsWith(last)) return false;
 	let at = first.length;
 	const end = text.length - last.length;
-	for (const piece of pieces.slice(1, -1)) {
-		const found = text.indexOf(piece, at);
-		if (found === -1 || found + piece.length > end) return false;
-		at = found + piece.length;
+	for (let k = 1; k < pieces.length - 1; k++) {
+		const found = text.indexOf(pieces[k], at);
+		if (found === -1 || found + pieces[k].length > end) return false;
+		at = found + pieces[k].length;
 	}
 	return true;
 }
@@ -133,88 +138,123 @@ function segmentsMatchFrom(glob: readonly string[], path: readonly string[]): bo
 	return at(0, 0);
 }
 
-type PatternWord = { kind: "glob"; glob: string } | { kind: "flags"; flags: ReadonlySet<string> };
+type PatternWord = { kind: "glob"; pieces: string[] } | { kind: "flags"; flags: string[] };
 
 interface DenyPattern {
+	/** The command word's glob, split on `*`. */
+	name: string[];
+	/** The words after the command word. */
 	words: PatternWord[];
-	/** A starred last word: a glob over the rest of the line. */
-	tail?: string;
-	/** A starred last flag word (`-rf*`): any text may follow the flags. */
+	/**
+	 * A starred last word (`push*`, `/*`), a glob over the rest of the line: `first` starts a word and
+	 * `middle` are the pieces between its stars. The pieces hold no spaces, so each lies inside one word.
+	 */
+	tail?: { first: string; middle: string[] };
+	/** A starred lone command word or last flag word (`sudo*`, `-rf*`): any text may follow. */
 	restAllowed: boolean;
 }
 
 function patternWord(word: string): PatternWord {
 	return SHORT_FLAGS.test(word) && word.length > 2
-		? { kind: "flags", flags: new Set(word.slice(1)) }
-		: { kind: "glob", glob: word };
+		? { kind: "flags", flags: [...new Set(word.slice(1))] }
+		: { kind: "glob", pieces: word.split("*") };
 }
 
 function compileDenyPattern(pattern: string): DenyPattern {
-	const words = pattern.split(/\s+/);
-	const last = words[words.length - 1];
-	// One starred word (`sudo*`, `curl*`) is a glob over the command name, followed by anything.
-	if (words.length === 1 && last.endsWith("*")) return { words: [patternWord(last)], restAllowed: true };
-	if (last.endsWith("*")) {
-		words.pop();
-		const flags = last.slice(0, -1);
-		if (SHORT_FLAGS.test(flags) && flags.length > 2) {
-			return { words: [...words.map(patternWord), patternWord(flags)], restAllowed: true };
-		}
-		return { words: words.map(patternWord), tail: last, restAllowed: false };
+	const [command, ...words] = pattern.split(/\s+/);
+	const name = command.split("*");
+	const last = words.pop();
+	if (last === undefined) return { name, words: [], restAllowed: command.endsWith("*") };
+	const starred = last.endsWith("*");
+	const flags = last.slice(0, -1);
+	if (!starred || (SHORT_FLAGS.test(flags) && flags.length > 2)) {
+		return { name, words: [...words, starred ? flags : last].map(patternWord), restAllowed: starred };
 	}
-	return { words: words.map(patternWord), restAllowed: false };
+	const [first, ...rest] = last.split("*");
+	return { name, words: words.map(patternWord), tail: { first, middle: rest.filter(Boolean) }, restAllowed: false };
+}
+
+/** True when `pieces` occur in order in `words[w]` (from character `at`) up to `words[end - 1]`. */
+function piecesFrom(pieces: readonly string[], words: readonly string[], w: number, at: number, end: number): boolean {
+	let k = 0;
+	while (k < pieces.length && w < end) {
+		const found = words[w].indexOf(pieces[k], at);
+		if (found === -1) {
+			w++;
+			at = 0;
+		} else {
+			at = found + pieces[k].length;
+			k++;
+		}
+	}
+	return k === pieces.length;
 }
 
 /**
- * Deny matching over one line's words, memoized on (pattern word, line word) so it stays O(P × W²):
- * the first pattern word is the command name, later ones may have option words (and one value after
- * each) before them, a flag word takes a run of short options, and a starred last word takes the rest.
+ * One deny pattern against one line in a single forward pass, so O(line length). The command word
+ * matches the pattern's first word, then each later pattern word matches the next word not skipped:
+ * an option word may be skipped, and one plain word after it as its value (`git -C repo push`). A
+ * word that matches the current pattern word is always taken, so `git -C push push` is missed, which
+ * is fine for a guard against accidents. A flag word takes a run of short-flag words that together
+ * hold its flags (`-rf` matches `-r -f`).
  */
 function denyLineMatch(pattern: DenyPattern, line: DeniedLine): boolean {
-	const { words } = line;
-	const P = pattern.words.length;
-	const W = words.length;
-	const memo = new Int8Array((P + 1) * (W + 1));
-	const at = (p: number, w: number): boolean => {
-		const key = p * (W + 1) + w;
-		if (memo[key] !== 0) return memo[key] === 1;
-		let result = false;
-		if (p === P) {
-			result =
-				pattern.restAllowed ||
-				(pattern.tail === undefined ? w === W : globMatch(pattern.tail, words.slice(w).join(" ")));
-		} else if (w < W) {
-			const word = pattern.words[p];
-			if (p === 0) {
-				result = (line.wildcard || (word.kind === "glob" ? globMatch(word.glob, words[0]) : false)) && at(1, 1);
-			} else if (word.kind === "glob") {
-				result = globMatch(word.glob, words[w]) && at(p + 1, w + 1);
-			} else {
-				const seen = new Set<string>();
-				for (let k = w; k < W && SHORT_FLAGS.test(words[k]) && !result; k++) {
-					for (const flag of words[k].slice(1)) seen.add(flag);
-					if ([...word.flags].every((flag) => seen.has(flag))) result = at(p + 1, k + 1);
-				}
+	if (!line.wildcard && !globMatch(pattern.name, line.name)) return false;
+	const { words, end } = line;
+	const { tail } = pattern;
+	let p = 0;
+	let afterOption = false;
+	for (let w = line.start + 1; ; w++) {
+		const want = pattern.words[p];
+		if (want === undefined) {
+			if (pattern.restAllowed || (!tail && w === end)) return true;
+			if (tail && w === end) return tail.first === "" && tail.middle.length === 0;
+			// Later pieces only get harder to find further on, so the first word that starts the tail settles it.
+			if (tail && words[w].startsWith(tail.first)) return piecesFrom(tail.middle, words, w, tail.first.length, end);
+		} else if (w < end && want.kind === "glob" && globMatch(want.pieces, words[w])) {
+			p++;
+			afterOption = false;
+			continue;
+		} else if (w < end && want.kind === "flags") {
+			// A run of short-flag words; a later start inside it holds fewer flags, so take or skip all of it.
+			const seen = new Set<string>();
+			const covered = () => want.flags.every((flag) => seen.has(flag));
+			let k = w;
+			while (k < end && SHORT_FLAGS.test(words[k]) && !covered())
+				for (const flag of words[k++].slice(1)) seen.add(flag);
+			if (k > w) {
+				if (covered()) p++;
+				afterOption = !covered();
+				w = k - 1;
+				continue;
 			}
 		}
-		if (!result && p > 0 && w < W && words[w].startsWith("-")) {
-			result = at(p, w + 1) || (!words[w].includes("=") && w + 1 < W && at(p, w + 2));
-		}
-		memo[key] = result ? 1 : 2;
-		return result;
-	};
-	return P === 0 ? false : at(0, 0);
+		if (w >= end) return false;
+		if (words[w].startsWith("-")) afterOption = !words[w].includes("=");
+		else if (afterOption) afterOption = false;
+		else return false;
+	}
 }
 
+/**
+ * Bash deny matching costs at most (command length) x (number of deny rules) x a constant:
+ * `deniedCommandLines` reads the text once, plus each queued `sh -c`/`eval` body at most `MAX_DEPTH`
+ * times, and cuts at most `MAX_STAGES` lines from each segment; `denyLineMatch` makes one pass per
+ * line, and its glob checks only move forward. A rule usually stops at the line's command word.
+ */
 function bashMatcher(pattern: string, kind: "allow" | "deny"): Matcher {
 	if (kind === "allow") {
+		const pieces = pattern.split("*");
 		return (call) => {
 			const command = call.command();
-			return command !== undefined && !SHELL_CONTROL.test(command) && globMatch(pattern, command);
+			return command !== undefined && !SHELL_CONTROL.test(command) && globMatch(pieces, command);
 		};
 	}
 	const compiled = compileDenyPattern(pattern);
-	return (call) => call.deniedLines().some((line) => denyLineMatch(compiled, line));
+	return (call) => {
+		const { lines, uncheckable } = call.deniedLines();
+		return uncheckable || lines.some((line) => denyLineMatch(compiled, line));
+	};
 }
 
 function toSlashes(path: string): string {
@@ -271,6 +311,10 @@ export function parsePermissionRule(source: string): { tool: string; pattern?: s
 	return pattern ? { tool, pattern } : undefined;
 }
 
+function ruleLabel(source: string): string {
+	return source.length > 60 ? `${source.slice(0, 60)}…` : source;
+}
+
 /** Splits a list into the rules lunR reads and those past `MAX_RULES` or `MAX_RULE_LENGTH`. */
 function capRules(list: readonly unknown[]): { kept: string[]; dropped: string[] } {
 	const strings = list.filter((source): source is string => typeof source === "string");
@@ -295,7 +339,7 @@ export function permissionRuleProblems(list: unknown, name: string): string[] {
 	const deny = name.endsWith("deny");
 	const { dropped } = capRules(list);
 	const cap = dropped.map((source) => {
-		const label = source.length > 60 ? `${source.slice(0, 60)}…` : source;
+		const label = ruleLabel(source);
 		const why =
 			source.length > MAX_RULE_LENGTH
 				? `is over ${MAX_RULE_LENGTH} characters`
@@ -353,7 +397,7 @@ function compileList(lists: readonly unknown[][], cwd: string, kind: "allow" | "
 }
 
 function callView(input: Record<string, unknown>, cwd: string): CallView {
-	let lines: DeniedLine[] | undefined;
+	let lines: DeniedCommands | undefined;
 	let paths: { target: string[]; real: string[] | undefined } | undefined | null = null;
 	const command = () => (typeof input.command === "string" ? input.command.trim() : undefined);
 	return {
@@ -420,7 +464,12 @@ export function compilePermissionRules(
 		return call;
 	};
 	const rules: CompiledPermissionRules = {
-		denied: (toolName, input) => firstMatch(deny, toolName, view(input))?.source,
+		denied: (toolName, input) => {
+			const rule = firstMatch(deny, toolName, view(input));
+			if (!rule) return undefined;
+			const uncheckable = rule.matches !== undefined && view(input)().deniedLines().uncheckable;
+			return { rule: ruleLabel(rule.source), uncheckable };
+		},
 		allowed: (toolName, input) => firstMatch(allow, toolName, view(input)) !== undefined,
 	};
 	memo.set(cwd, { key, rules });
