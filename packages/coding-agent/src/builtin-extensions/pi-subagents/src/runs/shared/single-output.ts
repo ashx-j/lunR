@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { OutputMode, SavedOutputReference } from "../../shared/types.ts";
+import { protectedTargetWriteReason } from "../../../../../core/protected-targets.ts";
 import { hasMutationToolCapability } from "./completion-guard.ts";
+import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { canonicalizeTargetPath } from "../../../../../utils/paths.ts";
 
 export interface SingleOutputSnapshot {
 	exists: boolean;
@@ -137,11 +140,45 @@ export function formatSavedOutputReference(savedPath: string, fullOutput: string
 	};
 }
 
+/**
+ * Why a child's output can't go to `outputPath` in read-only mode, or undefined. The runtime writes the
+ * reply there itself, outside the file tools, so in read-only mode it must stay inside `runDir`, the
+ * directory lunR made for this run. Without one (`artifacts: false`) every output is refused.
+ */
+export function readOnlyOutputError(
+	outputPath: string | undefined,
+	runDir: string | undefined,
+	sessionId: string | undefined,
+): string | undefined {
+	if (!outputPath || snapshotParentPermissionMode(sessionId) !== "read-only") return undefined;
+	if (!runDir) {
+		return `Read-only mode cannot write a subagent's output to ${outputPath}: this run has no artifacts directory. Leave output unset, or drop artifacts: false and give a relative file name.`;
+	}
+	try {
+		const rel = path.relative(canonicalizeTargetPath(runDir), canonicalizeTargetPath(outputPath));
+		if (rel && !path.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${path.sep}`)) return undefined;
+	} catch {
+		// A dangling link can't be resolved, so where the write would land is unknown.
+	}
+	return `Read-only mode cannot write a subagent's output to ${outputPath}: it must stay inside this run's directory ${runDir}. Leave output unset or give a relative file name.`;
+}
+
 export function validateFileOnlyOutputMode(outputMode: OutputMode | undefined, outputPath: string | undefined, context: string): string | undefined {
 	if (outputMode === "file-only" && !outputPath) {
 		return `${context} sets outputMode: "file-only" but does not configure an output file. Set output to a path or use outputMode: "inline".`;
 	}
 	return undefined;
+}
+
+/**
+ * Why a child's output can't go to `outputPath`, or undefined. The runtime writes the child's reply
+ * there itself, outside the file tools, so the file tools' protected targets are checked here: at
+ * launch and again before the write.
+ */
+export function outputTargetError(outputPath: string | undefined, cwd: string): string | undefined {
+	if (!outputPath) return undefined;
+	const reason = protectedTargetWriteReason(outputPath, cwd);
+	return reason ? `Subagent output can't go to ${outputPath}: ${reason}` : undefined;
 }
 
 export function captureSingleOutputSnapshot(outputPath: string | undefined): SingleOutputSnapshot | undefined {
@@ -158,8 +195,11 @@ export function captureSingleOutputSnapshot(outputPath: string | undefined): Sin
 function persistSingleOutput(
 	outputPath: string | undefined,
 	fullOutput: string,
+	cwd: string,
 ): { savedPath?: string; error?: string } {
 	if (!outputPath) return {};
+	const blocked = outputTargetError(outputPath, cwd);
+	if (blocked) return { error: blocked };
 	try {
 		fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 		fs.writeFileSync(outputPath, fullOutput, "utf-8");
@@ -169,10 +209,12 @@ function persistSingleOutput(
 	}
 }
 
+/** `cwd` is the session's directory, which decides the project `.lunr/settings.json` it may not write. */
 export function resolveSingleOutput(
 	outputPath: string | undefined,
 	fallbackOutput: string,
 	beforeRun: SingleOutputSnapshot | undefined,
+	cwd: string,
 ): { fullOutput: string; savedPath?: string; saveError?: string } {
 	if (!outputPath) return { fullOutput: fallbackOutput };
 
@@ -203,7 +245,7 @@ export function resolveSingleOutput(
 		}
 	}
 
-	const save = persistSingleOutput(outputPath, fallbackOutput);
+	const save = persistSingleOutput(outputPath, fallbackOutput, cwd);
 	if (save.savedPath) return { fullOutput: fallbackOutput, savedPath: save.savedPath };
 	return { fullOutput: fallbackOutput, saveError: save.error };
 }

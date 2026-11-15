@@ -17,7 +17,7 @@ import { applyThinkingSuffix } from "../shared/pi-args.ts";
 import { snapshotParentAutoReview } from "../../../../../core/auto-review.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { subagentCommunicationEnabled } from "../../../../../core/settings-manager.ts";
-import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
+import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, outputTargetError, readOnlyOutputError, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
@@ -601,7 +601,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		if (!namespaceOutputPath) systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, {
 			tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined,
 		});
-		const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Async step (${spec.description})`);
+		const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Async step (${spec.description})`) ?? outputTargetError(outputPath, ctx.cwd) ?? readOnlyOutputError(outputPath, outputBaseDir, ctx.parentSessionId ?? ctx.currentSessionId);
 		if (validationError) throw new AsyncStartValidationError(validationError);
 		let taskTemplate = s.task ?? "{previous}";
 		taskTemplate = taskTemplate.replace(/\{task\}/g, originalTask ?? "");
@@ -883,6 +883,7 @@ export function executeAsyncChain(
 				id,
 				steps,
 				resultPath: inheritedNestedRoute ? nestedResultsPath(inheritedNestedRoute.rootRunId, id) : path.join(RESULTS_DIR, `${id}.json`),
+				sessionCwd: ctx.cwd,
 				cwd: runnerCwd,
 				placeholder: "{previous}",
 				maxOutput,
@@ -1092,6 +1093,15 @@ export function executeAsyncSingle(
 		const injection = buildSkillInjection(resolvedSkills);
 		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${injection}` : injection;
 	}
+	// Refuse before the run directory exists, so a refused launch leaves nothing behind.
+	const runOutputDir = artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined;
+	const effectiveOutput = normalizeSingleOutputOverride(params.output ?? spec.output, typeof spec.output === "string" ? spec.output : undefined);
+	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, runnerCwd, params.outputBaseDir ?? runOutputDir);
+	const childToolShape = { tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined };
+	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, childToolShape);
+	const outputMode = params.outputMode ?? spec.outputMode ?? "inline";
+	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`) ?? outputTargetError(outputPath, ctx.cwd) ?? readOnlyOutputError(outputPath, runOutputDir, ctx.parentSessionId ?? ctx.currentSessionId);
+	if (validationError) return formatAsyncStartError("single", validationError);
 	const inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
 	const nestedAddress = inheritedNestedRoute ? resolveNestedParentAddressFromEnv() : undefined;
 	const asyncDir = inheritedNestedRoute
@@ -1108,13 +1118,6 @@ export function executeAsyncSingle(
 		};
 	}
 
-	const effectiveOutput = normalizeSingleOutputOverride(params.output ?? spec.output, typeof spec.output === "string" ? spec.output : undefined);
-	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, runnerCwd, params.outputBaseDir ?? (artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined));
-	const childToolShape = { tools: spec.effectivePermissions === "read-only" ? ["read", "grep", "find", "ls", "bash"] : undefined };
-	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, childToolShape);
-	const outputMode = params.outputMode ?? spec.outputMode ?? "inline";
-	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);
-	if (validationError) return formatAsyncStartError("single", validationError);
 	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath, childToolShape);
 	const primaryModel = resolveExecutableChildModel({
 		modelSelection: spec.modelSelection,
@@ -1214,6 +1217,7 @@ export function executeAsyncSingle(
 					},
 				],
 				resultPath: inheritedNestedRoute ? nestedResultsPath(inheritedNestedRoute.rootRunId, id) : path.join(RESULTS_DIR, `${id}.json`),
+				sessionCwd: ctx.cwd,
 				cwd: runnerCwd,
 				placeholder: "{previous}",
 				maxOutput,
