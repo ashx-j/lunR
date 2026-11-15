@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	CLAUDE_CODE_EXIT_GRACE_MS,
@@ -418,6 +418,16 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
 			CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
 		});
+	});
+
+	it("re-reads the saved login when another lunR removed the version this one started with", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		// The profile's auth.json names the binary that exists; this process still holds the removed version.
+		writeFileSync(join(dirname(directory), "auth.json"), JSON.stringify({ anthropic: connection }));
+		const stale = { ...connection, command: join(directory, "2.1.263", "claude") };
+		const result = await streamClaudeCode(model, context, { externalClaudeCode: stale }, true, upstream).result();
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.stopReason).toBe("toolUse");
 	});
 
 	it("replays a history too large for Claude Code's settings file through stdin", async () => {
