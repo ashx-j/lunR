@@ -3,6 +3,8 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { OutputMode, SavedOutputReference } from "../../shared/types.ts";
 import { hasMutationToolCapability } from "./completion-guard.ts";
+import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { canonicalizeTargetPath } from "../../../../../utils/paths.ts";
 
 export interface SingleOutputSnapshot {
 	exists: boolean;
@@ -135,6 +137,29 @@ export function formatSavedOutputReference(savedPath: string, fullOutput: string
 		lines,
 		message: `Output saved to: ${absolutePath} (${formatByteSize(bytes)}, ${lines} ${lines === 1 ? "line" : "lines"}). Read this file if needed.`,
 	};
+}
+
+/**
+ * Why a child's output can't go to `outputPath` in read-only mode, or undefined. The runtime writes the
+ * reply there itself, outside the file tools, so in read-only mode it must stay inside `runDir`, the
+ * directory lunR made for this run. Without one (`artifacts: false`) every output is refused.
+ */
+export function readOnlyOutputError(
+	outputPath: string | undefined,
+	runDir: string | undefined,
+	sessionId: string | undefined,
+): string | undefined {
+	if (!outputPath || snapshotParentPermissionMode(sessionId) !== "read-only") return undefined;
+	if (!runDir) {
+		return `Read-only mode cannot write a subagent's output to ${outputPath}: this run has no artifacts directory. Leave output unset, or drop artifacts: false and give a relative file name.`;
+	}
+	try {
+		const rel = path.relative(canonicalizeTargetPath(runDir), canonicalizeTargetPath(outputPath));
+		if (rel && !path.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${path.sep}`)) return undefined;
+	} catch {
+		// A dangling link can't be resolved, so where the write would land is unknown.
+	}
+	return `Read-only mode cannot write a subagent's output to ${outputPath}: it must stay inside this run's directory ${runDir}. Leave output unset or give a relative file name.`;
 }
 
 export function validateFileOnlyOutputMode(outputMode: OutputMode | undefined, outputPath: string | undefined, context: string): string | undefined {
