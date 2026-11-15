@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripAnsi } from "../utils/ansi.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
+import { removeOnExit } from "./temp-files.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.ts";
 
@@ -68,6 +69,7 @@ export async function executeBashWithOperations(
 		const id = randomBytes(8).toString("hex");
 		tempFilePath = join(tmpdir(), `lunr-bash-${id}.log`); // lunr: renamed from pi-bash
 		tempFileStream = createWriteStream(tempFilePath);
+		removeOnExit(tempFilePath);
 		for (const chunk of outputChunks) {
 			tempFileStream.write(chunk);
 		}

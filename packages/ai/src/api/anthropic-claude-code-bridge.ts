@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -398,6 +398,20 @@ function localFailure(message: string): Response {
 	});
 }
 
+/** Request directories not yet removed. An exit mid-request skips `finish`, so the exit hook removes them. */
+const liveDirectories = new Set<string>();
+let exitHookArmed = false;
+function removeOnExit(directory: string): () => void {
+	if (!exitHookArmed) {
+		exitHookArmed = true;
+		process.on("exit", () => {
+			for (const path of liveDirectories) rmSync(path, { recursive: true, force: true });
+		});
+	}
+	liveDirectories.add(directory);
+	return () => liveDirectories.delete(directory);
+}
+
 async function runClaudeCode(
 	connection: ExternalClaudeCodeCredential,
 	request: ClaudeCodeRequest,
@@ -412,6 +426,7 @@ async function runClaudeCode(
 		loopback.close();
 		throw error;
 	});
+	const forgetDirectory = removeOnExit(directory);
 	let pid: number | undefined;
 	let cleanup: Promise<void> | undefined;
 	let exited: Promise<void> | undefined;
@@ -434,6 +449,7 @@ async function runClaudeCode(
 			await stopProcessTree(pid);
 			// Windows can hold the working directory briefly after the process tree ends.
 			await rm(directory, { recursive: true, force: true }).catch(() => {});
+			forgetDirectory();
 		})();
 		return cleanup;
 	};

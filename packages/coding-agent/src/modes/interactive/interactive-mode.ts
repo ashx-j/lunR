@@ -129,6 +129,7 @@ import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/subagent-cancellation.ts";
+import { sweepStaleTempFiles } from "../../core/temp-files.ts";
 import { time } from "../../core/timings.ts";
 import { notifyTodosEnabledChanged } from "../../core/todo-settings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
@@ -1058,6 +1059,7 @@ export class InteractiveMode {
 		}
 
 		await this.waitForStartupReady();
+		void sweepStaleTempFiles();
 
 		// Check tmux keyboard setup asynchronously
 		this.checkTmuxKeyboardSetup().then((warning) => {
