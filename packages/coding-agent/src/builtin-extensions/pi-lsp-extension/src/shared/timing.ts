@@ -3,13 +3,11 @@
  */
 
 /**
- * Longest wait (ms) for tsserver's diagnostics after an edit. lunR asks tsserver directly, which answers in
- * 5 to 330 ms once the project is loaded. A slower answer goes out with a later tool result.
+ * Longest wait (ms) for a server's diagnostics after an edit. tsserver answers lunR's direct request in
+ * 5 to 330 ms once the project is loaded; pyright publishes with a version in about 300 ms. A slower
+ * answer can go out with a later tool result if no file changed since.
  */
-export const DIAGNOSTIC_PULL_CAP_MS = 500;
-
-/** Longest wait (ms) for a server without that request to publish diagnostics for the edit's version */
-export const DIAGNOSTIC_PUBLISH_CAP_MS = 1500;
+export const DIAGNOSTIC_WAIT_CAP_MS = 500;
 
 /** Delay (ms) to wait for a daemon socket to start listening after spawn */
 export const DAEMON_SOCKET_READY_DELAY_MS = 500;

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LateDiagnostics } from "../src/builtin-extensions/pi-lsp-extension/src/late-diagnostics.ts";
 import { LspClient } from "../src/builtin-extensions/pi-lsp-extension/src/lsp-client.ts";
 
 function deferred<T>() {
@@ -289,41 +290,58 @@ describe("LSP diagnostics for the sent version", () => {
 		return state;
 	};
 
-	it("ignores a late publish from an older version and resolves on the sent version's publish", async () => {
+	const ready = (...diagnostics: unknown[]) => ({ kind: "ready", diagnostics });
+	const tsserver = (answers: Array<(response: unknown) => void>, commands = ["typescript.tsserverRequest"]) =>
+		mocks.connection.sendRequest.mockImplementation((method: string) =>
+			method === "initialize"
+				? Promise.resolve({ capabilities: { executeCommandProvider: { commands } } })
+				: new Promise((resolve, reject) =>
+						answers.push((response) => (response instanceof Error ? reject(response) : resolve(response))),
+					),
+		);
+
+	it("ignores a publish for an older version and resolves on the sent version's publish", async () => {
 		const { client, child } = setup();
 		await startDirect(client, child);
 		const publish = publisher();
 
-		client.didOpen(uri, "typescript", 1, "");
+		client.didOpen(uri, "python", 1, "");
 		const opened = track(client.diagnosticsForSentVersion(uri));
 		client.didChange(uri, 2, "bad");
 		const changed = track(client.diagnosticsForSentVersion(uri));
 		await vi.advanceTimersByTimeAsync(0);
-		expect(opened).toEqual({ value: undefined, done: true });
+		expect(opened).toEqual({ value: { kind: "superseded" }, done: true });
 
-		// The open's publish arrives after the change: unversioned, then tagged with version 1.
-		publish({ uri, diagnostics: [] });
+		// The open's publish arrives after the change.
 		publish({ uri, version: 1, diagnostics: [] });
 		await vi.advanceTimersByTimeAsync(0);
 		expect(changed.done).toBe(false);
 
 		publish({ uri, version: 2, diagnostics: [error("added")] });
 		await vi.advanceTimersByTimeAsync(0);
-		expect(changed).toEqual({ value: [error("added")], done: true });
+		expect(changed).toEqual({ value: ready(error("added")), done: true });
+		child.exit();
+		await client.shutdown();
+	});
+
+	it("says diagnostics are unavailable, without waiting, for a server that publishes without a version", async () => {
+		const { client, child } = setup();
+		await startDirect(client, child);
+		client.didOpen(uri, "typescript", 1, "");
+		const first = track(client.diagnosticsForSentVersion(uri));
+		publisher()({ uri, diagnostics: [error("cannot tell which version")] });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(first.value).toMatchObject({ kind: "unavailable" });
+		client.didChange(uri, 2, "x");
+		expect(await client.diagnosticsForSentVersion(uri)).toMatchObject({ kind: "unavailable" });
 		child.exit();
 		await client.shutdown();
 	});
 
 	it("asks tsserver for the sent version when the server forwards tsserver requests", async () => {
 		const { client, child } = setup();
-		const answers: Array<(body: unknown) => void> = [];
-		mocks.connection.sendRequest.mockImplementation((method: string) =>
-			method === "initialize"
-				? Promise.resolve({
-						capabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } },
-					})
-				: new Promise((resolve) => answers.push((body) => resolve({ body }))),
-		);
+		const answers: Array<(response: unknown) => void> = [];
+		tsserver(answers);
 		await startDirect(client, child);
 		expect(client.pullsDiagnostics).toBe(true);
 
@@ -334,19 +352,91 @@ describe("LSP diagnostics for the sent version", () => {
 			command: "typescript.tsserverRequest",
 			arguments: ["semanticDiagnosticsSync", { file: uri }],
 		});
-		answers[0]([]);
-		answers[1]([
-			{ start: { line: 1, offset: 1 }, end: { line: 1, offset: 2 }, text: "added", code: 2322, category: "error" },
-		]);
-		expect(await result).toEqual([{ ...error("added"), code: 2322, source: "typescript" }]);
+		answers[0]({ success: true, body: [] });
+		answers[1]({
+			success: true,
+			body: [
+				{
+					start: { line: 1, offset: 1 },
+					end: { line: 1, offset: 2 },
+					text: "added",
+					code: 2322,
+					category: "error",
+				},
+			],
+		});
+		expect(await result).toEqual(ready({ ...error("added"), code: 2322, source: "typescript" }));
 
 		// An answer that arrives after a newer change is not reported as that change's.
 		const superseded = client.diagnosticsForSentVersion(uri);
 		client.didChange(uri, 3, "fixed");
-		answers[2]([]);
-		answers[3]([]);
-		expect(await superseded).toBeUndefined();
+		answers[2]({ success: true, body: [] });
+		answers[3]({ success: true, body: [] });
+		expect(await superseded).toEqual({ kind: "superseded" });
 		child.exit();
 		await client.shutdown();
+	});
+
+	it("reports a dead tsserver as unavailable instead of clean, then stops asking", async () => {
+		const { client, child } = setup();
+		const answers: Array<(response: unknown) => void> = [];
+		tsserver(answers);
+		await startDirect(client, child);
+		client.didOpen(uri, "typescript", 1, "");
+		const result = client.diagnosticsForSentVersion(uri);
+		answers[0]({ type: "noServer" });
+		answers[1]({ type: "noServer" });
+		expect(await result).toEqual({ kind: "unavailable", reason: "tsserver is not running", lasting: true });
+		client.didChange(uri, 2, "x");
+		expect(await client.diagnosticsForSentVersion(uri)).toEqual({
+			kind: "unavailable",
+			reason: "tsserver is not running",
+			lasting: true,
+		});
+		expect(answers).toHaveLength(2);
+		child.exit();
+		await client.shutdown();
+	});
+
+	it("falls back to versioned publishes when the server rejects the tsserver request", async () => {
+		const { client, child } = setup();
+		const answers: Array<(response: unknown) => void> = [];
+		tsserver(answers);
+		await startDirect(client, child);
+		client.didOpen(uri, "typescript", 1, "");
+		const result = track(client.diagnosticsForSentVersion(uri));
+		answers[0](new Error("unknown command"));
+		answers[1](new Error("unknown command"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(client.pullsDiagnostics).toBe(false);
+		publisher()({ uri, version: 1, diagnostics: [error("tied")] });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(result.value).toEqual(ready(error("tied")));
+		child.exit();
+		await client.shutdown();
+	});
+});
+
+describe("late LSP diagnostics", () => {
+	it("drops a late answer once a tool that can change files ran after it was requested", async () => {
+		const late = new LateDiagnostics();
+		const diag = (message: string) => ({
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+			message,
+			severity: 1 as const,
+		});
+
+		// b.ts was not ready in time; its answer arrives, then an edit of a.ts can change b.ts's errors.
+		late.noteToolResult("write");
+		late.add("file:///b.ts", "b.ts", Promise.resolve([diag("stale error")]));
+		await Promise.resolve();
+		late.noteToolResult("write");
+		expect(late.take()).toEqual([]);
+
+		// With only a read in between, the answer still holds.
+		late.add("file:///b.ts", "b.ts", Promise.resolve([diag("current error")]));
+		await Promise.resolve();
+		late.noteToolResult("read");
+		expect(late.take()).toEqual([{ relPath: "b.ts", diagnostics: [diag("current error")] }]);
 	});
 });

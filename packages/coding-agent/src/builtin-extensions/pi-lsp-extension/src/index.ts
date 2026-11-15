@@ -51,7 +51,8 @@ import { syntheticDotLocks } from "./tools/completions.js";
 import { relative } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DIAGNOSTIC_PUBLISH_CAP_MS, DIAGNOSTIC_PULL_CAP_MS } from "./shared/timing.js";
+import { DIAGNOSTIC_WAIT_CAP_MS } from "./shared/timing.js";
+import { LateDiagnostics } from "./late-diagnostics.js";
 
 /**
  * Project-level LSP config — loaded from `.pi-lsp.json` in the workspace root.
@@ -139,13 +140,6 @@ function registerToolWithRuntime<T extends TSchema, D>(pi: ExtensionAPI, tool: T
   });
 }
 
-/** Diagnostics for an edit that arrived after its tool result. `diagnostics` is set once they arrive. */
-interface LateDiagnostics {
-  generation: number;
-  relPath: string;
-  diagnostics?: Diagnostic[];
-}
-
 /** Compact summary of a file's errors (at most 10 lines), or undefined when it has none. */
 function formatErrors(relPath: string, diagnostics: Diagnostic[]): string | undefined {
   const errors = diagnostics.filter((d) => d.severity === DiagnosticSeverity.Error);
@@ -164,8 +158,10 @@ function formatErrors(relPath: string, diagnostics: Diagnostic[]): string | unde
 
 export default function lspExtension(pi: ExtensionAPI) {
   const host = new LspRuntimeHost();
-  // Edit diagnostics that missed their wait, by URI. The next tool result carries them.
-  const lateDiagnostics = new Map<string, LateDiagnostics>();
+  // Edit diagnostics that missed their wait. A later tool result carries them if no file changed since.
+  const lateDiagnostics = new LateDiagnostics();
+  // Each reason diagnostics are unavailable is said once per language.
+  const reportedUnavailable = new Set<string>();
   let pendingProvider: WorkspaceProvider | null = null;
   let latestCtx: any = null;
   let projectConfig: ProjectLspConfig | null = null;
@@ -287,6 +283,7 @@ export default function lspExtension(pi: ExtensionAPI) {
   // session_start binds cwd/config only. Heavy managers load on first use,
   // unless autoStart is configured (then ensure + startEagerly).
   pi.on("session_start", async (_event, ctx) => {
+    lateDiagnostics.clear();
     latestCtx = ctx;
     sessionCwd = ctx.cwd;
 
@@ -371,6 +368,7 @@ export default function lspExtension(pi: ExtensionAPI) {
   // when LSP was never used. Writes may start a server (existing behavior) so they
   // ensure runtime. After writes/edits, append file-scoped error diagnostics.
   pi.on("tool_result", async (event) => {
+    lateDiagnostics.noteToolResult(event.toolName);
     const generation = host.getGeneration();
     try {
       if (isReadToolResult(event) && !event.isError) {
@@ -407,41 +405,35 @@ export default function lspExtension(pi: ExtensionAPI) {
       ? manager.getRunningClient(languageId)
       : undefined;
     const uri = manager && path ? manager.getFileUri(path) : undefined;
-    // This edit supersedes the file's late diagnostics.
-    if (uri) lateDiagnostics.delete(uri);
-    for (const [lateUri, late] of lateDiagnostics) {
-      if (late.generation === generation && !late.diagnostics) continue;
-      lateDiagnostics.delete(lateUri);
-      if (late.generation !== generation || !late.diagnostics) continue;
+    for (const late of lateDiagnostics.take()) {
       const summary = formatErrors(late.relPath, late.diagnostics);
       if (summary) notes.push(summary);
     }
 
-    if (manager && client && path && uri) {
+    if (manager && client && languageId && path && uri) {
       // Wait for the diagnostics of the version this edit sent, never an older version's.
       const settled = client.diagnosticsForSentVersion(uri);
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const cap = client.pullsDiagnostics ? DIAGNOSTIC_PULL_CAP_MS : DIAGNOSTIC_PUBLISH_CAP_MS;
-      const diagnostics = await Promise.race([
+      const result = await Promise.race([
         settled,
-        new Promise<"pending">((resolve) => (timer = setTimeout(resolve, cap, "pending"))),
+        new Promise<"pending">((resolve) => (timer = setTimeout(resolve, DIAGNOSTIC_WAIT_CAP_MS, "pending"))),
       ]);
       clearTimeout(timer);
       if (host.getGeneration() !== generation) return;
 
       const relPath = relative(manager.resolvePath("."), manager.resolvePath(path));
-      if (diagnostics === "pending") {
-        const late: LateDiagnostics = { generation, relPath };
-        lateDiagnostics.set(uri, late);
-        void settled.then((result) => {
-          if (lateDiagnostics.get(uri) !== late) return;
-          if (result) late.diagnostics = result;
-          else lateDiagnostics.delete(uri);
-        });
-        notes.push(`\n\nLSP: diagnostics for ${relPath} are not ready yet. Errors, if any, follow with a later tool result.`);
-      } else if (diagnostics) {
-        const summary = formatErrors(relPath, diagnostics);
+      if (result === "pending") {
+        lateDiagnostics.add(uri, relPath, settled.then((late) => (late.kind === "ready" ? late.diagnostics : undefined)));
+        notes.push(`\n\nLSP: diagnostics for ${relPath} were not ready in time.`);
+      } else if (result.kind === "ready") {
+        const summary = formatErrors(relPath, result.diagnostics);
         if (summary) notes.push(summary);
+      } else if (result.kind === "unavailable" && !result.lasting) {
+        notes.push(`\n\nLSP: diagnostics for ${relPath} are unavailable for this edit: ${result.reason}.`);
+      } else if (result.kind === "unavailable" && !reportedUnavailable.has(`${languageId}:${result.reason}`)) {
+        // A lasting reason is said once; later edits of this language show nothing.
+        reportedUnavailable.add(`${languageId}:${result.reason}`);
+        notes.push(`\n\nLSP: ${languageId} diagnostics are unavailable after edits: ${result.reason}.`);
       }
     }
 
@@ -632,6 +624,11 @@ export default function lspExtension(pi: ExtensionAPI) {
   });
 
   // Clean shutdown — never loads heavy modules if they were unused
+  // A new turn may follow edits by the user, so an old answer could be wrong.
+  pi.on("agent_end", async () => {
+    lateDiagnostics.clear();
+  });
+
   pi.on("session_shutdown", async () => {
     // Drop the captured ctx immediately — once shutdown fires, any late
     // LSP manager callback that reaches setLspStatus/applyProvider would

@@ -33,11 +33,35 @@ import { DiagnosticSeverity } from "vscode-languageserver-protocol";
 /** typescript-language-server's command that forwards a raw request to tsserver. */
 const TSSERVER_REQUEST = "typescript.tsserverRequest";
 
+/**
+ * Diagnostics for the version of a file that lunR last sent. `superseded`: a newer version, a close or
+ * a shutdown came first. `unavailable`: the server gave no diagnostics tied to that version; `lasting`
+ * when it never will for this client.
+ */
+export type SentDiagnostics =
+  | { kind: "ready"; diagnostics: Diagnostic[] }
+  | { kind: "superseded" }
+  | { kind: "unavailable"; reason: string; lasting: boolean };
+
+const SUPERSEDED: SentDiagnostics = { kind: "superseded" };
+const UNVERSIONED: SentDiagnostics = {
+  kind: "unavailable",
+  lasting: true,
+  reason: "the server publishes diagnostics without a version, so lunR cannot tie them to an edit (typescript-language-server needs 4.4.0 or newer)",
+};
+
 interface SentVersion {
   version: number;
   /** Set once the server publishes diagnostics for this version. */
   diagnostics?: Diagnostic[];
-  waiters: Set<(diagnostics: Diagnostic[] | undefined) => void>;
+  waiters: Set<(result: SentDiagnostics) => void>;
+}
+
+/** A tsserver response as typescript-language-server forwards it. A dead tsserver gives `{ type: "noServer" }`. */
+interface TsserverResponse {
+  type?: string;
+  success?: boolean;
+  body?: TsserverDiagnostic[];
 }
 
 /** The fields of a tsserver diagnostic that lunR reads. Lines and offsets are 1-based. */
@@ -101,6 +125,12 @@ export class LspClient {
   private _diagnostics: Map<string, Diagnostic[]> = new Map();
   /** The version lunR last sent for each open URI, with the callers waiting for that version's diagnostics. */
   private readonly sent = new Map<string, SentVersion>();
+  /** Whether `typescript.tsserverRequest` works, once a request has answered or been rejected. */
+  private pull: "unknown" | "yes" | "no" = "unknown";
+  /** Set once tsserver stops answering; lunR then stops asking. */
+  private pullBroken?: SentDiagnostics;
+  /** False once the server publishes without a version. */
+  private publishesVersions?: boolean;
   private _initialized = false;
   private _disposed = false;
   /** True if connected to a daemon socket (server init handled by daemon) */
@@ -140,41 +170,64 @@ export class LspClient {
     return this._diagnostics.get(uri) ?? [];
   }
 
-  /** True when the server answers `typescript.tsserverRequest`, which `diagnosticsForSentVersion` uses. */
+  /**
+   * True while lunR asks tsserver directly through `typescript.tsserverRequest` (typescript-language-server
+   * 4.4.0 and newer). A daemon client gets no capabilities, so it guesses from the command and learns from
+   * the first rejection.
+   */
   get pullsDiagnostics(): boolean {
+    if (this.pull !== "unknown") return this.pull === "yes";
     const capabilities = this._serverCapabilities;
-    // A daemon client gets no capabilities, so fall back to the server command.
     if (!capabilities) return basename(this.options.command).startsWith("typescript-language-server");
     return capabilities.executeCommandProvider?.commands.includes(TSSERVER_REQUEST) ?? false;
   }
 
   /**
-   * Diagnostics for the version of `uri` that lunR last sent. Resolves undefined when a newer version, a
-   * close or shutdown supersedes that version first, or the request fails. typescript-language-server
-   * publishes without a version, so for it this asks tsserver directly: its request queue never moves a
-   * request ahead of an earlier change, so the answer is for the sent version. Other servers count only a
-   * publish that carries the sent version.
+   * Diagnostics for the version of `uri` that lunR last sent. typescript-language-server publishes without
+   * a version, so for it this asks tsserver directly: its request queue never moves a request ahead of an
+   * earlier change, so the answer is for the sent version. Other servers count only a publish that carries
+   * the sent version; a server found to publish without one gives `unavailable` from then on.
    */
-  diagnosticsForSentVersion(uri: string): Promise<Diagnostic[] | undefined> {
+  diagnosticsForSentVersion(uri: string): Promise<SentDiagnostics> {
     const sent = this.sent.get(uri);
-    if (!sent) return Promise.resolve(undefined);
-    if (sent.diagnostics) return Promise.resolve(sent.diagnostics);
-    if (!this.pullsDiagnostics) return new Promise((resolve) => sent.waiters.add(resolve));
+    if (!sent) return Promise.resolve(SUPERSEDED);
+    if (sent.diagnostics) return Promise.resolve({ kind: "ready", diagnostics: sent.diagnostics });
+    if (this.pullBroken) return Promise.resolve(this.pullBroken);
+    if (!this.pullsDiagnostics) {
+      if (this.publishesVersions === false) return Promise.resolve(UNVERSIONED);
+      return new Promise((resolve) => sent.waiters.add(resolve));
+    }
     const ask = (command: string) =>
-      this.sendRequest<{ body?: TsserverDiagnostic[] } | undefined>("workspace/executeCommand", {
+      this.sendRequest<TsserverResponse | undefined>("workspace/executeCommand", {
         command: TSSERVER_REQUEST,
         arguments: [command, { file: uri }],
       });
     return Promise.all([ask("syntacticDiagnosticsSync"), ask("semanticDiagnosticsSync")]).then(
-      ([syntactic, semantic]) =>
-        this.sent.get(uri) === sent ? [...(syntactic?.body ?? []), ...(semantic?.body ?? [])].map(fromTsserver) : undefined,
-      () => undefined,
+      ([syntactic, semantic]): SentDiagnostics | Promise<SentDiagnostics> => {
+        this.pull = "yes";
+        if (this.sent.get(uri) !== sent) return SUPERSEDED;
+        if (syntactic?.success === true && semantic?.success === true && Array.isArray(syntactic.body) && Array.isArray(semantic.body)) {
+          return { kind: "ready", diagnostics: [...syntactic.body, ...semantic.body].map(fromTsserver) };
+        }
+        // typescript-language-server cancels requests when tsserver exits or restarts.
+        if (syntactic?.type === "cancelled" || semantic?.type === "cancelled") {
+          return { kind: "unavailable", reason: "tsserver cancelled the request", lasting: false };
+        }
+        // tsserver is gone; stop asking, as for a server that is not installed.
+        this.pullBroken = { kind: "unavailable", reason: "tsserver is not running", lasting: true };
+        return this.pullBroken;
+      },
+      (): Promise<SentDiagnostics> => {
+        // A server without the command rejects it: fall back to versioned publishes.
+        this.pull = "no";
+        return this.diagnosticsForSentVersion(uri);
+      },
     );
   }
 
-  /** Records `version` as the latest sent for `uri` and resolves the waiters for the version it replaces. */
+  /** Records `version` as the latest sent for `uri` and supersedes the waiters for the version it replaces. */
   private markSent(uri: string, version: number | undefined): void {
-    for (const resolve of this.sent.get(uri)?.waiters ?? []) resolve(undefined);
+    for (const resolve of this.sent.get(uri)?.waiters ?? []) resolve(SUPERSEDED);
     if (version === undefined) this.sent.delete(uri);
     else this.sent.set(uri, { version, waiters: new Set() });
   }
@@ -218,9 +271,16 @@ export class LspClient {
       (params: PublishDiagnosticsParams) => {
         this._diagnostics.set(params.uri, params.diagnostics);
         const sent = this.sent.get(params.uri);
+        if (params.version === undefined || params.version === null) {
+          // Such a publish cannot be tied to a version, so waiting for one would never end.
+          this.publishesVersions = false;
+          for (const resolve of sent?.waiters ?? []) resolve(UNVERSIONED);
+          sent?.waiters.clear();
+          return;
+        }
         if (!sent || params.version !== sent.version) return;
         sent.diagnostics = params.diagnostics;
-        for (const resolve of sent.waiters) resolve(params.diagnostics);
+        for (const resolve of sent.waiters) resolve({ kind: "ready", diagnostics: params.diagnostics });
         sent.waiters.clear();
       }
     );
