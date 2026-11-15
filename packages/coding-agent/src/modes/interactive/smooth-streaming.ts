@@ -124,10 +124,7 @@ function syncCounter(block: TextContent | ThinkingContent): BlockUnitCounter {
 }
 
 /** Total visible graphemes across a message's text (and thinking, unless hidden). */
-export function countMessageGraphemes(
-	message: AssistantMessage,
-	options: SmoothStreamingOptions = {},
-): number {
+export function countMessageGraphemes(message: AssistantMessage, options: SmoothStreamingOptions = {}): number {
 	const hideThinking = options.hideThinking === true;
 	let total = 0;
 	for (const block of message.content) {

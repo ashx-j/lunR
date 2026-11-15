@@ -116,6 +116,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				cacheRead: 0,
 				cacheWrite: 0,
 				totalTokens: 0,
+				measurement: "unknown",
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "stop",
@@ -235,7 +236,10 @@ function createClient(
 
 function buildParams(model: Model<"openai-responses">, context: Context, options?: OpenAIResponsesOptions) {
 	const compat = getCompat(model);
-	const toolPlacement = splitDeferredTools(context, compat.supportsToolSearch);
+	const toolPlacement = splitDeferredTools(context, compat.supportsToolSearch, {
+		// lunr: the undeclared tool-search pair is unproven, so a declared tool loads as a plain one.
+		declared: "immediate",
+	});
 	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
 		deferredTools: toolPlacement.deferred,
 	});

@@ -1,7 +1,8 @@
 // @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AcceptanceLedger, AsyncStatus, CostSummary, ModelAttempt } from "../../shared/types.ts";
+import type { AccountedRequest } from "../../../../../core/usage-accounting.ts";
+import type { AcceptanceLedger, AsyncStatus, CostSummary, ModelAttempt, Usage } from "../../shared/types.ts";
 import { readStatus } from "../../shared/utils.ts";
 
 export interface ImportedAsyncRoot {
@@ -22,6 +23,8 @@ export interface ImportedAsyncRootResult {
 	model?: string;
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
+	usage?: Usage;
+	usageRequests?: AccountedRequest[];
 	totalCost?: CostSummary;
 	structuredOutput?: unknown;
 	structuredOutputPath?: string;
@@ -50,6 +53,8 @@ interface AsyncResultFile {
 		model?: string;
 		attemptedModels?: string[];
 		modelAttempts?: ModelAttempt[];
+	usage?: Usage;
+	usageRequests?: AccountedRequest[];
 		totalCost?: CostSummary;
 		structuredOutput?: unknown;
 		structuredOutputPath?: string;
@@ -161,6 +166,8 @@ function buildImportedResult(root: ImportedAsyncRoot, status: AsyncStatus | null
 		...(child?.model ?? step?.model ? { model: child?.model ?? step?.model } : {}),
 		...(child?.modelSelection ?? step?.modelSelection ? { modelSelection: child?.modelSelection ?? step?.modelSelection } : {}),
 		...(child?.attemptedModels ?? step?.attemptedModels ? { attemptedModels: child?.attemptedModels ?? step?.attemptedModels } : {}),
+		...(child?.usage ? { usage: child.usage } : {}),
+		...(child?.usageRequests ? { usageRequests: child.usageRequests } : {}),
 		...(child?.modelAttempts ?? step?.modelAttempts ? { modelAttempts: child?.modelAttempts ?? step?.modelAttempts } : {}),
 		...(child?.totalCost ?? step?.totalCost ? { totalCost: child?.totalCost ?? step?.totalCost } : {}),
 		...(child?.structuredOutput !== undefined ? { structuredOutput: child.structuredOutput } : step?.structuredOutput !== undefined ? { structuredOutput: step.structuredOutput } : {}),

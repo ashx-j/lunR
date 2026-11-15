@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { activityMonitor } from "./activity.ts";
 import { getApiKey, getVersionedApiBase, buildKeyParam, buildAuthHeaders, isGatewayConfigured, DEFAULT_MODEL } from "./gemini-api.ts";
 import { isGeminiWebAvailable, queryWithCookies } from "./gemini-web.ts";

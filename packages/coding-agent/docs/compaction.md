@@ -34,6 +34,12 @@ contextTokens > contextWindow - reserveTokens
 
 By default, `reserveTokens` is 16384 tokens (configurable in `~/.lunr/agent/settings.json` or `<project-dir>/.lunr/settings.json`). This leaves room for the LLM's response.
 
+On small context windows lunR caps both settings by window size. The effective `reserveTokens` is at most 25% of the context window, and the effective `keepRecentTokens` is at most 40%. Windows of about 65k tokens or more keep the configured values.
+
+`compaction.ceilingTokens` compacts earlier on large windows. With it set, compaction triggers at the smaller of `contextWindow - reserveTokens` and the ceiling, and lunR checks it after every batch of tool results as well as after each prompt, so one long autonomous run stays under it too. On a 1M-token model the default threshold is about 984k tokens, and every request before then sends the whole context; a ceiling of `300000` compacts at 300k instead. It is off by default, and without it compaction behaves exactly as before. Set it in settings.json or in `/settings` under Agent > Compaction ceiling.
+
+A compacted context still holds the system prompt and tool schemas, the kept messages and the summary. lunR raises a ceiling below twice that size (2 × (prompt and tools + `keepRecentTokens` + `reserveTokens`)) to that value, so each compaction frees at least as much room as it keeps. The size of the prompt and tools depends on the model and your tools and MCP servers; `/context` shows the value lunR uses. When a compaction keeps more than that, such as one tool batch larger than `keepRecentTokens`, twice its estimated result counts instead until the next compaction, so compaction waits until the context has grown by that much. A ceiling compaction that fails or is cancelled is not retried until your next prompt. `/settings` and `/context` show the value lunR uses when it differs from the setting. A value that isn't a positive whole number turns the ceiling off with a startup warning.
+
 For Codex OAuth models, lunR checks the threshold after each complete batch of tool results. If the batch crosses the threshold, lunR compacts before sending the next provider request.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary. Running `/compact` again at an unchanged compaction boundary is a no-op.
@@ -126,8 +132,8 @@ Defined in [`session-manager.ts`](https://github.com/ashx-j/lunR/blob/master/pac
 interface CompactionEntry<T = unknown> {
   type: "compaction";
   id: string;
-  parentId: string;
-  timestamp: number;
+  parentId: string | null;
+  timestamp: string;  // ISO timestamp
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
@@ -172,10 +178,12 @@ Entries to summarize: B, C, D
 
 After navigation with summary:
 
-         ┌─ B ─ C ─ D ─ [summary of B,C,D]
+         ┌─ B ─ C ─ D
     A ───┤
-         └─ E ─ F (new leaf)
+         └─ E ─ F ─ [summary of B,C,D] (new leaf)
 ```
+
+The summary entry attaches at the new leaf position, which is the target entry (or its parent when the target is a user message). The abandoned branch stays in the file unchanged.
 
 ### Cumulative File Tracking
 
@@ -193,8 +201,8 @@ Defined in [`session-manager.ts`](https://github.com/ashx-j/lunR/blob/master/pac
 interface BranchSummaryEntry<T = unknown> {
   type: "branch_summary";
   id: string;
-  parentId: string;
-  timestamp: number;
+  parentId: string | null;
+  timestamp: string;  // ISO timestamp
   summary: string;
   fromId: string;      // Entry we navigated from
   fromHook?: boolean;  // true if provided by extension (legacy field name)

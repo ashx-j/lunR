@@ -3,6 +3,7 @@ import { Agent, type AgentTool, type StreamFn, type ThinkingLevel } from "@earen
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createReadOnlyTools } from "../../../../core/tools/index.ts";
 import { convertToLlm } from "../../../../core/messages.ts";
+import type { Api } from "@earendil-works/pi-ai";
 import { streamSimple, type Model } from "@earendil-works/pi-ai/compat";
 import { Type, type Static } from "typebox";
 import { resolveModelCandidate } from "../runs/shared/model-fallback.ts";
@@ -34,7 +35,7 @@ type WatchdogWarnParams = Static<typeof WatchdogWarnParams>;
 
 type WatchdogContextProvider = ExtensionContext | (() => ExtensionContext | undefined);
 
-type RegistryModel = Model<any>;
+type RegistryModel = Model<Api>;
 
 interface WatchdogReviewAuth {
 	apiKey?: string;
@@ -142,7 +143,7 @@ export async function resolveWatchdogReviewModel(
 
 	const currentModel = ctx.model;
 	if (!currentModel) {
-		throw new Error("Main watchdog review cannot run because the current Pi session model is unavailable and subagents.watchdog.main.model is not configured.");
+		throw new Error("Main watchdog review cannot run because the current lunR session model is unavailable and subagents.watchdog.main.model is not configured.");
 	}
 	return {
 		model: currentModel,
@@ -205,7 +206,7 @@ function createWatchdogWarnTool(request: WatchdogReviewRequest): AgentTool<typeo
 
 function buildWatchdogSystemPrompt(ctx: ExtensionContext): string {
 	return [
-		"You are the main-session subagent watchdog for Pi.",
+		"You are the main-session subagent watchdog for lunR.",
 		`Working directory: ${ctx.cwd}`,
 		"Review only the supplied parent turn delta. Inspect repository files only when needed to verify a concrete concern.",
 		"You are read-only. You may use read, grep, find, and ls. Do not edit files, run shell commands, spawn agents, or mutate state.",
@@ -247,7 +248,7 @@ function resolveContext(provider: WatchdogContextProvider): ExtensionContext | u
 export function createMainWatchdogReview(provider: WatchdogContextProvider, options: CreateMainWatchdogReviewOptions = {}): WatchdogReviewFunction {
 	return async (request) => {
 		const ctx = resolveContext(provider);
-		if (!ctx) throw new Error("Main watchdog review cannot run without an active Pi extension context.");
+		if (!ctx) throw new Error("Main watchdog review cannot run without an active lunR extension context.");
 		if (ctx.signal?.aborted || request.signal?.aborted) return { stopReason: "aborted" };
 		const selection = await resolveWatchdogReviewModel(ctx, request.config, {
 			currentThinkingLevel: options.getThinkingLevel?.(),

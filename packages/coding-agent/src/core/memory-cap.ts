@@ -1,9 +1,11 @@
+import { globalBridge } from "./global-bridge.ts";
 import { runtimeScope } from "./runtime-scope.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
 /** Memory settings shared with the baked-in simple-memory extension. */
 
 export const MEMORY_CAP_BRIDGE_SYMBOL = Symbol.for("@lunr/memory-cap");
+const memoryCapSlot = globalBridge<MemoryCapBridge>(MEMORY_CAP_BRIDGE_SYMBOL);
 
 export const MEMORY_CHAR_CAP_DEFAULT = 5000;
 export const MEMORY_CHAR_CAP_MIN = 1;
@@ -43,9 +45,9 @@ const bridge: MemoryCapBridge = {
  */
 export function registerMemoryCapBridge(settingsManager: SettingsManager): void {
 	activeSettingsManager = settingsManager;
-	(globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL] = bridge;
+	memoryCapSlot.set(bridge);
 }
 
 export function getMemoryCapBridge(): MemoryCapBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[MEMORY_CAP_BRIDGE_SYMBOL] as MemoryCapBridge | undefined;
+	return memoryCapSlot.get();
 }

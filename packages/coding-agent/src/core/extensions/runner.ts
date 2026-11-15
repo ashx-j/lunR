@@ -3,7 +3,7 @@
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Model, ProviderHeaders } from "@earendil-works/pi-ai";
+import type { Api, ImageContent, Model, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
@@ -273,7 +273,11 @@ export class ExtensionRunner {
 	private sessionManager: SessionManager;
 	private modelRegistry: ModelRegistry;
 	private errorListeners: Set<ExtensionErrorListener> = new Set();
-	private getModel: () => Model<any> | undefined = () => undefined;
+	private getModel: () => Model<Api> | undefined = () => undefined;
+	private promptWithCompletionFn: ExtensionContext["promptWithCompletion"];
+	private sendMessageFn: ExtensionContext["sendMessage"];
+	private hasQueuedMessageFn: ExtensionContext["hasQueuedMessage"];
+	private removeQueuedMessageFn: ExtensionContext["removeQueuedMessage"];
 	private isIdleFn: () => boolean = () => true;
 	private isProjectTrustedFn: () => boolean = () => true;
 	private getSignalFn: () => AbortSignal | undefined = () => undefined;
@@ -327,6 +331,7 @@ export class ExtensionRunner {
 		this.runtime.getActiveTools = actions.getActiveTools;
 		this.runtime.getAllTools = actions.getAllTools;
 		this.runtime.setActiveTools = actions.setActiveTools;
+		this.runtime.setDeferredTools = actions.setDeferredTools;
 		this.runtime.refreshTools = actions.refreshTools;
 		this.runtime.getCommands = actions.getCommands;
 		this.runtime.setModel = actions.setModel;
@@ -336,6 +341,10 @@ export class ExtensionRunner {
 		// Context actions (required)
 		this.getModel = contextActions.getModel;
 		this.isIdleFn = contextActions.isIdle;
+		this.promptWithCompletionFn = contextActions.promptWithCompletion;
+		this.sendMessageFn = contextActions.sendMessage;
+		this.hasQueuedMessageFn = contextActions.hasQueuedMessage;
+		this.removeQueuedMessageFn = contextActions.removeQueuedMessage;
 		this.isProjectTrustedFn = contextActions.isProjectTrusted;
 		this.getSignalFn = contextActions.getSignal;
 		this.abortFn = contextActions.abort;
@@ -681,6 +690,26 @@ export class ExtensionRunner {
 			get model() {
 				runner.assertActive();
 				return getModel();
+			},
+			promptWithCompletion: (text, options) => {
+				runner.assertActive();
+				if (!runner.promptWithCompletionFn) return Promise.reject(new Error("owned prompt admission unavailable"));
+				return runner.promptWithCompletionFn(text, options);
+			},
+			sendMessage: (message, options) => {
+				runner.assertActive();
+				if (!runner.sendMessageFn) return Promise.reject(new Error("owned message admission unavailable"));
+				return runner.sendMessageFn(message, options);
+			},
+			hasQueuedMessage: (message) => {
+				runner.assertActive();
+				if (!runner.hasQueuedMessageFn) throw new Error("owned queue inspection unavailable");
+				return runner.hasQueuedMessageFn(message);
+			},
+			removeQueuedMessage: (message) => {
+				runner.assertActive();
+				if (!runner.removeQueuedMessageFn) throw new Error("owned queue removal unavailable");
+				return runner.removeQueuedMessageFn(message);
 			},
 			isIdle: () => {
 				runner.assertActive();

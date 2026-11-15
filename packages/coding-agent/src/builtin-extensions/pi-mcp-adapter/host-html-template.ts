@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { UiHostContext, UiResourceContent, UiResourceCsp } from "./types.ts";
 
 // Use locally bundled AppBridge to avoid CDN Zod bundling issues
@@ -166,7 +165,7 @@ export function buildHostHtmlTemplate(input: HostHtmlTemplateInput): string {
 
     const bridge = new AppBridge(
       null,
-      { name: "pi", version: "1.0.0" },
+      { name: "lunR", version: "1.0.0" },
       { serverTools: {}, openLinks: {}, logging: {}, updateModelContext: {}, message: {} },
       { hostContext: HOST_CONTEXT }
     );

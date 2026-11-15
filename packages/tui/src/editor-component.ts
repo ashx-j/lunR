@@ -26,8 +26,8 @@ export interface EditorComponent extends Component {
 	// Callbacks (required)
 	// =========================================================================
 
-	/** Called when user submits (e.g., Enter key) */
-	onSubmit?: (text: string) => void;
+	/** Called when user submits (e.g., Enter key). `rawText` is the text before trimming, when known. */
+	onSubmit?: (text: string, rawText?: string) => void;
 
 	/** Called when text changes */
 	onChange?: (text: string) => void;

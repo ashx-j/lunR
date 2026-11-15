@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { MessageRenderOptions, Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 

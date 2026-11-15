@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Smart completion batching with straggler handling.
  *

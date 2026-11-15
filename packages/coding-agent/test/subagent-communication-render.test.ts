@@ -46,7 +46,9 @@ describe("subagent communication cards", () => {
 			},
 			(_message, options, theme) => renderCommunicationCard(incoming, options.expanded, theme),
 		);
-		expect(text(component)).toContain("subagent handoff");
+		expect(text(component)).toContain("subagent progress");
+		expect(text(component)).not.toContain("subagent handoff");
+		expect(incoming.kind).toBe("handoff");
 		expect(text(component)).not.toContain(incoming.peer);
 		expect(text(component)).not.toContain(incoming.message);
 		expect(component.handleClick(1, 80)).toBe(true);
@@ -58,6 +60,13 @@ describe("subagent communication cards", () => {
 		component.handleClick(1, 80);
 		expect(text(component)).not.toContain(incoming.message);
 	});
+
+	it.each(["request", "interview", "question", "reply", "steer"] as const)(
+		"keeps the %s communication label",
+		(kind) => {
+			expect(text(renderCommunicationCard({ ...incoming, kind }, false, theme))).toContain(`subagent ${kind}`);
+		},
+	);
 
 	it("renders persisted UI-only progress without exposing internal entry data", () => {
 		const communication = { ...incoming, kind: "progress" as const };

@@ -9,6 +9,8 @@
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.ts";
+import { describeProviderError } from "../core/provider-error-display.ts";
+import { encodeChildEventLines } from "../core/subagent-event-transport.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 
 /**
@@ -45,16 +47,20 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		// Tool shells run detached, so the terminal's Ctrl+C reaches only lunR. Kill them here.
+		const signals: Array<[NodeJS.Signals, number]> = [
+			["SIGINT", 130],
+			["SIGTERM", 143],
+		];
 		if (process.platform !== "win32") {
-			signals.push("SIGHUP");
+			signals.push(["SIGHUP", 129]);
 		}
 
-		for (const signal of signals) {
+		for (const [signal, exitCode] of signals) {
 			const handler = () => {
 				killTrackedDetachedChildren();
 				void disposeRuntime().finally(() => {
-					process.exit(signal === "SIGHUP" ? 129 : 143);
+					process.exit(exitCode);
 				});
 			};
 			process.on(signal, handler);
@@ -67,9 +73,12 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
 	});
+	let warnedAboutReviewer = false;
 
 	const rebindSession = async (): Promise<void> => {
 		session = runtimeHost.session;
+		// Tag sessions this run creates so /resume can label them; -p then -c keeps them resumable.
+		session.sessionManager.markPrintOrigin();
 		await session.bindExtensions({
 			mode: mode === "json" ? "json" : "print",
 			commandContextActions: {
@@ -100,10 +109,27 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			},
 		});
 
+		// Print runs have nobody to answer questions, which a saved auto default meant before auto was reviewed.
+		if (session.permissionMode === "auto") {
+			session.setAutonomous(true);
+			const reviewer = session.resolveAutoReviewer();
+			if (reviewer.kind !== "ready" && !warnedAboutReviewer) {
+				warnedAboutReviewer = true;
+				console.error(
+					`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so risky actions will be blocked. Set one in /settings, Auto review model.`,
+				);
+			}
+		}
+
 		unsubscribe?.();
 		unsubscribe = session.subscribe((event) => {
 			if (mode === "json") {
-				writeRawStdout(`${JSON.stringify(event)}\n`);
+				const json = JSON.stringify(event);
+				if (process.env.PI_SUBAGENT_CHILD === "1") {
+					for (const line of encodeChildEventLines(json)) writeRawStdout(`${line}\n`);
+				} else {
+					writeRawStdout(`${json}\n`);
+				}
 			}
 		});
 	};
@@ -132,8 +158,16 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 			if (lastMessage?.role === "assistant") {
 				const assistantMsg = lastMessage as AssistantMessage;
-				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+				if (assistantMsg.stopReason === "error") {
+					const { summary, hint } = describeProviderError(
+						assistantMsg.errorMessage || "Request error",
+						assistantMsg.provider,
+						"print",
+					);
+					console.error(hint ? `${summary}\n${hint}` : summary);
+					exitCode = 1;
+				} else if (assistantMsg.stopReason === "aborted") {
+					console.error(assistantMsg.errorMessage || "Request aborted");
 					exitCode = 1;
 				} else {
 					for (const content of assistantMsg.content) {

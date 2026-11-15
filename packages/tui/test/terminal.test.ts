@@ -157,7 +157,7 @@ describe("ProcessTerminal Kitty keyboard protocol negotiation", () => {
 		const harness = setupNegotiation();
 		try {
 			harness.send("\x1b[?7");
-			mock.timers.tick(10);
+			mock.timers.tick(40);
 
 			assert.equal(harness.getInput(), undefined);
 
@@ -176,7 +176,7 @@ describe("ProcessTerminal Kitty keyboard protocol negotiation", () => {
 		const harness = setupNegotiation();
 		try {
 			harness.send("\x1b[");
-			mock.timers.tick(10);
+			mock.timers.tick(40);
 
 			assert.equal(harness.getInput(), undefined);
 

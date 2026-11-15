@@ -54,6 +54,7 @@ type ScheduledRunTimers = Pick<typeof globalThis, "setTimeout" | "clearTimeout">
 
 type ScheduledRunManagerDeps = {
 	config: ExtensionConfig;
+	disabledReason?: string;
 	launch(params: SubagentParamsLike, ctx: ExtensionContext, signal: AbortSignal): Promise<AgentToolResult<Details>>;
 	storeRoot?: string;
 	now?: () => number;
@@ -287,7 +288,7 @@ export class ScheduledRunManager {
 		this.ctx = ctx;
 		try {
 			if (!scheduledRunsEnabled(this.deps.config)) {
-				return textResult("Scheduled subagent runs are disabled. Set { \"scheduledRuns\": { \"enabled\": true } } in ~/.lunr/agent/extensions/subagent/config.json, then reload lunR. Schedule only explicit delayed runs the user asked for.", true);
+				return textResult(this.deps.disabledReason ?? "Scheduled subagent runs are disabled. Set { \"scheduledRuns\": { \"enabled\": true } } in ~/.lunr/agent/extensions/subagent/config.json, then reload lunR. Schedule only explicit delayed runs the user asked for.", true);
 			}
 			if (!this.store) this.bindSession(ctx);
 			if (!this.store) return textResult("Scheduled subagent store is unavailable for this session.", true);

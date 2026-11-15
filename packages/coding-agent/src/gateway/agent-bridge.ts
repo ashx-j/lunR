@@ -33,13 +33,13 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
-import type { Model } from "@earendil-works/pi-ai/compat";
+import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { AgentSession, AgentSessionEvent, SessionStats } from "../core/agent-session.ts";
 import type { CompactionResult } from "../core/compaction/index.ts";
 import { runWithOrigin } from "../core/cron/origin-context.ts";
 import type { ContextUsage, SessionShutdownEvent, ToolDefinition } from "../core/extensions/types.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
-import { createPermissionContext, deletePermissionContext, getPermissionMode } from "../core/permissions.ts";
+import { deletePermissionContext, getPermissionMode, initializePermissionContext } from "../core/permissions.ts";
 import { list as listProcesses } from "../core/process-registry.ts";
 import { runtimeScope } from "../core/runtime-scope.ts";
 import { registerTransferHandler, SessionTransferError } from "../core/session-handoff.ts";
@@ -48,11 +48,13 @@ import type { SettingsManager } from "../core/settings-manager.ts";
 import { getSubagentCancellation } from "../core/subagent-cancellation.ts";
 import { processImage } from "../utils/image-process.ts";
 import { cancelGatewayApprovals } from "./approval.ts";
+import { GatewayPickerCancelled, gatewayPickerGeneration } from "./buttons.ts";
 import { conversationBinding } from "./conversations.ts";
 import {
 	createGatewayUI,
 	gatewayEpoch,
 	invalidateGatewayDialogs,
+	invalidateGatewaySession,
 	sendGatewayNotice,
 	withGatewayPresentation,
 } from "./presenter.ts";
@@ -65,6 +67,12 @@ function isUserMessageEntry(entry: { type: string }): entry is SessionMessageEnt
 
 /** runTurn resolves with this when the message was queued behind a running turn. */
 export const QUEUED = "__lunr_gateway_queued__";
+
+/** Both callbacks are synchronous; replacement commits before its reservation is released. */
+export interface ResetOptions {
+	validate?(): void;
+	commit?(): void;
+}
 
 const CACHE_CAP = 20;
 const QUEUE_CAP = 5;
@@ -100,6 +108,10 @@ export interface BridgeSessionStatus {
  * fakeable in tests. Expanded to support gateway slash commands.
  */
 export interface BridgeSession {
+	promptWithCompletion?: AgentSession["promptWithCompletion"];
+	resolveAutoReviewer?: AgentSession["resolveAutoReviewer"];
+	setPermissionMode?: AgentSession["setPermissionMode"];
+	drain?: AgentSession["drain"];
 	prompt(text: string, options?: { source?: "extension"; images?: ImageContent[] }): Promise<void>;
 	abort(): Promise<void> | void;
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void;
@@ -114,7 +126,7 @@ export interface BridgeSession {
 	readonly isRetrying?: boolean;
 	readonly isStreaming: boolean;
 	readonly isCompacting?: boolean;
-	readonly model?: Model<any>;
+	readonly model?: Model<Api>;
 	readonly modelRuntime: ModelRuntime;
 	readonly thinkingLevel: ThinkingLevel;
 	readonly messages: AgentMessage[];
@@ -129,7 +141,7 @@ export interface BridgeSession {
 	getAvailableThinkingLevels(): ThinkingLevel[];
 	supportsThinking(): boolean;
 	setThinkingLevel(level: ThinkingLevel): void;
-	setModel(model: Model<any>): Promise<void>;
+	setModel(model: Model<Api>): Promise<void>;
 	compact(customInstructions?: string): Promise<CompactionResult>;
 	navigateTree(
 		targetId: string,
@@ -183,6 +195,7 @@ interface CacheEntry {
  * import light and matches how main.ts loads it in the real CLI.
  */
 async function defaultSessionFactory(key: string, reopen: { sessionFile: string } | undefined): Promise<AgentSession> {
+	const ui = createGatewayUI(key);
 	const [
 		{ loadAllBuiltinExtensions },
 		{ getAgentDir },
@@ -247,9 +260,9 @@ async function defaultSessionFactory(key: string, reopen: { sessionFile: string 
 				bindRuntimeBridges({ session, services });
 				await session.bindExtensions({
 					mode: "gateway",
-					uiContext: createGatewayUI(key),
+					uiContext: ui,
 					onError: (err) => {
-						void sendGatewayNotice(key, `Extension error: ${err.error}`).catch(() => {});
+						ui.notify(`Extension error: ${err.error}`, "error");
 					},
 				});
 				return session;
@@ -285,6 +298,7 @@ export class AgentBridge {
 	private readonly redoStack = new Map<string, string[]>();
 	private readonly creating = new Map<string, Promise<CacheEntry>>();
 	private readonly changing = new Set<string>();
+	private readonly resetting = new Map<string, symbol>();
 	private readonly generations = new Map<string, number>();
 	private shuttingDown = false;
 
@@ -339,8 +353,10 @@ export class AgentBridge {
 	async abort(key: string): Promise<void> {
 		this.invalidate(key);
 		const entry = this.cache.get(key);
-		if (entry) entry.queue.length = 0;
-		invalidateGatewayDialogs(key);
+		if (entry) {
+			entry.queue.length = 0;
+			invalidateGatewayDialogs(key);
+		} else invalidateGatewaySession(key);
 		cancelGatewayApprovals(key);
 		await entry?.session.abort();
 	}
@@ -391,6 +407,7 @@ export class AgentBridge {
 					"Background work has not stopped. Session ownership was retained. Use /stopall before retrying.",
 				);
 			for (const [key, entry] of entries) {
+				invalidateGatewaySession(key);
 				entry.unregisterTransfer?.();
 				entry.unsubscribe?.();
 				await shutdownBridgeSession(entry.session, "quit");
@@ -419,7 +436,7 @@ export class AgentBridge {
 
 	/** Switch the chat to a different persisted session file. */
 	async switchSession(key: string, sessionFile: string): Promise<void> {
-		if (this.changing.has(key) || this.creating.has(key))
+		if (this.changing.has(key) || this.resetting.has(key) || this.creating.has(key))
 			throw new Error("Session initialization is already in progress.");
 		const entry = this.cache.get(key);
 		if (entry?.session.sessionManager?.getSessionFile() === sessionFile) return;
@@ -430,9 +447,10 @@ export class AgentBridge {
 			throw new Error("Session is busy. Stop its work or wait before switching.");
 		this.changing.add(key);
 		let candidate: BridgeSession | undefined;
+		const restorePresentation = invalidateGatewaySession(key);
+		let replaced = false;
 		try {
 			candidate = await this.sessionFactory(key, { sessionFile });
-			invalidateGatewayDialogs(key);
 			cancelGatewayApprovals(key);
 			if (entry) {
 				const oldSessionId = entry.session.sessionManager?.getSessionId();
@@ -446,12 +464,13 @@ export class AgentBridge {
 			const newSessionId = session.sessionManager?.getSessionId();
 			if (newFile) putSession(key, { sessionId: newSessionId ?? key, sessionFile: newFile });
 			if (newSessionId)
-				createPermissionContext(
+				initializePermissionContext(
 					newSessionId,
 					session.sessionManager?.getPermissionMode?.() ?? session.settingsManager?.getDefaultPermissionMode(),
 				);
 			const newEntry: CacheEntry = { session, busy: false, queue: [], dropped: 0 };
 			this.cache.set(key, newEntry);
+			replaced = true;
 			newEntry.unsubscribe = this._subscribeToSession(key, newEntry);
 			this.attachTransfer(key, newEntry);
 			this.redoStack.delete(key);
@@ -459,6 +478,7 @@ export class AgentBridge {
 			await this._enforceCacheCap(key);
 		} finally {
 			if (candidate) await shutdownBridgeSession(candidate, "quit");
+			if (!replaced) restorePresentation();
 			this.changing.delete(key);
 		}
 	}
@@ -535,31 +555,68 @@ export class AgentBridge {
 	}
 
 	/** Drop the cached session (disposing it) and forget the store entry (/new, /reset). */
-	async reset(key: string): Promise<void> {
-		invalidateGatewayDialogs(key);
-		cancelGatewayApprovals(key);
-		this.invalidate(key);
+	async reset(key: string, options: ResetOptions = {}): Promise<void> {
+		if (this.shuttingDown || this.changing.has(key) || this.resetting.has(key))
+			throw new Error("The session is changing. Wait before selecting another project.");
+		const operation = Symbol();
+		this.resetting.set(key, operation);
+		this.changing.add(key);
 		const entry = this.cache.get(key);
-		if (entry) {
-			// lunr: /new while busy must stop the live turn and drop queued follow-ups
-			// before dispose, otherwise drainQueue can still fire on the torn-down entry.
-			entry.queue.length = 0;
-			entry.dropped = 0;
-			try {
-				await entry.session.abort();
-			} catch {
-				// best-effort; dispose still tears the session down
+		let expectedOwner = entry;
+		let generation = this.generations.get(key) ?? 0;
+		let pickerGeneration = gatewayPickerGeneration(key);
+		const validate = () => {
+			if (
+				this.resetting.get(key) !== operation ||
+				this.shuttingDown ||
+				this.cache.get(key) !== expectedOwner ||
+				(this.generations.get(key) ?? 0) !== generation ||
+				gatewayPickerGeneration(key) !== pickerGeneration
+			)
+				throw new GatewayPickerCancelled("Project selection was stopped or superseded.");
+			options.validate?.();
+		};
+		try {
+			validate();
+			invalidateGatewayDialogs(key);
+			cancelGatewayApprovals(key);
+			this.invalidate(key);
+			generation = this.generations.get(key) ?? 0;
+			pickerGeneration = gatewayPickerGeneration(key);
+			if (entry) {
+				// /new drops queued work before disposal; only this owner may retire the entry.
+				entry.queue.length = 0;
+				entry.dropped = 0;
+				try {
+					await entry.session.abort();
+				} catch {
+					// best-effort; disposal still tears the owned session down
+				}
+				await entry.session.waitForIdle?.();
+				validate();
+				if (this.hasAttachedWork(entry.session))
+					throw new Error("Background work is still active. Use /stopall and wait before replacing the session.");
+				entry.unregisterTransfer?.();
+				entry.unsubscribe?.();
+				invalidateGatewaySession(key);
+				pickerGeneration = gatewayPickerGeneration(key);
+				this.cache.delete(key);
+				expectedOwner = undefined;
+				await shutdownBridgeSession(entry.session, "new");
+			} else {
+				invalidateGatewaySession(key);
+				pickerGeneration = gatewayPickerGeneration(key);
 			}
-			await entry.session.waitForIdle?.();
-			if (this.hasAttachedWork(entry.session))
-				throw new Error("Background work is still active. Use /stopall and wait before replacing the session.");
-			entry.unregisterTransfer?.();
-			entry.unsubscribe?.();
-			this.cache.delete(key);
-			await shutdownBridgeSession(entry.session, "new");
+			validate();
+			removeSession(key);
+			this.redoStack.delete(key);
+			options.commit?.();
+		} finally {
+			if (this.resetting.get(key) === operation) {
+				this.resetting.delete(key);
+				this.changing.delete(key);
+			}
 		}
-		removeSession(key);
-		this.redoStack.delete(key);
 	}
 
 	getStatus(key: string): BridgeSessionStatus {
@@ -585,7 +642,14 @@ export class AgentBridge {
 		if (callbacks.onDelta) {
 			const onDelta = callbacks.onDelta;
 			let streamedLen = 0;
+			let separate = false;
 			unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+				// Each assistant message streams from zero; a blank line separates it from text already shown.
+				if (event.type === "message_start" && event.message.role === "assistant") {
+					separate ||= streamedLen > 0;
+					streamedLen = 0;
+					return;
+				}
 				if (event.type !== "message_update") return;
 				const assistantEvent = event.assistantMessageEvent;
 				if (assistantEvent.type !== "text_delta") return;
@@ -593,9 +657,9 @@ export class AgentBridge {
 				for (const content of assistantEvent.partial.content) {
 					if (content.type === "text") full += content.text;
 				}
-				if (full.length < streamedLen) streamedLen = 0; // new assistant message (tool-call boundary)
 				if (full.length > streamedLen) {
-					onDelta(full.slice(streamedLen));
+					onDelta(`${separate ? "\n\n" : ""}${full.slice(streamedLen)}`);
+					separate = false;
 					streamedLen = full.length;
 				}
 			});
@@ -642,6 +706,7 @@ export class AgentBridge {
 			await runWithOrigin(
 				{
 					platform: source.platform,
+					userId: source.userId,
 					chatId: source.chatId,
 					threadId: source.threadId,
 					chatType: source.chatType,
@@ -696,7 +761,7 @@ export class AgentBridge {
 	}
 
 	private async getOrCreate(key: string): Promise<CacheEntry> {
-		if (this.shuttingDown || this.changing.has(key))
+		if (this.shuttingDown || this.changing.has(key) || this.resetting.has(key))
 			throw new Error("The session is changing. Wait before sending another task.");
 		const cached = this.cache.get(key);
 		if (cached) {
@@ -733,7 +798,7 @@ export class AgentBridge {
 			putSession(key, { sessionId: sessionId ?? key, sessionFile });
 		}
 		if (sessionId) {
-			createPermissionContext(
+			initializePermissionContext(
 				sessionId,
 				session.sessionManager?.getPermissionMode?.() ?? session.settingsManager?.getDefaultPermissionMode(),
 			);
@@ -751,6 +816,8 @@ export class AgentBridge {
 		if (!(manager instanceof SessionManager)) return;
 		entry.unregisterTransfer = registerTransferHandler(manager, async ({ stop, signal }) => {
 			signal.throwIfAborted();
+			if (this.resetting.has(key))
+				throw new SessionTransferError("The session is changing. Wait before transferring it.", "busy");
 			const sessionId = manager.getSessionId();
 			if (
 				getSubagentCancellation(sessionId)?.hasActiveRuns() ||
@@ -771,7 +838,7 @@ export class AgentBridge {
 				await entry.session.waitForIdle?.();
 				signal.throwIfAborted();
 				manager.setPermissionMode(getPermissionMode(sessionId));
-				invalidateGatewayDialogs(key);
+				invalidateGatewaySession(key);
 				cancelGatewayApprovals(key);
 				await shutdownBridgeSession(entry.session, "quit");
 				entry.unsubscribe?.();
@@ -792,7 +859,7 @@ export class AgentBridge {
 			let oldestKey: string | undefined;
 			let oldest: CacheEntry | undefined;
 			for (const [key, entry] of this.cache) {
-				if (key === protectedKey) continue;
+				if (key === protectedKey || this.resetting.has(key)) continue;
 				if (
 					entry.busy ||
 					entry.session.isStreaming ||
@@ -810,6 +877,7 @@ export class AgentBridge {
 				this.cap = this.cache.size;
 				break;
 			}
+			invalidateGatewaySession(oldestKey);
 			oldest.unsubscribe?.();
 			oldest.unregisterTransfer?.();
 			this.cache.delete(oldestKey);
@@ -820,8 +888,9 @@ export class AgentBridge {
 	}
 
 	private _subscribeToSession(key: string, entry: CacheEntry): () => void {
-		const epoch = gatewayEpoch(key);
-		return entry.session.subscribe((event) => this._handleSessionEvent(key, event, epoch));
+		return entry.session.subscribe((event) => {
+			if (this.cache.get(key) === entry) this._handleSessionEvent(key, event, gatewayEpoch(key));
+		});
 	}
 
 	private _handleSessionEvent(key: string, event: AgentSessionEvent, epoch: number): void {

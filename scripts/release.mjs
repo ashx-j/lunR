@@ -1,208 +1,121 @@
 #!/usr/bin/env node
-/**
- * Release script for pi-mono
- *
- * Usage:
- *   node scripts/release.mjs <major|minor|patch>
- *   node scripts/release.mjs <x.y.z>
- *
- * Steps:
- * 1. Check for uncommitted changes
- * 2. Bump version via npm run version:xxx or set an explicit version
- * 3. Update CHANGELOG.md files: [Unreleased] -> [version] - date
- * 4. Regenerate release artifacts
- * 5. Run checks and tests
- * 6. Commit and tag the release
- * 7. Add new [Unreleased] section to changelogs
- * 8. Commit next-cycle changelog updates
- * 9. Push master and the tag to trigger the GitHub Release workflow
- */
+/** Prepare reviewable release changes on a branch. Publication is a separate explicit action. */
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { assertRepositoryRoot, runIsolatedTests } from "./local-release.mjs";
 
-import { execSync } from "child_process";
-import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
-import { join } from "path";
+const bumpTypes = new Set(["major", "minor", "patch"]);
+const semver = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
+const publicPackages = ["ai", "tui", "agent", "coding-agent"];
+export const publicationNotice = "Pushing a v* tag triggers npm publication and the GitHub Release workflows.";
 
-const RELEASE_TARGET = process.argv[2];
-const BUMP_TYPES = new Set(["major", "minor", "patch"]);
-const SEMVER_RE = /^\d+\.\d+\.\d+$/;
-
-if (!RELEASE_TARGET || (!BUMP_TYPES.has(RELEASE_TARGET) && !SEMVER_RE.test(RELEASE_TARGET))) {
-	console.error("Usage: node scripts/release.mjs <major|minor|patch|x.y.z>");
-	process.exit(1);
+export function run(command, args, options = {}) {
+	console.log(`$ ${[command, ...args].join(" ")}`);
+	const result = spawnSync(command, args, {
+		cwd: options.cwd,
+		encoding: "utf8",
+		shell: process.platform === "win32",
+		stdio: options.capture ? "pipe" : "inherit",
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0) throw new Error(`Command failed: ${[command, ...args].join(" ")}`);
+	return result.stdout ?? "";
 }
 
-function run(cmd, options = {}) {
-	console.log(`$ ${cmd}`);
-	try {
-		return execSync(cmd, { encoding: "utf-8", stdio: options.silent ? "pipe" : "inherit", ...options });
-	} catch (e) {
-		if (!options.ignoreError) {
-			console.error(`Command failed: ${cmd}`);
-			process.exit(1);
-		}
-		return null;
+export function versionCommands(target) {
+	if (!bumpTypes.has(target) && !semver.test(target)) throw new Error("Expected major, minor, patch, or x.y.z.");
+	return [
+		["npm", ["version", target, "--workspaces", "--no-git-tag-version"]],
+		[process.execPath, ["scripts/sync-versions.js"]],
+		["npm", ["install", "--package-lock-only", "--ignore-scripts"]],
+	];
+}
+
+function version(root) {
+	return JSON.parse(readFileSync(join(root, "packages/ai/package.json"), "utf8")).version;
+}
+
+export function prepareRelease(target, { root = process.cwd(), execute = run, test = runIsolatedTests } = {}) {
+	assertRepositoryRoot(root);
+	const commands = versionCommands(target);
+	const invoke = (command, args, capture = false) => execute(command, args, { cwd: root, capture });
+	const branch = invoke("git", ["branch", "--show-current"], true).trim();
+	if (!branch || branch === "master" || branch === "main")
+		throw new Error("Prepare a release on a release branch, then open a PR to master.");
+	if (invoke("git", ["status", "--porcelain"], true).trim())
+		throw new Error("Commit or stash changes before preparing a release.");
+	if (semver.test(target)) {
+		const current = version(root).split(".").map(Number);
+		const next = target.split(".").map(Number);
+		const firstDifference = next.findIndex((part, index) => part !== current[index]);
+		if (firstDifference === -1 || next[firstDifference] < current[firstDifference])
+			throw new Error("Release version must increase.");
 	}
-}
-
-function getVersion() {
-	const pkg = JSON.parse(readFileSync("packages/ai/package.json", "utf-8"));
-	return pkg.version;
-}
-
-function compareVersions(a, b) {
-	const aParts = a.split(".").map(Number);
-	const bParts = b.split(".").map(Number);
-
-	for (let i = 0; i < 3; i++) {
-		const diff = (aParts[i] || 0) - (bParts[i] || 0);
-		if (diff !== 0) {
-			return diff;
-		}
+	for (const [command, args] of commands) invoke(command, args);
+	const releaseVersion = version(root);
+	const date = new Date().toISOString().slice(0, 10);
+	for (const pkg of readdirSync(join(root, "packages"))) {
+		const path = join(root, "packages", pkg, "CHANGELOG.md");
+		if (!existsSync(path)) continue;
+		const source = readFileSync(path, "utf8");
+		if (!source.includes("## [Unreleased]")) continue;
+		writeFileSync(path, source.replace("## [Unreleased]", `## [Unreleased]\n\n## [${releaseVersion}] - ${date}`));
 	}
-
-	return 0;
+	for (const script of ["shrinkwrap:coding-agent", "install-lock:coding-agent"]) invoke("npm", ["run", script]);
+	// Checks must not format unrelated files while preparing the release.
+	invoke("npm", ["exec", "--no", "--", "biome", "check", "packages/"]);
+	for (const check of [
+		"pinned-deps",
+		"ts-imports",
+		"shrinkwrap",
+		"install-lock:coding-agent",
+		"no-npm-publish-workflow",
+		"browser-smoke",
+	])
+		invoke("npm", ["run", `check:${check}`]);
+	test(root);
+	console.log(
+		`Prepared v${releaseVersion} on ${branch}. Review the changes, commit, and open a PR to master. No commit, tag, or push was made.`,
+	);
+	return releaseVersion;
 }
 
-function shellQuote(value) {
-	return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function stageChangedFiles() {
-	const output = run("git ls-files -m -o -d --exclude-standard", { silent: true });
-	const paths = [...new Set((output || "").split("\n").map((line) => line.trim()).filter(Boolean))];
-	if (paths.length === 0) {
-		return;
+/** Tag only a merged commit supplied explicitly by the release operator. */
+export function publishTag(releaseVersion, commit, { root = process.cwd(), execute = run } = {}) {
+	assertRepositoryRoot(root);
+	if (!semver.test(releaseVersion) || !/^[0-9a-f]{40}$/.test(commit ?? ""))
+		throw new Error("Expected x.y.z and a full merged commit SHA.");
+	const invoke = (command, args, capture = false) => execute(command, args, { cwd: root, capture });
+	if (invoke("git", ["status", "--porcelain"], true).trim())
+		throw new Error("Commit or stash changes before tagging a release.");
+	invoke("git", ["fetch", "origin", "master"]);
+	invoke("git", ["merge-base", "--is-ancestor", commit, "FETCH_HEAD"]);
+	for (const pkg of publicPackages) {
+		const manifest = JSON.parse(invoke("git", ["show", `${commit}:packages/${pkg}/package.json`], true));
+		if (manifest.version !== releaseVersion) throw new Error(`Merged ${pkg} version does not match ${releaseVersion}.`);
 	}
-
-	run(`git add -- ${paths.map(shellQuote).join(" ")}`);
+	const tag = `v${releaseVersion}`;
+	if (
+		invoke("git", ["tag", "--list", tag], true).trim() ||
+		invoke("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`], true).trim()
+	)
+		throw new Error(`${tag} already exists.`);
+	console.log(publicationNotice);
+	invoke("git", ["tag", "-a", tag, commit, "-m", `Release ${tag}`]);
+	invoke("git", ["push", "origin", `refs/tags/${tag}`]);
+	console.log(
+		`Pushed ${tag} at ${commit}. Publication workflows have been triggered; successful publication still requires workflow and registry verification.`,
+	);
 }
 
-function bumpOrSetVersion(target) {
-	const currentVersion = getVersion();
-
-	if (BUMP_TYPES.has(target)) {
-		console.log(`Bumping version (${target})...`);
-		run(`npm run version:${target}`);
-		return getVersion();
-	}
-
-	if (compareVersions(target, currentVersion) <= 0) {
-		console.error(`Error: explicit version ${target} must be greater than current version ${currentVersion}.`);
-		process.exit(1);
-	}
-
-	console.log(`Setting explicit version (${target})...`);
-	run(`npm version ${target} -ws --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts`);
-	return getVersion();
+export function main(args = process.argv.slice(2)) {
+	if (args[0] === "publish-tag" && args.length === 3) return publishTag(args[1], args[2]);
+	if (args.length === 1) return prepareRelease(args[0]);
+	throw new Error(
+		"Usage: node scripts/release.mjs <major|minor|patch|x.y.z>\n       node scripts/release.mjs publish-tag <x.y.z> <merged-commit-sha>\nPreparation only changes branch files. publish-tag triggers npm and GitHub Release publication.",
+	);
 }
 
-function getChangelogs() {
-	const packagesDir = "packages";
-	const packages = readdirSync(packagesDir);
-	return packages
-		.map((pkg) => join(packagesDir, pkg, "CHANGELOG.md"))
-		.filter((path) => existsSync(path));
-}
-
-function updateChangelogsForRelease(version) {
-	const date = new Date().toISOString().split("T")[0];
-	const changelogs = getChangelogs();
-
-	for (const changelog of changelogs) {
-		const content = readFileSync(changelog, "utf-8");
-
-		if (!content.includes("## [Unreleased]")) {
-			console.log(`  Skipping ${changelog}: no [Unreleased] section`);
-			continue;
-		}
-
-		const updated = content.replace(
-			"## [Unreleased]",
-			`## [${version}] - ${date}`
-		);
-		writeFileSync(changelog, updated);
-		console.log(`  Updated ${changelog}`);
-	}
-}
-
-function addUnreleasedSection() {
-	const changelogs = getChangelogs();
-	const unreleasedSection = "## [Unreleased]\n\n";
-
-	for (const changelog of changelogs) {
-		const content = readFileSync(changelog, "utf-8");
-
-		// Insert after "# Changelog\n\n"
-		const updated = content.replace(
-			/^(# Changelog\n\n)/,
-			`$1${unreleasedSection}`
-		);
-		writeFileSync(changelog, updated);
-		console.log(`  Added [Unreleased] to ${changelog}`);
-	}
-}
-
-// Main flow
-console.log("\n=== Release Script ===\n");
-
-// 1. Check for uncommitted changes
-console.log("Checking for uncommitted changes...");
-const status = run("git status --porcelain", { silent: true });
-if (status && status.trim()) {
-	console.error("Error: Uncommitted changes detected. Commit or stash first.");
-	console.error(status);
-	process.exit(1);
-}
-console.log("  Working directory clean\n");
-
-// 2. Bump or set version
-const version = bumpOrSetVersion(RELEASE_TARGET);
-console.log(`  New version: ${version}\n`);
-
-// 3. Update changelogs
-console.log("Updating CHANGELOG.md files...");
-updateChangelogsForRelease(version);
-console.log();
-
-// 4. Regenerate release artifacts
-// Do not run packages/ai generate-models here — that drifts the baked-in
-// catalog. Refresh JSON only via explicit `npm run sync:model-catalog`.
-console.log("Regenerating release artifacts...");
-run("npm run shrinkwrap:coding-agent");
-run("npm run install-lock:coding-agent");
-console.log();
-
-// 5. Run checks and tests
-console.log("Running checks...");
-run("npm run check");
-console.log();
-
-console.log("Running tests...");
-run("./test.sh");
-console.log();
-
-// 6. Commit and tag
-console.log("Committing and tagging...");
-stageChangedFiles();
-run(`git commit -m "Release v${version}"`);
-run(`git tag v${version}`);
-console.log();
-
-// 7. Add new [Unreleased] sections
-console.log("Adding [Unreleased] sections for next cycle...");
-addUnreleasedSection();
-console.log();
-
-// 8. Commit
-console.log("Committing changelog updates...");
-stageChangedFiles();
-run(`git commit -m "Add [Unreleased] section for next cycle"`);
-console.log();
-
-// 9. Push
-console.log("Pushing to remote...");
-run("git push origin master");
-run(`git push origin v${version}`);
-console.log();
-
-console.log(`=== Prepared release v${version}; tag push starts the GitHub Release workflow (no npm publish) ===`);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

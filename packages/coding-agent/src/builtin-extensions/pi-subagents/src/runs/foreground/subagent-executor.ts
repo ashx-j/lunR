@@ -166,7 +166,6 @@ export interface SubagentParamsLike {
 	turnBudget?: TurnBudgetConfig;
 	toolBudget?: ToolBudgetConfig;
 	clarify?: boolean;
-	share?: boolean;
 	control?: ControlConfig;
 	sessionDir?: string;
 	cwd?: string;
@@ -212,7 +211,6 @@ interface ExecutionContextData {
 	onUpdate?: (r: AgentToolResult<Details>) => void;
 	agents: ChildRuntimeConfig[];
 	runId: string;
-	shareEnabled: boolean;
 	sessionRoot: string;
 	sessionDirForIndex: (idx?: number) => string;
 	sessionFileForIndex: (idx?: number) => string | undefined;
@@ -437,6 +435,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 		sessionFile: input.result.sessionFile,
 		sessionId: input.sessionId,
 		taskIndex: input.index,
+		results: [{ childId: input.result.childId, agent: input.result.agent, sessionFile: input.result.sessionFile, usage: input.result.usage, usageRequests: input.result.usageRequests, success, output: summary }],
 	});
 }
 
@@ -544,7 +543,6 @@ function getAsyncInterruptTarget(
 	state: SubagentState,
 	runId: string | undefined,
 	location?: { asyncDir: string | null; resolvedId?: string },
-	options: { fallbackToNewest?: boolean } = {},
 ): { asyncId: string; asyncDir: string } | undefined {
 	if (location?.asyncDir) {
 		return {
@@ -555,7 +553,7 @@ function getAsyncInterruptTarget(
 	if (runId) {
 		const direct = state.asyncJobs.get(runId);
 		if (direct) return { asyncId: direct.asyncId, asyncDir: direct.asyncDir };
-		if (options.fallbackToNewest === false) return undefined;
+		return undefined;
 	}
 	let newest: { asyncId: string; asyncDir: string; updatedAt: number } | undefined;
 	for (const job of state.asyncJobs.values()) {
@@ -604,6 +602,13 @@ function interruptAsyncRun(
 	const target = getAsyncInterruptTarget(state, runId, location);
 	if (!target) return null;
 	const status = reconcileAsyncRun(target.asyncDir, { kill }).status;
+	if (state.currentSessionId && status?.sessionId !== state.currentSessionId) {
+		return {
+			content: [{ type: "text", text: `Async run '${target.asyncId}' was not found in the active session.` }],
+			isError: true,
+			details: { mode: "management", results: [] },
+		};
+	}
 	if (!status || status.state !== "running" || typeof status.pid !== "number") {
 		return {
 			content: [{ type: "text", text: `No running async run with an interrupt-capable pid was found for '${runId ?? "current"}'.` }],
@@ -638,7 +643,7 @@ function stopAsyncRun(
 	kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean,
 	location?: { asyncDir: string | null; resolvedId?: string },
 ): AgentToolResult<Details> | null {
-	const target = getAsyncInterruptTarget(state, runId, location, { fallbackToNewest: false });
+	const target = getAsyncInterruptTarget(state, runId, location);
 	if (!target) return null;
 	const status = reconcileAsyncRun(target.asyncDir, { kill }).status;
 	if (state.currentSessionId && status?.sessionId !== state.currentSessionId) {
@@ -1208,7 +1213,6 @@ async function resumeAsyncRun(input: {
 			maxOutput: input.params.maxOutput,
 			artifactsDir: getArtifactsDir(parentSessionFile, effectiveCwd),
 			artifactConfig,
-			shareEnabled: input.params.share === true,
 			sessionRoot: input.deps.getSubagentSessionRoot(parentSessionFile),
 			chainSkills: normalized === false ? [] : (normalized ?? []),
 			dynamicFanoutMaxItems: input.deps.config.chain?.dynamicFanout?.maxItems,
@@ -1296,7 +1300,6 @@ async function resumeAsyncRun(input: {
 		maxOutput: input.params.maxOutput ?? recoveryDescriptor?.maxOutput,
 		artifactsDir,
 		artifactConfig,
-		shareEnabled: recoveryDescriptor?.share ?? input.params.share === true,
 		sessionRoot: input.deps.getSubagentSessionRoot(parentSessionFile),
 		...(recoveryDescriptor?.sessionDir ? { sessionDir: recoveryDescriptor.sessionDir } : {}),
 		sessionFile: target.sessionFile,
@@ -1982,7 +1985,6 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		effectiveCwd,
 		agents,
 		ctx,
-		shareEnabled,
 		sessionRoot,
 		sessionFileForIndex,
 		sessionFileForTask,
@@ -2079,7 +2081,6 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
-			shareEnabled,
 			sessionRoot,
 			chainSkills: [],
 			sessionFilesByFlatIndex: params.tasks.map((task, index) => sessionFileForTask(task.agent, index, task.model)),
@@ -2117,7 +2118,6 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
-			shareEnabled,
 			sessionRoot,
 			chainSkills,
 			sessionFilesByFlatIndex: collectChainSessionFiles(chain, sessionFileForTask, deps.config.chain?.dynamicFanout?.maxItems),
@@ -2193,7 +2193,6 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
-			shareEnabled,
 			sessionRoot,
 			sessionFile: sessionFileForTask(params.agent!, 0, modelOverride),
 			skills,
@@ -2231,7 +2230,6 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		ctx,
 		signal,
 		runId,
-		shareEnabled,
 		sessionDirForIndex,
 		sessionFileForIndex,
 		sessionFileForTask,
@@ -2260,7 +2258,6 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		signal,
 		runId,
 		cwd: effectiveCwd,
-		shareEnabled,
 		sessionDirForIndex,
 		sessionFileForIndex,
 		sessionFileForTask,
@@ -2324,7 +2321,6 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
-			shareEnabled,
 			sessionRoot,
 			chainSkills: chainResult.requestedAsync.chainSkills,
 			sessionFilesByFlatIndex: collectChainSessionFiles(asyncChain, sessionFileForTask, deps.config.chain?.dynamicFanout?.maxItems),
@@ -2391,7 +2387,6 @@ interface ForegroundParallelRunInput {
 	sessionFileForIndex: (idx?: number) => string | undefined;
 	sessionFileForTask: ForkSessionFileForTask;
 	thinkingOverrideForTask: ForkThinkingOverrideForTask;
-	shareEnabled: boolean;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
 	outputBaseDir: string;
@@ -2596,7 +2591,6 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			index,
 			sessionDir: input.sessionDirForIndex(index),
 			sessionFile: input.sessionFileForTask(task.agent, index, input.modelOverrides[index]),
-			share: input.shareEnabled,
 			artifactsDir: input.artifactConfig.enabled ? input.artifactsDir : undefined,
 			artifactConfig: input.artifactConfig,
 			maxOutput: input.maxOutput,
@@ -2664,7 +2658,14 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				input.foregroundControl.updatedAt = Date.now();
 			}
 		});
-	}, input.globalSemaphore);
+	}, input.globalSemaphore, {
+		signal: input.signal,
+		onAbort: (task) => ({
+			agent: task.agent, task: task.task ?? "", exitCode: 1, messages: [],
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+			error: "Subagent launch cancelled.",
+		}),
+	});
 }
 
 async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
@@ -2679,7 +2680,6 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		sessionFileForIndex,
 		sessionFileForTask,
 		thinkingOverrideForTask,
-		shareEnabled,
 		artifactConfig,
 		artifactsDir,
 		backgroundRequestedWhileClarifying,
@@ -2847,7 +2847,6 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				maxOutput: params.maxOutput,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
-				shareEnabled,
 				sessionRoot,
 				chainSkills: [],
 				sessionFilesByFlatIndex: tasks.map((task, index) => sessionFileForTask(task.agent, index, modelOverrides[index])),
@@ -2924,7 +2923,6 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			sessionFileForIndex,
 			sessionFileForTask,
 			thinkingOverrideForTask,
-			shareEnabled,
 			artifactConfig,
 			artifactsDir,
 			outputBaseDir,
@@ -3051,7 +3049,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		sessionDirForIndex,
 		sessionFileForTask,
 		thinkingOverrideForTask,
-		shareEnabled,
 		artifactConfig,
 		artifactsDir,
 		onUpdate,
@@ -3179,7 +3176,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				maxOutput: params.maxOutput,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
-				shareEnabled,
 				sessionRoot,
 				sessionFile: sessionFileForTask(spec.childId, 0, modelOverride),
 				skills: skillOverride === false ? [] : skillOverride,
@@ -3269,7 +3265,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		runId,
 		sessionDir: sessionDirForIndex(0),
 		sessionFile: sessionFileForTask(spec.childId, 0, modelOverride),
-		share: shareEnabled,
 		artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 		artifactConfig,
 		maxOutput: params.maxOutput,
@@ -3599,6 +3594,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 			if (action === "interrupt") {
 				const targetRunId = paramsWithResolvedCwd.runId ?? paramsWithResolvedCwd.id;
+				if (targetRunId !== undefined && !targetRunId.trim()) {
+					return {
+						content: [{ type: "text", text: "Explicit interrupt id must be non-empty." }],
+						isError: true,
+						details: { mode: "management", results: [] },
+					};
+				}
 				let resolved: ResolvedSubagentRunId | undefined;
 				if (targetRunId) {
 					try {
@@ -3712,7 +3714,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
 		const nestedParentAddress = inheritedNestedRoute ? resolveNestedParentAddressFromEnv() : undefined;
 		const nestedRoute = inheritedNestedRoute ?? createNestedRoute(runId);
-		const shareEnabled = effectiveParams.share === true;
 		const hasChain = (effectiveParams.chain?.length ?? 0) > 0;
 		const hasTasks = (effectiveParams.tasks?.length ?? 0) > 0;
 		const hasSingle = !hasChain && !hasTasks && Boolean(effectiveParams.task);
@@ -3846,7 +3847,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			onUpdate: onUpdateWithContext,
 			agents,
 			runId,
-			shareEnabled,
 			sessionRoot,
 			sessionDirForIndex,
 			sessionFileForIndex: childSessionFileForIndex,

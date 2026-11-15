@@ -1,12 +1,15 @@
+import { globalBridge } from "./global-bridge.ts";
 export interface SubagentCancellation {
 	hasActiveRuns(): boolean;
+	/** includes completion messages held between terminal state and parent delivery. */
+	hasPendingWork?(): boolean;
 	stop(): Promise<{ requested: number; failed: number }>;
 }
 
 const key = Symbol.for("@lunr/subagent-cancellation");
-const store = globalThis as typeof globalThis & { [key]?: Map<string, SubagentCancellation> };
-const handlers = store[key] ?? new Map<string, SubagentCancellation>();
-store[key] = handlers;
+const slot = globalBridge<Map<string, SubagentCancellation>>(key);
+const handlers = slot.get() ?? new Map<string, SubagentCancellation>();
+slot.set(handlers);
 
 export function registerSubagentCancellation(sessionId: string, handler: SubagentCancellation): () => void {
 	handlers.set(sessionId, handler);

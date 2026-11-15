@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Shared language mappings — single source of truth for file extension → language ID.
  *

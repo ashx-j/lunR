@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * File Sync — keeps LSP servers informed of file changes.
  *
@@ -34,8 +33,10 @@ export class FileSync {
   private workspaceIndex: WorkspaceIndex | null = null;
   private isSyntheticDotActive: SyntheticDotChecker = () => false;
   private maxTracked: number;
+  private manager: LspManager;
 
-  constructor(private manager: LspManager, maxTracked?: number) {
+  constructor(manager: LspManager, maxTracked?: number) {
+    this.manager = manager;
     this.maxTracked = maxTracked ?? MAX_TRACKED_DOCUMENTS;
   }
 

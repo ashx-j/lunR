@@ -236,6 +236,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 				cacheRead: 0,
 				cacheWrite: 0,
 				totalTokens: 0,
+				measurement: "unknown",
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "stop",
@@ -306,7 +307,10 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 						return;
 					} catch (error) {
 						const aborted = options?.signal?.aborted;
-						const connectionLimitBeforeStart = !websocketStarted && isWebSocketConnectionLimitReachedError(error);
+						const connectionLimitBeforeStart =
+							!websocketStarted &&
+							output.usage.totalTokens === 0 &&
+							isWebSocketConnectionLimitReachedError(error);
 						if (!aborted && connectionLimitBeforeStart && !retriedWebSocketConnectionLimit) {
 							retriedWebSocketConnectionLimit = true;
 							continue;
@@ -481,7 +485,10 @@ function buildRequestBody(
 	context: Context,
 	options?: OpenAICodexResponsesOptions,
 ): RequestBody {
-	const toolPlacement = splitDeferredTools(context, model.compat?.supportsToolSearch ?? false);
+	const toolPlacement = splitDeferredTools(context, model.compat?.supportsToolSearch ?? false, {
+		// lunr: Codex's undeclared tool-search pair is unproven, so a declared tool loads as a plain one.
+		declared: "immediate",
+	});
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
 		deferredTools: toolPlacement.deferred,
@@ -629,11 +636,20 @@ class CodexProtocolError extends Error {
 }
 
 function isCodexNonTransportError(error: unknown): boolean {
-	return error instanceof CodexApiError || error instanceof CodexProtocolError;
+	return (
+		error instanceof CodexApiError ||
+		error instanceof CodexProtocolError ||
+		(error instanceof Error && error.name === "ResponseFailedError")
+	);
 }
 
 function isWebSocketConnectionLimitReachedError(error: unknown): boolean {
-	return error instanceof CodexApiError && error.code === WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
+	return (
+		error instanceof Error &&
+		(error instanceof CodexApiError || error.name === "ResponseFailedError") &&
+		"code" in error &&
+		error.code === WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE
+	);
 }
 
 function extractCodexEventError(event: Record<string, unknown>): { code?: string; message?: string } {
@@ -663,6 +679,8 @@ async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): 
 		}
 
 		if (type === "response.failed") {
+			// Let shared normalization preserve reported usage before rejecting the request.
+			yield event as unknown as ResponseStreamEvent;
 			const response = (event as { response?: { error?: { code?: string; message?: string } } }).response;
 			const code = response?.error?.code;
 			const message = response?.error?.message;

@@ -1,6 +1,6 @@
 /**
  * OpenAI GPT-5+ thinking overlays.
- * Used by generate-models.ts and catalog merge. Do not hand-edit catalog JSON for these maps.
+ * Catalog merge stamps these onto every layer as a fallback for rows without models.dev levels.
  *
  * Version floors, not frozen ids:
  * - gpt-5.2+ / gpt-6+: native xhigh
@@ -76,8 +76,9 @@ export function withOpenAiEffortMetadata<T extends { id: string; provider?: stri
 		changed = true;
 	}
 	if (version.major >= 6) {
+		// Fill only levels the catalog left open: models.dev lists effort "none" on some GPT-6 models.
 		for (const [key, value] of Object.entries(OPENAI_GPT6_THINKING_LEVEL_MAP)) {
-			if (thinkingLevelMap[key] !== value) {
+			if (!(key in thinkingLevelMap)) {
 				thinkingLevelMap[key] = value;
 				changed = true;
 			}

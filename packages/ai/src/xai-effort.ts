@@ -1,6 +1,6 @@
 /**
  * xAI Grok 4.x thinking and transport overlays.
- * Used by generate-models.ts. Do not hand-edit catalog JSON for these maps.
+ * The catalog generator routes by `shouldUseXaiResponsesApi`; catalog merge stamps the maps on every layer.
  *
  * Docs (https://docs.x.ai/developers/model-capabilities/text/reasoning):
  * - grok-4.5: low / medium / high (cannot disable). xhigh is treated as high.

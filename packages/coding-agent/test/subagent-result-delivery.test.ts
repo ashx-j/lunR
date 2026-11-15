@@ -61,7 +61,7 @@ describe("async result delivery", () => {
 		const sendMessage = vi.fn();
 		const relay = vi.fn();
 		events.on(SUBAGENT_RESULT_INTERCOM_EVENT, relay);
-		registerSubagentNotify({ events, sendMessage } as never, state);
+		cleanups.push(registerSubagentNotify({ events, sendMessage } as never, state));
 		watcher.primeExistingResults();
 		await vi.advanceTimersByTimeAsync(100);
 		expect(sendMessage).toHaveBeenCalledWith(
@@ -92,7 +92,7 @@ describe("async result delivery", () => {
 		const sendMessage = vi.fn();
 		const relay = vi.fn();
 		events.on(SUBAGENT_RESULT_INTERCOM_EVENT, relay);
-		registerSubagentNotify({ events, sendMessage } as never, state);
+		cleanups.push(registerSubagentNotify({ events, sendMessage } as never, state));
 		watcher.primeExistingResults();
 		await vi.advanceTimersByTimeAsync(10_000);
 		expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
@@ -126,7 +126,7 @@ describe("async result delivery", () => {
 		});
 		writeFileSync(file, JSON.stringify({ ...result, id: "parallel-recovery", mode: "parallel", results }));
 		const sendMessage = vi.fn();
-		registerSubagentNotify({ events, sendMessage } as never, state);
+		cleanups.push(registerSubagentNotify({ events, sendMessage } as never, state));
 		watcher.primeExistingResults();
 		await vi.advanceTimersByTimeAsync(100);
 		expect(sendMessage).toHaveBeenCalledOnce();
@@ -200,5 +200,43 @@ describe("async result delivery", () => {
 		watcher.stopResultWatcher();
 		await vi.advanceTimersByTimeAsync(500);
 		expect(existsSync(file)).toBe(true);
+	});
+});
+
+describe("completion notification ownership", () => {
+	it("keeps simultaneous registrations alive and disposes only the closing owner", async () => {
+		const a = fixture();
+		const b = fixture();
+		const sendA = vi.fn();
+		const sendB = vi.fn();
+		const disposeA = registerSubagentNotify({ events: a.events, sendMessage: sendA } as never, a.state);
+		const disposeB = registerSubagentNotify({ events: b.events, sendMessage: sendB } as never, b.state);
+		cleanups.push(disposeA, disposeB);
+		a.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, { ...a.result, id: "owner-a" });
+		b.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, { ...b.result, id: "owner-b" });
+		await vi.advanceTimersByTimeAsync(150);
+		expect(sendA).toHaveBeenCalledOnce();
+		expect(sendB).toHaveBeenCalledOnce();
+		disposeA();
+		b.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, { ...b.result, id: "owner-b-next" });
+		await vi.advanceTimersByTimeAsync(150);
+		expect(sendB).toHaveBeenCalledTimes(2);
+	});
+
+	it("cancels a pending batch and listeners before runtime invalidation", async () => {
+		const { events, state, result } = fixture();
+		let invalidated = false;
+		const sendMessage = vi.fn(() => {
+			if (invalidated) throw new Error("Extension runtime is invalidated");
+		});
+		const dispose = registerSubagentNotify({ events, sendMessage } as never, state);
+		cleanups.push(dispose);
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, { ...result, id: "shutdown-pending" });
+		dispose();
+		invalidated = true;
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, { ...result, id: "after-shutdown" });
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(sendMessage).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });

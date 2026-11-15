@@ -1,3 +1,4 @@
+import { globalBridge } from "./global-bridge.ts";
 import type { PermissionMode } from "./permissions.ts";
 
 /**
@@ -12,6 +13,7 @@ import type { PermissionMode } from "./permissions.ts";
  */
 
 export const PERMISSION_MODE_BRIDGE_SYMBOL = Symbol.for("@lunr/permission-mode");
+const permissionModeSlot = globalBridge<PermissionModeBridge>(PERMISSION_MODE_BRIDGE_SYMBOL);
 
 export interface PermissionModeBridge {
 	getMode(): PermissionMode | undefined;
@@ -27,10 +29,10 @@ const bridge: PermissionModeBridge = {
 
 export function registerPermissionModeBridge(getMode: () => PermissionMode | undefined): void {
 	getModeFn = getMode;
-	(globalThis as Record<symbol, unknown>)[PERMISSION_MODE_BRIDGE_SYMBOL] = bridge;
+	permissionModeSlot.set(bridge);
 }
 
 /** Read the bridge from `globalThis`, or undefined when not registered (extension-safe). */
 export function getPermissionModeBridge(): PermissionModeBridge | undefined {
-	return (globalThis as Record<symbol, unknown>)[PERMISSION_MODE_BRIDGE_SYMBOL] as PermissionModeBridge | undefined;
+	return permissionModeSlot.get();
 }

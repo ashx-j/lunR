@@ -6,8 +6,12 @@ import { type Component, Container, type Focusable, TUI } from "../../tui/src/tu
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
-import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
 import { InteractiveMode, startInteractiveToolInstalls } from "../src/modes/interactive/interactive-mode.ts";
+import {
+	type LoadedResourcesHost,
+	type LoadedResourcesOptions,
+	showLoadedResources,
+} from "../src/modes/interactive/loaded-resources.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 function renderLastLine(container: Container, width = 120): string {
@@ -431,6 +435,58 @@ describe("InteractiveMode.setupAutocompleteProvider", () => {
 });
 
 describe("InteractiveMode.createBaseAutocompleteProvider", () => {
+	test("leaves hidden builtin and extension commands out of the slash list", async () => {
+		type FakeCommand = { name: string; invocationName: string; hidden?: boolean };
+		type FakeInteractiveMode = {
+			session: {
+				scopedModels: [];
+				modelRuntime: { getAvailable: () => [] };
+				promptTemplates: [];
+				extensionRunner: { getRegisteredCommands: () => FakeCommand[] };
+				resourceLoader: { getSkills: () => { skills: [] } };
+			};
+			settingsManager: { getEnableSkillCommands: () => boolean; getSkillTagCharacter: () => "+" };
+			skillCommands: Map<string, string>;
+			sessionManager: { getCwd: () => string };
+			fdPath: null;
+			prefixAutocompleteDescription: (description: string | undefined) => string | undefined;
+		};
+		const createBaseAutocompleteProvider = (
+			InteractiveMode as unknown as {
+				prototype: { createBaseAutocompleteProvider(this: FakeInteractiveMode): AutocompleteProvider };
+			}
+		).prototype.createBaseAutocompleteProvider;
+		const fakeThis: FakeInteractiveMode = {
+			session: {
+				scopedModels: [],
+				modelRuntime: { getAvailable: () => [] },
+				promptTemplates: [],
+				extensionRunner: {
+					getRegisteredCommands: () => [
+						{ name: "goal", invocationName: "goal" },
+						{ name: "effort", invocationName: "effort", hidden: true },
+						// An extension command named like a hidden builtin stays shadowed.
+						{ name: "title", invocationName: "title" },
+					],
+				},
+				resourceLoader: { getSkills: () => ({ skills: [] }) },
+			},
+			settingsManager: { getEnableSkillCommands: () => false, getSkillTagCharacter: () => "+" },
+			skillCommands: new Map(),
+			sessionManager: { getCwd: () => "/tmp" },
+			fdPath: null,
+			prefixAutocompleteDescription: (description) => description,
+		};
+
+		const provider = createBaseAutocompleteProvider.call(fakeThis);
+		const suggestions = await provider.getSuggestions(["/"], 0, 1, { signal: new AbortController().signal });
+		const names = suggestions?.items.map((item) => item.value) ?? [];
+		expect(names).toEqual(expect.arrayContaining(["name", "mode", "login", "goal"]));
+		for (const hidden of ["title", "auth", "deauth", "exit", "sessions", "read", "yolo", "auto", "debug", "effort"]) {
+			expect(names).not.toContain(hidden);
+		}
+	});
+
 	test("matches model command arguments across provider/model order", async () => {
 		type TestModel = { id: string; provider: string; name: string };
 		type FakeInteractiveMode = {
@@ -483,10 +539,16 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 	});
 
 	test("matches login command arguments by provider id and name", async () => {
+		type FakeProvider = { id: string; name: string; auth: { oauth?: { name: string }; apiKey?: { name: string } } };
 		type FakeInteractiveMode = {
 			session: {
 				scopedModels: [];
-				modelRuntime: { getAvailable: () => [] };
+				modelRuntime: {
+					getAvailable: () => [];
+					getProviders: () => FakeProvider[];
+					getProviderAuthStatus: () => { configured: false };
+					isUsingOAuth: () => false;
+				};
 				promptTemplates: [];
 				extensionRunner: { getRegisteredCommands: () => [] };
 				resourceLoader: { getSkills: () => { skills: [] } };
@@ -495,7 +557,6 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 			skillCommands: Map<string, string>;
 			sessionManager: { getCwd: () => string };
 			fdPath: null;
-			getLoginProviderOptions: () => AuthSelectorProvider[];
 		};
 
 		const createBaseAutocompleteProvider = (
@@ -506,7 +567,19 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 		const fakeThis: FakeInteractiveMode = {
 			session: {
 				scopedModels: [],
-				modelRuntime: { getAvailable: () => [] },
+				modelRuntime: {
+					getAvailable: () => [],
+					getProviders: () => [
+						{
+							id: "anthropic",
+							name: "Anthropic",
+							auth: { oauth: { name: "Anthropic subscription" }, apiKey: { name: "Anthropic API key" } },
+						},
+						{ id: "openai", name: "OpenAI", auth: { apiKey: { name: "OpenAI API key" } } },
+					],
+					getProviderAuthStatus: () => ({ configured: false }),
+					isUsingOAuth: () => false,
+				},
 				promptTemplates: [],
 				extensionRunner: { getRegisteredCommands: () => [] },
 				resourceLoader: { getSkills: () => ({ skills: [] }) },
@@ -515,11 +588,6 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 			skillCommands: new Map(),
 			sessionManager: { getCwd: () => "/tmp" },
 			fdPath: null,
-			getLoginProviderOptions: () => [
-				{ id: "anthropic", name: "Anthropic", authType: "oauth" },
-				{ id: "anthropic", name: "Anthropic", authType: "api_key" },
-				{ id: "openai", name: "OpenAI", authType: "api_key" },
-			],
 		};
 
 		const provider = createBaseAutocompleteProvider.call(fakeThis);
@@ -604,7 +672,6 @@ describe("InteractiveMode.showLoadedResources", () => {
 	});
 
 	function createShowLoadedResourcesThis(options: {
-		quietStartup: boolean;
 		verbose?: boolean;
 		toolOutputExpanded?: boolean;
 		cwd?: string;
@@ -612,77 +679,37 @@ describe("InteractiveMode.showLoadedResources", () => {
 		extensions?: ExtensionFixture[];
 		skills?: Array<{ filePath: string; name: string }>;
 		skillDiagnostics?: Array<{ type: "warning" | "error" | "collision"; message: string }>;
-		useRealScopeGroups?: boolean;
 	}) {
-		const fakeThis: any = {
-			options: { verbose: options.verbose ?? false },
-			toolOutputExpanded: options.toolOutputExpanded ?? false,
-			loadedResourcesContainer: new Container(),
-			chatContainer: new Container(),
-			settingsManager: {
-				getQuietStartup: () => options.quietStartup,
+		const loadedResourcesContainer = new Container();
+		const session = {
+			promptTemplates: [],
+			extensionRunner: {
+				getCommandDiagnostics: () => [],
+				getShortcutDiagnostics: () => [],
+				getRegisteredCommands: () => [],
 			},
-			sessionManager: {
-				getCwd: () => options.cwd ?? "/tmp/project",
+			resourceLoader: {
+				getAgentsFiles: () => ({ agentsFiles: options.contextFiles ?? [] }),
+				getSkills: () => ({
+					skills: options.skills ?? [],
+					diagnostics: options.skillDiagnostics ?? [],
+				}),
+				getPrompts: () => ({ prompts: [], diagnostics: [] }),
+				getExtensions: () => ({ extensions: options.extensions ?? [], errors: [] }),
+				getThemes: () => ({ themes: [], diagnostics: [] }),
 			},
-			session: {
-				promptTemplates: [],
-				extensionRunner: {
-					getCommandDiagnostics: () => [],
-					getShortcutDiagnostics: () => [],
-				},
-				resourceLoader: {
-					getPathMetadata: () => new Map(),
-					getAgentsFiles: () => ({ agentsFiles: options.contextFiles ?? [] }),
-					getSkills: () => ({
-						skills: options.skills ?? [],
-						diagnostics: options.skillDiagnostics ?? [],
-					}),
-					getPrompts: () => ({ prompts: [], diagnostics: [] }),
-					getExtensions: () => ({ extensions: options.extensions ?? [], errors: [], runtime: {} }),
-					getThemes: () => ({ themes: [], diagnostics: [] }),
-				},
-			},
-			formatDisplayPath: (p: string) => (InteractiveMode as any).prototype.formatDisplayPath.call(fakeThis, p),
-			formatExtensionDisplayPath: (p: string) =>
-				(InteractiveMode as any).prototype.formatExtensionDisplayPath.call(fakeThis, p),
-			formatContextPath: (p: string) => (InteractiveMode as any).prototype.formatContextPath.call(fakeThis, p),
-			getStartupExpansionState: () => (InteractiveMode as any).prototype.getStartupExpansionState.call(fakeThis),
-			buildScopeGroups: () => [],
-			formatScopeGroups: () => "resource-list",
-			isPackageSource: (sourceInfo?: SourceInfo) =>
-				(InteractiveMode as any).prototype.isPackageSource.call(fakeThis, sourceInfo),
-			getShortPath: (p: string, sourceInfo?: SourceInfo) =>
-				(InteractiveMode as any).prototype.getShortPath.call(fakeThis, p, sourceInfo),
-			getCompactPathLabel: (p: string, sourceInfo?: SourceInfo) =>
-				(InteractiveMode as any).prototype.getCompactPathLabel.call(fakeThis, p, sourceInfo),
-			getCompactPackageSourceLabel: (sourceInfo?: SourceInfo) =>
-				(InteractiveMode as any).prototype.getCompactPackageSourceLabel.call(fakeThis, sourceInfo),
-			getCompactExtensionLabel: (p: string, sourceInfo?: SourceInfo) =>
-				(InteractiveMode as any).prototype.getCompactExtensionLabel.call(fakeThis, p, sourceInfo),
-			getCompactDisplayPathSegments: (p: string) =>
-				(InteractiveMode as any).prototype.getCompactDisplayPathSegments.call(fakeThis, p),
-			getCompactNonPackageExtensionLabel: (
-				p: string,
-				index: number,
-				allPaths: Array<{ path: string; segments: string[] }>,
-			) => (InteractiveMode as any).prototype.getCompactNonPackageExtensionLabel.call(fakeThis, p, index, allPaths),
-			getCompactExtensionLabels: (extensions: ExtensionFixture[]) =>
-				(InteractiveMode as any).prototype.getCompactExtensionLabels.call(fakeThis, extensions),
-			formatDiagnostics: () => "diagnostics",
-			getBuiltInCommandConflictDiagnostics: () => [],
+		} as unknown as LoadedResourcesHost["session"];
+		const host: LoadedResourcesHost = {
+			session,
+			container: loadedResourcesContainer,
+			cwd: options.cwd ?? "/tmp/project",
+			verbose: options.verbose ?? false,
+			expanded: Boolean(options.verbose || options.toolOutputExpanded),
 		};
-
-		if (options.useRealScopeGroups) {
-			fakeThis.getScopeGroup = (sourceInfo?: SourceInfo) =>
-				(InteractiveMode as any).prototype.getScopeGroup.call(fakeThis, sourceInfo);
-			fakeThis.buildScopeGroups = (items: Array<{ path: string; sourceInfo?: SourceInfo }>) =>
-				(InteractiveMode as any).prototype.buildScopeGroups.call(fakeThis, items);
-			fakeThis.formatScopeGroups = (groups: unknown, formatOptions: unknown) =>
-				(InteractiveMode as any).prototype.formatScopeGroups.call(fakeThis, groups, formatOptions);
-		}
-
-		return fakeThis;
+		return {
+			loadedResourcesContainer,
+			show: (showOptions?: LoadedResourcesOptions) => showLoadedResources(host, showOptions),
+		};
 	}
 
 	function createSourceInfo(
@@ -706,21 +733,21 @@ describe("InteractiveMode.showLoadedResources", () => {
 	function createExtensionFixtures(): ExtensionFixture[] {
 		return [
 			{
-				path: "/tmp/project/.pi/extensions/answer.ts",
-				sourceInfo: createSourceInfo("/tmp/project/.pi/extensions/answer.ts", {
+				path: "/tmp/project/.lunr/extensions/answer.ts",
+				sourceInfo: createSourceInfo("/tmp/project/.lunr/extensions/answer.ts", {
 					source: "local",
 					scope: "project",
 					origin: "top-level",
-					baseDir: "/tmp/project/.pi/extensions",
+					baseDir: "/tmp/project/.lunr/extensions",
 				}),
 			},
 			{
-				path: "/tmp/project/.pi/extensions/local-index/index.ts",
-				sourceInfo: createSourceInfo("/tmp/project/.pi/extensions/local-index/index.ts", {
+				path: "/tmp/project/.lunr/extensions/local-index/index.ts",
+				sourceInfo: createSourceInfo("/tmp/project/.lunr/extensions/local-index/index.ts", {
 					source: "local",
 					scope: "project",
 					origin: "top-level",
-					baseDir: "/tmp/project/.pi/extensions",
+					baseDir: "/tmp/project/.lunr/extensions",
 				}),
 			},
 			{
@@ -733,44 +760,47 @@ describe("InteractiveMode.showLoadedResources", () => {
 				}),
 			},
 			{
-				path: "/tmp/project/.pi/npm/node_modules/pi-markdown-preview/extensions/index.ts",
-				sourceInfo: createSourceInfo("/tmp/project/.pi/npm/node_modules/pi-markdown-preview/extensions/index.ts", {
-					source: "npm:pi-markdown-preview",
-					scope: "project",
-					origin: "package",
-					baseDir: "/tmp/project/.pi/npm/node_modules/pi-markdown-preview",
-				}),
-			},
-			{
-				path: "/tmp/project/.pi/npm/node_modules/@scope/pi-scoped/extensions/index.ts",
-				sourceInfo: createSourceInfo("/tmp/project/.pi/npm/node_modules/@scope/pi-scoped/extensions/index.ts", {
-					source: "npm:@scope/pi-scoped",
-					scope: "project",
-					origin: "package",
-					baseDir: "/tmp/project/.pi/npm/node_modules/@scope/pi-scoped",
-				}),
-			},
-			{
-				path: "/tmp/project/.pi/git/github.com/HazAT/pi-interactive-subagents/extensions/index.ts",
+				path: "/tmp/project/.lunr/npm/node_modules/pi-markdown-preview/extensions/index.ts",
 				sourceInfo: createSourceInfo(
-					"/tmp/project/.pi/git/github.com/HazAT/pi-interactive-subagents/extensions/index.ts",
+					"/tmp/project/.lunr/npm/node_modules/pi-markdown-preview/extensions/index.ts",
 					{
-						source: "git:github.com/HazAT/pi-interactive-subagents",
+						source: "npm:pi-markdown-preview",
 						scope: "project",
 						origin: "package",
-						baseDir: "/tmp/project/.pi/git/github.com/HazAT/pi-interactive-subagents",
+						baseDir: "/tmp/project/.lunr/npm/node_modules/pi-markdown-preview",
 					},
 				),
 			},
 			{
-				path: "/tmp/project/.pi/git/github.com/HazAT/pi-interactive-subagents/extensions/subagents/index.ts",
+				path: "/tmp/project/.lunr/npm/node_modules/@scope/pi-scoped/extensions/index.ts",
+				sourceInfo: createSourceInfo("/tmp/project/.lunr/npm/node_modules/@scope/pi-scoped/extensions/index.ts", {
+					source: "npm:@scope/pi-scoped",
+					scope: "project",
+					origin: "package",
+					baseDir: "/tmp/project/.lunr/npm/node_modules/@scope/pi-scoped",
+				}),
+			},
+			{
+				path: "/tmp/project/.lunr/git/github.com/HazAT/pi-interactive-subagents/extensions/index.ts",
 				sourceInfo: createSourceInfo(
-					"/tmp/project/.pi/git/github.com/HazAT/pi-interactive-subagents/extensions/subagents/index.ts",
+					"/tmp/project/.lunr/git/github.com/HazAT/pi-interactive-subagents/extensions/index.ts",
 					{
 						source: "git:github.com/HazAT/pi-interactive-subagents",
 						scope: "project",
 						origin: "package",
-						baseDir: "/tmp/project/.pi/git/github.com/HazAT/pi-interactive-subagents",
+						baseDir: "/tmp/project/.lunr/git/github.com/HazAT/pi-interactive-subagents",
+					},
+				),
+			},
+			{
+				path: "/tmp/project/.lunr/git/github.com/HazAT/pi-interactive-subagents/extensions/subagents/index.ts",
+				sourceInfo: createSourceInfo(
+					"/tmp/project/.lunr/git/github.com/HazAT/pi-interactive-subagents/extensions/subagents/index.ts",
+					{
+						source: "git:github.com/HazAT/pi-interactive-subagents",
+						scope: "project",
+						origin: "package",
+						baseDir: "/tmp/project/.lunr/git/github.com/HazAT/pi-interactive-subagents",
 					},
 				),
 			},
@@ -788,79 +818,74 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 	test("does not show the resource listing by default", () => {
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		fakeThis.show({
 			force: false,
 		});
 
 		expect(fakeThis.loadedResourcesContainer.children).toHaveLength(0);
 	});
 
-	test("shows a compact resource listing in verbose mode", () => {
+	test("shows a compact resource listing when forced without verbose", () => {
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		const output = renderAll(fakeThis.loadedResourcesContainer);
 		expect(output).toContain("[Skills]");
 		expect(output).toContain("commit");
-		expect(output).not.toContain("resource-list");
+		expect(output).not.toContain("/tmp/skill/SKILL.md");
 	});
 
 	test("shows full resource listing when expanded", () => {
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
 			verbose: true,
 			toolOutputExpanded: true,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		fakeThis.show({
 			force: false,
 		});
 
 		const output = renderAll(fakeThis.loadedResourcesContainer);
 		expect(output).toContain("[Skills]");
-		expect(output).toContain("resource-list");
+		expect(output).toContain("/tmp/skill/SKILL.md");
 		expect(output).not.toContain("commit");
 	});
 
 	test("shows full resource listing on verbose startup even when tool output is collapsed", () => {
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: true,
 			verbose: true,
 			toolOutputExpanded: false,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		fakeThis.show({
 			force: false,
 		});
 
 		const output = renderAll(fakeThis.loadedResourcesContainer);
 		expect(output).toContain("[Skills]");
-		expect(output).toContain("resource-list");
+		expect(output).toContain("/tmp/skill/SKILL.md");
 		expect(output).not.toContain("commit");
 	});
 
 	test("abbreviates extensions in compact listing", () => {
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			extensions: [{ path: "/tmp/extensions/answer.ts" }, { path: "/tmp/extensions/btw.ts" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		const output = renderAll(fakeThis.loadedResourcesContainer);
@@ -871,14 +896,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 	test("captures mixed extension layouts in compact output", () => {
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			extensions: createExtensionFixtures(),
-			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
@@ -918,14 +941,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			extensions,
-			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
@@ -947,14 +968,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			extensions,
-			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
@@ -976,14 +995,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			extensions,
-			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
@@ -1014,14 +1031,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			extensions,
-			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
@@ -1052,14 +1067,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			extensions,
-			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
@@ -1090,14 +1103,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			extensions,
-			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
@@ -1119,14 +1130,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			extensions,
-			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
@@ -1137,25 +1146,26 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("package extensions still strip index.ts correctly (regression guard)", () => {
 		const extensions: ExtensionFixture[] = [
 			{
-				path: "/tmp/project/.pi/npm/node_modules/pi-markdown-preview/extensions/index.ts",
-				sourceInfo: createSourceInfo("/tmp/project/.pi/npm/node_modules/pi-markdown-preview/extensions/index.ts", {
-					source: "npm:pi-markdown-preview",
-					scope: "project",
-					origin: "package",
-					baseDir: "/tmp/project/.pi/npm/node_modules/pi-markdown-preview",
-				}),
+				path: "/tmp/project/.lunr/npm/node_modules/pi-markdown-preview/extensions/index.ts",
+				sourceInfo: createSourceInfo(
+					"/tmp/project/.lunr/npm/node_modules/pi-markdown-preview/extensions/index.ts",
+					{
+						source: "npm:pi-markdown-preview",
+						scope: "project",
+						origin: "package",
+						baseDir: "/tmp/project/.lunr/npm/node_modules/pi-markdown-preview",
+					},
+				),
 			},
 		];
 
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			extensions,
-			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
@@ -1164,22 +1174,20 @@ describe("InteractiveMode.showLoadedResources", () => {
 	});
 	test("captures mixed extension layouts in expanded output", () => {
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
 			verbose: true,
 			toolOutputExpanded: true,
 			extensions: createExtensionFixtures(),
-			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		fakeThis.show({
 			force: false,
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
 "[Extensions]
   project
-    /tmp/project/.pi/extensions/answer.ts
-    /tmp/project/.pi/extensions/local-index
+    /tmp/project/.lunr/extensions/answer.ts
+    /tmp/project/.lunr/extensions/local-index
     git:github.com/HazAT/pi-interactive-subagents
       extensions
       extensions/subagents
@@ -1197,19 +1205,21 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const home = homedir();
 		const cwd = path.join(home, "Development", "pi-mono");
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
-			verbose: true,
+			verbose: false,
 			cwd,
-			contextFiles: [{ path: path.join(home, ".pi", "agent", "AGENTS.md") }, { path: path.join(cwd, "AGENTS.md") }],
+			contextFiles: [
+				{ path: path.join(home, ".lunr", "agent", "AGENTS.md") },
+				{ path: path.join(cwd, "AGENTS.md") },
+			],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
-			force: false,
+		fakeThis.show({
+			force: true,
 		});
 
 		const output = renderAll(fakeThis.loadedResourcesContainer).replace(/\\/g, "/");
 		expect(output).toContain("[Context]");
-		expect(output).toContain("~/.pi/agent/AGENTS.md, AGENTS.md");
+		expect(output).toContain("~/.lunr/agent/AGENTS.md, AGENTS.md");
 		expect(output).not.toContain(`${cwd.replace(/\\/g, "/")}/AGENTS.md`);
 	});
 
@@ -1217,31 +1227,32 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const home = homedir();
 		const cwd = path.join(home, "Development", "pi-mono");
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: false,
 			verbose: true,
 			toolOutputExpanded: true,
 			cwd,
-			contextFiles: [{ path: path.join(home, ".pi", "agent", "AGENTS.md") }, { path: path.join(cwd, "AGENTS.md") }],
+			contextFiles: [
+				{ path: path.join(home, ".lunr", "agent", "AGENTS.md") },
+				{ path: path.join(cwd, "AGENTS.md") },
+			],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		fakeThis.show({
 			force: false,
 		});
 
 		const output = renderAll(fakeThis.loadedResourcesContainer).replace(/\\/g, "/");
 		expect(output).toContain("[Context]");
-		expect(output).toContain("~/.pi/agent/AGENTS.md");
+		expect(output).toContain("~/.lunr/agent/AGENTS.md");
 		expect(output).toContain("~/Development/pi-mono/AGENTS.md");
-		expect(output).not.toContain("~/.pi/agent/AGENTS.md, AGENTS.md");
+		expect(output).not.toContain("~/.lunr/agent/AGENTS.md, AGENTS.md");
 	});
 
 	test("does not show verbose listing on quiet startup during reload", () => {
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: true,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		fakeThis.show({
 			extensions: [{ path: "/tmp/ext/index.ts" }],
 			force: false,
 			showDiagnosticsWhenQuiet: true,
@@ -1252,12 +1263,11 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 	test("still shows diagnostics on quiet startup when requested", () => {
 		const fakeThis = createShowLoadedResourcesThis({
-			quietStartup: true,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 			skillDiagnostics: [{ type: "warning", message: "duplicate skill name" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		fakeThis.show({
 			force: false,
 			showDiagnosticsWhenQuiet: true,
 		});

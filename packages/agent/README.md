@@ -1,23 +1,23 @@
-# @earendil-works/pi-agent-core
+# @ashx-j/lunr-agent
 
-Stateful agent with tool execution and event streaming. Built on `@earendil-works/pi-ai`.
+Stateful agent with tool execution and event streaming. Built on `@ashx-j/lunr-ai`.
 
 ## Installation
 
 ```bash
-npm install @earendil-works/pi-agent-core
+npm install @ashx-j/lunr-agent
 ```
 
 ## Quick Start
 
 ```typescript
-import { Agent } from "@earendil-works/pi-agent-core";
-import { getModel } from "@earendil-works/pi-ai";
+import { Agent } from "@ashx-j/lunr-agent";
+import { getBuiltinModel } from "@ashx-j/lunr-ai/providers/all";
 
 const agent = new Agent({
   initialState: {
     systemPrompt: "You are a helpful assistant.",
-    model: getModel("anthropic", "claude-sonnet-4-20250514"),
+    model: getBuiltinModel("anthropic", "claude-sonnet-4-5"),
   },
 });
 
@@ -30,6 +30,8 @@ agent.subscribe((event) => {
 
 await agent.prompt("Hello!");
 ```
+
+The agent reads the API key for the model's provider from the environment (`ANTHROPIC_API_KEY` here). To supply keys another way, pass `getApiKey` in the agent options.
 
 ## Core Concepts
 
@@ -45,7 +47,7 @@ LLMs only understand `user`, `assistant`, and `toolResult`. The `convertToLlm` f
 
 ```
 AgentMessage[] → transformContext() → AgentMessage[] → convertToLlm() → Message[] → LLM
-                    (optional)                           (required)
+                    (optional)                           (optional on Agent, required for agentLoop)
 ```
 
 1. **transformContext**: Prune old messages, inject external context
@@ -169,7 +171,7 @@ const agent = new Agent({
     messages: AgentMessage[],
   },
 
-  // Convert AgentMessage[] to LLM Message[] (required for custom message types)
+  // Convert AgentMessage[] to LLM Message[] (optional; the default keeps user, assistant and toolResult messages)
   convertToLlm: (messages) => messages.filter(...),
 
   // Transform context before convertToLlm (for pruning, compaction)
@@ -268,7 +270,7 @@ await agent.continue();
 
 ```typescript
 agent.state.systemPrompt = "New prompt";
-agent.state.model = getModel("openai", "gpt-4o");
+agent.state.model = getBuiltinModel("openai", "gpt-4o");
 agent.state.thinkingLevel = "medium";
 agent.state.tools = [myTool];
 agent.toolExecution = "sequential";
@@ -355,7 +357,7 @@ Follow-up messages are checked only when there are no more tool calls and no ste
 Extend `AgentMessage` via declaration merging:
 
 ```typescript
-declare module "@earendil-works/pi-agent-core" {
+declare module "@ashx-j/lunr-agent" {
   interface CustomAgentMessages {
     notification: { role: "notification"; text: string; timestamp: number };
   }
@@ -381,7 +383,7 @@ const agent = new Agent({
 Define tools using `AgentTool`:
 
 ```typescript
-import { Type } from "typebox";
+import { Type } from "@ashx-j/lunr-ai";
 
 const readFileTool: AgentTool = {
   name: "read_file",
@@ -423,7 +425,7 @@ execute: async (toolCallId, params, signal, onUpdate) => {
     throw new Error(`File not found: ${params.path}`);
   }
   // Return content only on success
-  return { content: [{ type: "text", text: "..." }] };
+  return { content: [{ type: "text", text: "..." }], details: {} };
 }
 ```
 
@@ -436,7 +438,7 @@ Return `terminate: true` from `execute()` or `afterToolCall` to hint that the ag
 For browser apps that proxy through a backend:
 
 ```typescript
-import { Agent, streamProxy } from "@earendil-works/pi-agent-core";
+import { Agent, streamProxy } from "@ashx-j/lunr-agent";
 
 const agent = new Agent({
   streamFn: (model, context, options) =>
@@ -453,7 +455,8 @@ const agent = new Agent({
 For direct control without the Agent class:
 
 ```typescript
-import { agentLoop, agentLoopContinue } from "@earendil-works/pi-agent-core";
+import { agentLoop, agentLoopContinue } from "@ashx-j/lunr-agent";
+import { getBuiltinModel } from "@ashx-j/lunr-ai/providers/all";
 
 const context: AgentContext = {
   systemPrompt: "You are helpful.",
@@ -462,7 +465,7 @@ const context: AgentContext = {
 };
 
 const config: AgentLoopConfig = {
-  model: getModel("openai", "gpt-4o"),
+  model: getBuiltinModel("openai", "gpt-4o"),
   convertToLlm: (msgs) => msgs.filter(m => ["user", "assistant", "toolResult"].includes(m.role)),
   toolExecution: "parallel",  // overridden by per-tool executionMode if set
   beforeToolCall: async ({ toolCall, args, context }) => undefined,
@@ -480,6 +483,8 @@ for await (const event of agentLoopContinue(context, config)) {
   console.log(event.type);
 }
 ```
+
+If preparation or execution rejects, these wrappers emit an assistant message with `stopReason: "error"` or `"aborted"`, followed by `turn_end` and `agent_end`. Iteration finishes and `.result()` resolves to the completed run messages plus that failure message. The direct `runAgentLoop()` and `runAgentLoopContinue()` functions still reject on execution failure.
 
 These low-level streams are observational. They preserve event order, but they do not wait for your async event handling to settle before later producer phases continue. If you need message processing to act as a barrier before tool preflight, use the `Agent` class instead of raw `agentLoop()` or `agentLoopContinue()`.
 

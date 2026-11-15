@@ -1,21 +1,20 @@
-// @ts-nocheck
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ResolvedModelRef } from "./template-conditionals.ts";
 
 const PREFERRED_PROVIDERS = ["openai-codex", "anthropic", "github-copilot", "openrouter"];
 
 export interface SelectedModelCandidate {
-	model: Model<any>;
+	model: Model<Api>;
 	alreadyActive: boolean;
 }
 
 export interface RegistryLike {
-	find(provider: string, modelId: string): Model<any> | undefined;
-	getAll(): Model<any>[];
-	getAvailable(): Model<any>[];
-	isUsingOAuth(model: Model<any>): boolean;
-	hasConfiguredAuth?: (model: Model<any>) => boolean;
-	getApiKeyAndHeaders?: (model: Model<any>) => Promise<{
+	find(provider: string, modelId: string): Model<Api> | undefined;
+	getAll(): Model<Api>[];
+	getAvailable(): Model<Api>[];
+	isUsingOAuth(model: Model<Api>): boolean;
+	hasConfiguredAuth?: (model: Model<Api>) => boolean;
+	getApiKeyAndHeaders?: (model: Model<Api>) => Promise<{
 		ok: boolean;
 		apiKey?: string;
 		headers?: Record<string, string>;
@@ -23,11 +22,11 @@ export interface RegistryLike {
 	}>;
 }
 
-function isSameModel(a: Model<any>, b: Model<any>): boolean {
+function isSameModel(a: Model<Api>, b: Model<Api>): boolean {
 	return a.provider === b.provider && a.id === b.id;
 }
 
-function modelSpecMatches(modelSpec: string, model: Model<any>): boolean {
+function modelSpecMatches(modelSpec: string, model: Model<Api>): boolean {
 	const slashIndex = modelSpec.indexOf("/");
 	if (slashIndex !== -1) {
 		const provider = modelSpec.slice(0, slashIndex);
@@ -38,8 +37,8 @@ function modelSpecMatches(modelSpec: string, model: Model<any>): boolean {
 	return modelSpec === model.id;
 }
 
-function orderMatchesByProviderPreference(models: Model<any>[]): Model<any>[] {
-	const prioritized: Model<any>[] = [];
+function orderMatchesByProviderPreference(models: Model<Api>[]): Model<Api>[] {
+	const prioritized: Model<Api>[] = [];
 	const seen = new Set<string>();
 
 	for (const provider of PREFERRED_PROVIDERS) {
@@ -63,7 +62,7 @@ function orderMatchesByProviderPreference(models: Model<any>[]): Model<any>[] {
 	return prioritized;
 }
 
-function getModelCandidates(modelSpec: string, registry: Pick<RegistryLike, "find" | "getAll">): Model<any>[] {
+function getModelCandidates(modelSpec: string, registry: Pick<RegistryLike, "find" | "getAll">): Model<Api>[] {
 	const slashIndex = modelSpec.indexOf("/");
 
 	if (slashIndex !== -1) {
@@ -80,7 +79,7 @@ function getModelCandidates(modelSpec: string, registry: Pick<RegistryLike, "fin
 	return orderMatchesByProviderPreference(allMatches);
 }
 
-async function hasUsableAuth(model: Model<any>, registry: RegistryLike): Promise<boolean> {
+async function hasUsableAuth(model: Model<Api>, registry: RegistryLike): Promise<boolean> {
 	const availableMatch = registry.getAvailable().some((candidate) => isSameModel(candidate, model));
 	if (availableMatch) return true;
 	if (!registry.isUsingOAuth(model)) return false;
@@ -94,7 +93,7 @@ async function hasUsableAuth(model: Model<any>, registry: RegistryLike): Promise
 
 export async function selectModelCandidate(
 	modelSpecs: string[],
-	currentModel: Model<any> | undefined,
+	currentModel: Model<Api> | undefined,
 	registry: RegistryLike,
 ): Promise<SelectedModelCandidate | undefined> {
 	if (currentModel && modelSpecs.some((spec) => modelSpecMatches(spec, currentModel))) {
@@ -112,6 +111,6 @@ export async function selectModelCandidate(
 	return undefined;
 }
 
-export function getResolvedModelRef(model: Model<any>): ResolvedModelRef {
+export function getResolvedModelRef(model: Model<Api>): ResolvedModelRef {
 	return { provider: model.provider, id: model.id };
 }

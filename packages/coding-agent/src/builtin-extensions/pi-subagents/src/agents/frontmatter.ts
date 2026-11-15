@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Escape regex special characters for use in a RegExp constructor.
  */

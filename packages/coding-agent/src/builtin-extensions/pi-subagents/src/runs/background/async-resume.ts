@@ -328,7 +328,9 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	const allowedFields = new Set([
 		"version", "lifecycleArtifactVersion", "sourceRunId", "childId", "description", "permissions", "agent", "sessionFile", "cwd", "model", "thinking", "tier", "modelSelection", "skills",
 		"outputPath", "outputMode", "acceptance", "sessionDir", "artifactConfig",
-		"artifactsDir", "maxOutput", "controlConfig", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share",
+		"artifactsDir", "maxOutput", "controlConfig", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth",
+		// lunr: descriptors written before session sharing was removed still carry a boolean `share`; it is ignored.
+		"share",
 	]);
 	for (const field of Object.keys(parsed)) {
 		if (!allowedFields.has(field)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': unknown field '${field}'.`);
@@ -343,9 +345,6 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	if (parsed.tier !== undefined && parsed.tier !== "light" && parsed.tier !== "standard" && parsed.tier !== "heavy") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': tier must be light, standard, or heavy.`);
 	validateChildDescription(parsed.description, `Async recovery descriptor '${descriptorPath}' description`);
 	if (parsed.outputMode !== "inline" && parsed.outputMode !== "file-only") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': outputMode is invalid.`);
-	for (const field of ["share"] as const) {
-		if (typeof parsed[field] !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a boolean.`);
-	}
 	if (!Number.isInteger(parsed.maxSubagentDepth) || (parsed.maxSubagentDepth as number) < 0) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': maxSubagentDepth must be a non-negative integer.`);
 	for (const field of ["skills"] as const) {
 		const item = parsed[field];

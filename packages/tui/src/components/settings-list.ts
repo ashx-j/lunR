@@ -1,6 +1,6 @@
 import { fuzzyFilter } from "../fuzzy.ts";
 import { getKeybindings } from "../keybindings.ts";
-import type { Component } from "../tui.ts";
+import { type Component, Container, type Focusable, isFocusable } from "../tui.ts";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 import { Input } from "./input.ts";
 
@@ -19,6 +19,22 @@ export interface SettingItem {
 	submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
 	/** If true, the row is rendered dimmed and cannot be activated. Evaluated at render/activation time. */
 	disabled?: () => boolean;
+	/**
+	 * Extra names search matches besides the label, such as the rows inside a submenu.
+	 * While a search matches some of them, the row shows those names in place of its value.
+	 */
+	searchTerms?: string[];
+	/** Never set on a setting row; keeps it apart from a SettingSection in a mixed row list. */
+	kind?: never;
+}
+
+/**
+ * Non-selectable heading that groups the setting rows after it, up to the next section.
+ * Without a label it only separates the rows after it with a blank line.
+ */
+export interface SettingSection {
+	kind: "section";
+	label?: string;
 }
 
 export interface SettingsListTheme {
@@ -34,9 +50,25 @@ export interface SettingsListOptions {
 	enableSearch?: boolean;
 }
 
-export class SettingsList implements Component {
+export class SettingsList implements Component, Focusable {
+	private hasFocus = false;
+	private focusedChildren = new Set<Focusable>();
+
+	get focused(): boolean {
+		return this.hasFocus;
+	}
+
+	set focused(value: boolean) {
+		this.hasFocus = value;
+		this.syncChildFocus();
+	}
+
+	// Selectable rows only. Navigation, search and the (n/total) counter all work on these.
 	private items: SettingItem[];
 	private filteredItems: SettingItem[];
+	// Search terms the current query matched, per row. Empty when the query is blank.
+	private matchedTerms = new Map<SettingItem, string[]>();
+	private sectionOf = new Map<SettingItem, SettingSection>();
 	private theme: SettingsListTheme;
 	private selectedIndex = 0;
 	private maxVisible: number;
@@ -50,13 +82,23 @@ export class SettingsList implements Component {
 	private submenuItemIndex: number | null = null;
 
 	constructor(
-		items: SettingItem[],
+		rows: (SettingItem | SettingSection)[],
 		maxVisible: number,
 		theme: SettingsListTheme,
 		onChange: (id: string, newValue: string) => void,
 		onCancel: () => void,
 		options: SettingsListOptions = {},
 	) {
+		const items: SettingItem[] = [];
+		let section: SettingSection | undefined;
+		for (const row of rows) {
+			if (row.kind === "section") {
+				section = row;
+				continue;
+			}
+			items.push(row);
+			if (section) this.sectionOf.set(row, section);
+		}
 		this.items = items;
 		this.filteredItems = items;
 		this.maxVisible = maxVisible;
@@ -67,6 +109,21 @@ export class SettingsList implements Component {
 		if (this.searchEnabled) {
 			this.searchInput = new Input();
 		}
+	}
+
+	private syncChildFocus(): void {
+		const children = new Set<Focusable>();
+		const collect = (component: Component): void => {
+			if (isFocusable(component)) children.add(component);
+			else if (component instanceof Container) component.children.forEach(collect);
+		};
+		if (this.submenuComponent) collect(this.submenuComponent);
+		else if (this.searchInput) children.add(this.searchInput);
+		for (const child of this.focusedChildren) {
+			if (!children.has(child)) child.focused = false;
+		}
+		for (const child of children) child.focused = this.hasFocus;
+		this.focusedChildren = children;
 	}
 
 	/** Update an item's currentValue */
@@ -82,6 +139,8 @@ export class SettingsList implements Component {
 	}
 
 	render(width: number): string[] {
+		// Container submenus can replace their input while open.
+		this.syncChildFocus();
 		// If submenu is active, render it instead
 		if (this.submenuComponent) {
 			return this.submenuComponent.render(width);
@@ -123,10 +182,18 @@ export class SettingsList implements Component {
 		// Calculate max label width for alignment
 		const maxLabelWidth = Math.min(30, Math.max(...this.items.map((item) => visibleWidth(item.label))));
 
-		// Render visible items
+		// Render visible items. A section label goes above the first visible row and above
+		// every row whose section differs from the row before it, so filtered results keep theirs.
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = displayItems[i];
 			if (!item) continue;
+
+			const section = this.sectionOf.get(item);
+			const previous = i === startIndex ? undefined : displayItems[i - 1];
+			if (!previous || this.sectionOf.get(previous) !== section) {
+				if (previous) lines.push("");
+				if (section?.label) lines.push(truncateToWidth(this.theme.hint(`  ${section.label}`), width));
+			}
 
 			const isSelected = i === this.selectedIndex;
 			const isDisabled = item.disabled?.() ?? false;
@@ -142,9 +209,10 @@ export class SettingsList implements Component {
 			const usedWidth = prefixWidth + maxLabelWidth + visibleWidth(separator);
 			const valueMaxWidth = width - usedWidth - 2;
 
+			const value = this.matchedTerms.get(item)?.join(", ") ?? item.currentValue;
 			const valueText = isDisabled
-				? this.theme.disabled(truncateToWidth(item.currentValue, valueMaxWidth, ""))
-				: this.theme.value(truncateToWidth(item.currentValue, valueMaxWidth, ""), isSelected);
+				? this.theme.disabled(truncateToWidth(value, valueMaxWidth, ""))
+				: this.theme.value(truncateToWidth(value, valueMaxWidth, ""), isSelected);
 
 			lines.push(truncateToWidth(prefix + labelText + separator + valueText, width));
 		}
@@ -217,6 +285,7 @@ export class SettingsList implements Component {
 				}
 				this.closeSubmenu();
 			});
+			this.focused = this.hasFocus;
 		} else if (item.values && item.values.length > 0) {
 			// Cycle through values
 			const currentIndex = item.values.indexOf(item.currentValue);
@@ -228,7 +297,9 @@ export class SettingsList implements Component {
 	}
 
 	private closeSubmenu(): void {
+		if (isFocusable(this.submenuComponent)) this.submenuComponent.focused = false;
 		this.submenuComponent = null;
+		this.focused = this.hasFocus;
 		// Restore selection to the item that opened the submenu
 		if (this.submenuItemIndex !== null) {
 			this.selectedIndex = this.submenuItemIndex;
@@ -236,9 +307,23 @@ export class SettingsList implements Component {
 		}
 	}
 
+	// Matches each row's label and search terms separately, so a row ranks by its best match.
 	private applyFilter(query: string): void {
-		this.filteredItems = fuzzyFilter(this.items, query, (item) => item.label);
+		this.matchedTerms = new Map();
 		this.selectedIndex = 0;
+		if (!query.trim()) {
+			this.filteredItems = this.items;
+			return;
+		}
+		const candidates = this.items.flatMap((item) => [
+			{ item, text: item.label, isTerm: false },
+			...(item.searchTerms ?? []).map((text) => ({ item, text, isTerm: true })),
+		]);
+		const matches = fuzzyFilter(candidates, query, (candidate) => candidate.text);
+		for (const { item, text, isTerm } of matches) {
+			if (isTerm) this.matchedTerms.set(item, [...(this.matchedTerms.get(item) ?? []), text]);
+		}
+		this.filteredItems = [...new Set(matches.map((match) => match.item))];
 	}
 
 	private addHintLine(lines: string[], width: number): void {

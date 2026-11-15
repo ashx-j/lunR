@@ -13,6 +13,7 @@ import {
 import chalk from "chalk";
 import type { Static } from "typebox";
 import { getCustomThemesDir, getThemesDir } from "../../../config.ts";
+import { globalBridge } from "../../../core/global-bridge.ts";
 import type { SourceInfo } from "../../../core/source-info.ts";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.ts";
 import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.ts";
@@ -866,22 +867,22 @@ export function getDefaultTheme(): string {
 // ============================================================================
 
 // Use globalThis to share theme across module loaders (tsx + jiti in dev mode)
-const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
-const THEME_KEY_OLD = Symbol.for("@mariozechner/pi-coding-agent:theme");
+const themeSlot = globalBridge<Theme>(Symbol.for("@earendil-works/pi-coding-agent:theme"));
+const legacyThemeSlot = globalBridge<Theme>(Symbol.for("@mariozechner/pi-coding-agent:theme"));
 
 // Export theme as a getter that reads from globalThis
 // This ensures all module instances (tsx, jiti) see the same theme
 export const theme: Theme = new Proxy({} as Theme, {
 	get(_target, prop) {
-		const t = (globalThis as Record<symbol, Theme>)[THEME_KEY];
+		const t = themeSlot.get();
 		if (!t) throw new Error("Theme not initialized. Call initTheme() first.");
 		return (t as unknown as Record<string | symbol, unknown>)[prop];
 	},
 });
 
 function setGlobalTheme(t: Theme): void {
-	(globalThis as Record<symbol, Theme>)[THEME_KEY] = t;
-	(globalThis as Record<symbol, Theme>)[THEME_KEY_OLD] = t;
+	themeSlot.set(t);
+	legacyThemeSlot.set(t);
 }
 
 let currentThemeName: string | undefined;

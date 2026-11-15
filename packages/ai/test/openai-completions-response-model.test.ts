@@ -138,3 +138,32 @@ describe("openai-completions responseModel", () => {
 		expect(message.responseModel).toBeUndefined();
 	});
 });
+
+describe("OpenRouter account cost", () => {
+	it.each([0, 9.25])("preserves the reported charge of %s including zero", async (cost) => {
+		mockState.chunks = [
+			{
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+				usage: {
+					prompt_tokens: 100,
+					completion_tokens: 10,
+					cost,
+					prompt_tokens_details: { cached_tokens: 60, cache_write_tokens: 20 },
+				},
+			},
+		];
+		const message = await complete(openRouterAuto(), { messages: [] }, { apiKey: "fixture" });
+		expect(message.usage).toMatchObject({
+			input: 20,
+			output: 10,
+			cacheRead: 60,
+			cacheWrite: 20,
+			totalTokens: 110,
+			measurement: "reported",
+			reportedCost: cost,
+			costSource: "reported",
+		});
+		expect(message.usage.cost.total).toBe(cost);
+		expect(message.usage.reasoning).toBeUndefined();
+	});
+});

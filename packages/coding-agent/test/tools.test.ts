@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
 import { type BashOperations, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
 import { computeEditsDiff } from "../src/core/tools/edit-diff.ts";
+import { formatSize } from "../src/core/tools/truncate.ts";
 import {
 	createEditTool,
 	createFindTool,
@@ -234,6 +235,48 @@ describe("Coding Agent Tools", () => {
 
 			expect(output).toContain("definitely not a png");
 			expect(result.content.some((c: any) => c.type === "image")).toBe(false);
+		});
+
+		it("describes a binary file in one line instead of returning its bytes", async () => {
+			const allBytes = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+			const files = {
+				"random.bin": Buffer.from(Array.from({ length: 3000 }, (_, i) => (i * 131 + 7) % 256)),
+				// Mostly text, with one binary stream: only the NUL rule catches it.
+				"doc.pdf": Buffer.concat([
+					Buffer.from("%PDF-1.4\n".repeat(400)),
+					allBytes,
+					Buffer.from("trailer text\n".repeat(400)),
+				]),
+			};
+			for (const [name, bytes] of Object.entries(files)) {
+				const file = join(testDir, name);
+				writeFileSync(file, bytes);
+				const output = getTextOutput(await readTool.execute(`test-call-${name}`, { path: file }));
+				expect(output).toBe(
+					`[${file} is a binary file (${formatSize(bytes.length)}). Its bytes are not shown. Inspect it with bash, for example file or xxd | head.]`,
+				);
+			}
+		});
+
+		it("reads Latin-1 text and UTF-16 files with a BOM as text", async () => {
+			const utf16 = Buffer.from("hello utf16\n", "utf16le");
+			const files = {
+				"latin1.txt": [Buffer.from("café déjà vu\n".repeat(50), "latin1"), "d\uFFFDj\uFFFD vu"],
+				"le.txt": [Buffer.concat([Buffer.from([0xff, 0xfe]), utf16]), "hello utf16"],
+				"be.txt": [Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(utf16).swap16()]), "hello utf16"],
+			} as const;
+			for (const [name, [bytes, expected]] of Object.entries(files)) {
+				const file = join(testDir, name);
+				writeFileSync(file, bytes);
+				const output = getTextOutput(await readTool.execute(`test-call-${name}`, { path: file }));
+				expect(output).toContain(expected);
+			}
+		});
+
+		it("says a directory is a directory and points at ls", async () => {
+			await expect(readTool.execute("test-call-dir", { path: testDir })).rejects.toThrow(
+				`${testDir} is a directory. Use ls to list its contents.`,
+			);
 		});
 	});
 
@@ -485,10 +528,45 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
+		it.skipIf(process.platform === "win32")("reports a signal-killed command as an error", async () => {
+			await expect(bashTool.execute("test-call-sigkill", { command: "echo before; kill -9 $$" })).rejects.toThrow(
+				/before\n+Command terminated by SIGKILL/,
+			);
+		});
+
 		it("should respect timeout", async () => {
 			await expect(bashTool.execute("test-call-10", { command: "sleep 5", timeout: 1 })).rejects.toThrow(
 				/timed out/i,
 			);
+		});
+
+		it("stops a command with no timeout after the default and says how to raise it", async () => {
+			const bash = createBashTool(testDir, { defaultTimeout: 1 });
+			await expect(bash.execute("test-call-default-timeout", { command: "sleep 5" })).rejects.toThrow(
+				"Command timed out after 1 seconds. If it needs longer, run it again with a larger timeout (in seconds).",
+			);
+		});
+
+		it("passes no timeout and does not claim one when the default is off", async () => {
+			const timeouts: Array<number | undefined> = [];
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { timeout }) => {
+					timeouts.push(timeout);
+					return { exitCode: 0 };
+				},
+			};
+			const bash = createBashTool(testDir, { operations, defaultTimeout: 0 });
+			await bash.execute("test-call-no-default-timeout", { command: "true" });
+			expect(timeouts).toEqual([undefined]);
+			expect(bash.description).toContain("Commands have no default timeout");
+			expect(bash.description).not.toContain("stopped after");
+		});
+
+		it("runs commands with editors, pagers and git prompts disabled", async () => {
+			const result = await bashTool.execute("test-call-env", {
+				command: 'echo "$GIT_EDITOR $GIT_TERMINAL_PROMPT $GIT_PAGER $PAGER"',
+			});
+			expect(getTextOutput(result).trim()).toBe("true 0 cat cat");
 		});
 
 		it("should include full output path for truncated timeout and abort errors", async () => {

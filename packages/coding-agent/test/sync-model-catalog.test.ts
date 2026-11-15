@@ -56,6 +56,7 @@ describe("sync-model-catalog", () => {
 			}
 			writeFileSync(join(input, "models.json"), JSON.stringify(providers));
 			writeFileSync(join(input, "providers.json"), JSON.stringify(Object.keys(providers)));
+			writeFileSync(join(input, "facts.json"), JSON.stringify({ "future-9": { reasoning: true } }));
 			const output = join(directory, "published");
 			const result = spawnSync(
 				process.execPath,
@@ -69,6 +70,8 @@ describe("sync-model-catalog", () => {
 			);
 			expect(manifest.shards["openai-codex"]).toBe(createHash("sha256").update(JSON.stringify(shard)).digest("hex"));
 			expect(Object.keys(shard)).toHaveLength(130);
+			const facts = JSON.parse(readFileSync(join(output, "snapshots", manifest.revision, "facts.json"), "utf8"));
+			expect(manifest.facts).toBe(createHash("sha256").update(JSON.stringify(facts)).digest("hex"));
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

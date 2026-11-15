@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ChildProcess } from "node:child_process";
 
 interface PostExitStdioGuardOptions {

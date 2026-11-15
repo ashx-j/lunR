@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { formatTokenCount } from "./accounting.js";
 
 export type GoalStatus =

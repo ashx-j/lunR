@@ -45,8 +45,8 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 |--------|---------|-------------|
 | `tui.editor.deleteCharBackward` | `backspace` | Delete character backward |
 | `tui.editor.deleteCharForward` | `delete`, `ctrl+d` | Delete character forward |
-| `tui.editor.deleteWordBackward` | `ctrl+w`, `alt+backspace` | Delete word backward |
-| `tui.editor.deleteWordForward` | `alt+d`, `alt+delete` | Delete word forward |
+| `tui.editor.deleteWordBackward` | `ctrl+w`, `alt+backspace`, `ctrl+backspace` | Delete word backward |
+| `tui.editor.deleteWordForward` | `alt+d`, `alt+delete`, `ctrl+delete` | Delete word forward |
 | `tui.editor.deleteToLineStart` | `ctrl+u` | Delete to line start |
 | `tui.editor.deleteToLineEnd` | `ctrl+k` | Delete to line end |
 
@@ -83,8 +83,8 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
 | `app.interrupt` | `escape` | Abort the parent; press twice within 500ms to also stop this session's active async subagents |
-| `app.clear` | `ctrl+c` | Clear editor |
-| `app.exit` | `ctrl+d` | Exit (when editor empty) |
+| `app.clear` | `ctrl+c` | Clear editor; a second press within 500ms quits |
+| `app.exit` | `ctrl+d` | Exit when pressed twice within 1.5s on an empty editor; the first press shows a hint. `ctrl+d` still deletes forward when the editor has text |
 | `app.suspend` | `ctrl+z` (none on Windows) | Suspend to background |
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
 | `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows) | Paste image from clipboard; `/paste-image` needs no shortcut |
@@ -172,7 +172,7 @@ Create `~/.lunr/agent/keybindings.json`:
 
 Each action can have a single key or an array of keys. User config overrides defaults.
 
-On native Windows, `app.suspend` has no default binding because Windows terminals do not support Unix job control. If you bind it manually, pi shows a status message instead of suspending. In WSL, the normal Linux `ctrl+z`/`fg` behavior still applies.
+On native Windows, `app.suspend` has no default binding because Windows terminals do not support Unix job control. If you bind it manually, lunR shows a status message instead of suspending. In WSL, the normal Linux `ctrl+z`/`fg` behavior still applies.
 
 ### Emacs Example
 

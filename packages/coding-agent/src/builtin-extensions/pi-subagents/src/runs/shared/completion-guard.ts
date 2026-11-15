@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { Message } from "@earendil-works/pi-ai";
 import { isMutatingBashCommand } from "./long-running-guard.ts";
 import { expectsImplementationMutation } from "./task-intent.ts";

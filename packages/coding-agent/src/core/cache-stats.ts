@@ -34,7 +34,7 @@ export interface ModelPriceSource {
 	getModel(provider: string, modelId: string): { cost: { cacheRead: number } } | undefined;
 }
 
-/** The last request seen by the scan; everything in its prompt should be cached. */
+/** The last request seen by the scan; its prompt length is an estimate of possible cache overlap. */
 interface PreviousRequest {
 	promptTokens: number;
 	modelKey: string;
@@ -132,7 +132,7 @@ function scan(
 }
 
 /**
- * Cumulative cache waste across a session: prompt tokens that should have been
+ * Estimated cache misses across a session: prompt tokens that may have been
  * cache reads (they were in the previous turn's prompt) but were re-billed.
  */
 export function computeCacheWaste(entries: SessionEntry[], models: ModelPriceSource): CacheWasteTotals {

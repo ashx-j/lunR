@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Formatting utilities for display output
  */

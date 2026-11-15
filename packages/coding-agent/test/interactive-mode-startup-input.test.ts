@@ -4,6 +4,8 @@ import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 type QueuedUserInput = { text: string; images?: unknown[] };
 
 type SubmitContext = {
+	runtimeHost: { isDetached: boolean; services: { agentDir: string } };
+	sessionManager: { isPersisted(): boolean };
 	defaultEditor: { onSubmit?: (text: string) => void };
 	editor: {
 		addToHistory?: (text: string) => void;
@@ -38,6 +40,8 @@ const interactiveModePrototype = InteractiveMode.prototype as unknown as Interac
 
 function createSubmitContext(): SubmitContext {
 	return {
+		runtimeHost: { isDetached: false, services: { agentDir: "unused-in-memory-profile" } },
+		sessionManager: { isPersisted: () => false },
 		defaultEditor: {},
 		editor: {
 			addToHistory: vi.fn(),

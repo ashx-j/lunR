@@ -1,0 +1,3 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`readOnlyModeBlockReason > exposes a read-only system-prompt addendum 1`] = `"You are in read-only mode. Investigate and answer without making changes. If the user asks for a plan, you may call present_plan for approval. Do not implement until the user switches modes or approves that plan. Shell use is limited to known informational forms; project scripts, tests, package executors, and interpreter execution require a writable mode."`;

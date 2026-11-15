@@ -7,7 +7,7 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai/compat";
+import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import { computeContextBreakdown } from "../core/context-breakdown.ts";
 import type { ToolDefinition } from "../core/extensions/types.ts";
 import { findExactModelReferenceMatch } from "../core/model-resolver.ts";
@@ -16,12 +16,12 @@ import { runtimeScope } from "../core/runtime-scope.ts";
 import type { SessionInfo } from "../core/session-manager.ts";
 import { SessionManager } from "../core/session-manager.ts";
 import type { BridgeSession } from "./agent-bridge.ts";
-import { isGatewayOwner } from "./authz.ts";
-import { createPicker, type PickerItem } from "./buttons.ts";
+import { createPicker, gatewayPickerGeneration, type PickerItem } from "./buttons.ts";
 import { defaultGatewayConfig, type GatewayConfig } from "./config.ts";
 import { conversationBinding } from "./conversations.ts";
 import { FORWARDED_COMMANDS, MOBILE_COMMANDS, resolveWithinRoots } from "./mobile-commands.ts";
 import type { BridgeLike } from "./router.ts";
+import { splitMessage } from "./text.ts";
 import type { MessageEvent, PlatformAdapter } from "./types.ts";
 
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -35,7 +35,7 @@ const MODEL_CACHE_CAP = 100;
 const SESSIONS_CACHE_CAP = 100;
 
 interface ModelCacheEntry {
-	models: Model<any>[];
+	models: Model<Api>[];
 	expires: number;
 }
 
@@ -54,7 +54,7 @@ function evictLRU<K, V>(map: Map<K, V>, cap: number): void {
 	}
 }
 
-function getCachedModels(key: string): Model<any>[] | undefined {
+function getCachedModels(key: string): Model<Api>[] | undefined {
 	const cached = modelCache.get(key);
 	if (!cached) return undefined;
 	if (Date.now() > cached.expires) {
@@ -67,7 +67,7 @@ function getCachedModels(key: string): Model<any>[] | undefined {
 	return cached.models;
 }
 
-function setCachedModels(key: string, models: Model<any>[]): void {
+function setCachedModels(key: string, models: Model<Api>[]): void {
 	modelCache.set(key, { models, expires: Date.now() + MODEL_CACHE_TTL_MS });
 	evictLRU(modelCache, MODEL_CACHE_CAP);
 }
@@ -96,6 +96,7 @@ export interface ChatCommandContext {
 	bridge: BridgeLike;
 	cfg?: GatewayConfig;
 	session?: BridgeSession;
+	pickerGeneration?: number;
 	reply(text: string): Promise<void>;
 	args: string;
 }
@@ -137,9 +138,9 @@ function formatRelativeTime(date: Date): string {
 	return `${days}d ago`;
 }
 
-function formatModelList(models: Model<any>[], maxLines = MAX_MODEL_LIST_LINES): string[] {
+function formatModelList(models: Model<Api>[], maxLines = MAX_MODEL_LIST_LINES): string[] {
 	if (models.length === 0) return ["No models available."];
-	const byProvider = new Map<string, Model<any>[]>();
+	const byProvider = new Map<string, Model<Api>[]>();
 	for (const model of models) {
 		const list = byProvider.get(model.provider) ?? [];
 		list.push(model);
@@ -163,8 +164,8 @@ function formatModelList(models: Model<any>[], maxLines = MAX_MODEL_LIST_LINES):
 	];
 }
 
-function groupModelsByProvider(models: Model<any>[]): Map<string, Model<any>[]> {
-	const byProvider = new Map<string, Model<any>[]>();
+function groupModelsByProvider(models: Model<Api>[]): Map<string, Model<Api>[]> {
+	const byProvider = new Map<string, Model<Api>[]>();
 	for (const model of models) {
 		const list = byProvider.get(model.provider) ?? [];
 		list.push(model);
@@ -182,7 +183,7 @@ function truncateModelId(id: string): string {
 	return truncate(name, MODEL_ID_MAX);
 }
 
-async function refreshAndCacheModels(session: BridgeSession, key: string): Promise<Model<any>[]> {
+async function refreshAndCacheModels(session: BridgeSession, key: string): Promise<Model<Api>[]> {
 	const runtime: ModelRuntime = session.modelRuntime;
 	await runtime.refresh();
 	const models = [...(await runtime.getAvailable())].sort(
@@ -192,7 +193,7 @@ async function refreshAndCacheModels(session: BridgeSession, key: string): Promi
 	return models;
 }
 
-async function setModelAndReply(ctx: ChatCommandContext, model: Model<any>): Promise<void> {
+async function setModelAndReply(ctx: ChatCommandContext, model: Model<Api>): Promise<void> {
 	const session = ctx.session!;
 	try {
 		await session.setModel(model);
@@ -217,9 +218,8 @@ const newCommand: ChatCommand = {
 	async handler(ctx) {
 		await ctx.bridge.reset(ctx.key);
 		const cfg = ctx.cfg ?? defaultGatewayConfig();
-		const owner = isGatewayOwner(ctx.event.source, cfg);
 		let ready = Boolean(conversationBinding(ctx.key)?.cwd);
-		if (!ready && owner && cfg.defaultProject) {
+		if (!ready && cfg.defaultProject) {
 			try {
 				resolveWithinRoots(cfg.defaultProject, cfg.projectRoots ?? []);
 				ready = true;
@@ -228,9 +228,7 @@ const newCommand: ChatCommand = {
 		await ctx.reply(
 			ready
 				? "Session reset. Send a message to start fresh in the approved project."
-				: owner
-					? "Session reset. Use /project to choose an approved project before sending a message."
-					: "Session reset. Ask the computer's gateway owner to configure this chat's project access locally.",
+				: "Session reset. Use /project to choose an approved project before sending a message.",
 		);
 	},
 };
@@ -336,6 +334,7 @@ const modelCommand: ChatCommand = {
 				{
 					kind: "model",
 					sessionKey: ctx.key,
+					generation: ctx.pickerGeneration,
 					invokerId: ctx.event.source.userId,
 					items: providerItems,
 					perPage: PROVIDER_PER_PAGE,
@@ -389,7 +388,7 @@ const modelCommand: ChatCommand = {
 				},
 				pickerOpts,
 			);
-			if (!result.success) {
+			if (!result.success && ctx.pickerGeneration === gatewayPickerGeneration(ctx.key)) {
 				const currentText = `${current?.provider ?? "none"}/${current?.id ?? "none"}`;
 				const lines = formatModelList(models);
 				await ctx.reply([`Current: ${currentText}`, ...lines, "Use /model <n> or /model <provider/id>"].join("\n"));
@@ -461,6 +460,7 @@ const sessionsCommand: ChatCommand = {
 				{
 					kind: "sessions",
 					sessionKey: ctx.key,
+					generation: ctx.pickerGeneration,
 					invokerId: ctx.event.source.userId,
 					items,
 					perPage: 8,
@@ -475,7 +475,7 @@ const sessionsCommand: ChatCommand = {
 				},
 				{ replyTo: ctx.event.messageId, threadId: ctx.event.source.threadId },
 			);
-			if (!result.success) {
+			if (!result.success && ctx.pickerGeneration === gatewayPickerGeneration(ctx.key)) {
 				const lines = sessions.map((s, i) => {
 					const marker = s.path === currentFile ? " (current)" : "";
 					const label = s.name ? truncate(s.name, 40) : truncate(s.firstMessage, 40) || "(empty)";
@@ -654,6 +654,7 @@ const thinkingCommand: ChatCommand = {
 				{
 					kind: "thinking",
 					sessionKey: ctx.key,
+					generation: ctx.pickerGeneration,
 					invokerId: ctx.event.source.userId,
 					items,
 					perPage: levels.length,
@@ -666,7 +667,7 @@ const thinkingCommand: ChatCommand = {
 				},
 				{ replyTo: ctx.event.messageId, threadId: ctx.event.source.threadId },
 			);
-			if (!result.success) {
+			if (!result.success && ctx.pickerGeneration === gatewayPickerGeneration(ctx.key)) {
 				await ctx.reply(`Level: ${current} — available: ${levels.join(", ")}`);
 			}
 			return;
@@ -717,7 +718,8 @@ export function formatHelpText(): string {
 		lines.push(`${names} — ${cmd.description}`);
 	}
 	for (const cmd of botCommandSpecs()) {
-		if (!CHAT_COMMANDS.some((c) => c.name === cmd.name)) lines.push(`/${cmd.name} · ${cmd.description}`);
+		if (cmd.name !== "start" && !CHAT_COMMANDS.some((c) => c.name === cmd.name))
+			lines.push(`/${cmd.name} · ${cmd.description}`);
 	}
 	lines.push("");
 	lines.push("Tap to pick: /model, /thinking, /sessions (run without args to see buttons).");
@@ -730,6 +732,7 @@ export function formatHelpText(): string {
  * router should continue when a command mutates the event and wants a normal turn.
  */
 export async function runChatCommand(cmd: ChatCommand, ctx: ChatCommandContext): Promise<boolean> {
+	ctx.pickerGeneration ??= gatewayPickerGeneration(ctx.key);
 	if (!cmd.bypassBusy && ctx.bridge.getStatus(ctx.key).busy) {
 		await ctx.reply("⏳ busy — /stop first or wait");
 		return true;
@@ -742,6 +745,7 @@ export async function runChatCommand(cmd: ChatCommand, ctx: ChatCommandContext):
 		}
 		ctx.session = session;
 	}
+	if (ctx.pickerGeneration !== gatewayPickerGeneration(ctx.key)) return true;
 	try {
 		const settingsManager = ctx.session?.settingsManager;
 		const consumed = settingsManager
@@ -761,10 +765,17 @@ export async function runChatCommand(cmd: ChatCommand, ctx: ChatCommandContext):
 	}
 }
 
-/** Reply helper used by the router to build the ChatCommandContext. */
+/**
+ * Reply helper used by the router to build the ChatCommandContext. Long replies are split
+ * to the adapter limit; a failed send throws so the caller reports it instead of going silent.
+ */
 export async function sendCommandReply(adapter: PlatformAdapter, event: MessageEvent, text: string): Promise<void> {
-	await adapter.send(event.source.chatId, prefixLines(text, ""), {
-		replyTo: event.messageId,
-		threadId: event.source.threadId,
-	});
+	const chunks = splitMessage(prefixLines(text, ""), adapter.maxMessageLength);
+	for (const [index, chunk] of chunks.entries()) {
+		const result = await adapter.send(event.source.chatId, chunk, {
+			replyTo: index === 0 ? event.messageId : undefined,
+			threadId: event.source.threadId,
+		});
+		if (!result.success) throw new Error(result.error ?? "Reply could not be sent.");
+	}
 }

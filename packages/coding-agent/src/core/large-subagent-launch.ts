@@ -1,3 +1,5 @@
+import { resolveSubagentRequestParams } from "../builtin-extensions/pi-subagents/src/runs/foreground/request-params.ts";
+
 /** Number of children above which aggregate launch confirmation engages. */
 export const LARGE_SUBAGENT_LAUNCH_THRESHOLD = 2;
 
@@ -10,11 +12,12 @@ function isManagementCall(args: Record<string, unknown>): boolean {
 	return typeof args.action === "string" && args.action.length > 0;
 }
 
-function isAsyncDetached(args: Record<string, unknown>): boolean {
-	return args.async === true && args.clarify !== true;
+/** Children launched by one call's `tasks` and `chain[].parallel` entries. */
+export function effectiveLargeSubagentLaunchCount(input: Record<string, unknown>): number {
+	return fanoutCount(resolveSubagentRequestParams(input));
 }
 
-export function effectiveLargeSubagentLaunchCount(args: Record<string, unknown>): number {
+function fanoutCount(args: Record<string, unknown>): number {
 	let total = 0;
 	if (Array.isArray(args.tasks)) {
 		for (const task of args.tasks) total += countEntry(task);
@@ -30,9 +33,12 @@ export function effectiveLargeSubagentLaunchCount(args: Record<string, unknown>)
 	return total;
 }
 
-function siblingSingleCount(args: Record<string, unknown>): number {
-	if (isManagementCall(args) || isAsyncDetached(args)) return 0;
-	if (Array.isArray(args.tasks) || Array.isArray(args.chain)) return 0;
+/** Children one sibling call launches: its fanout, or 1 for a single task. Control actions launch none. */
+function siblingLaunchCount(input: Record<string, unknown>): number {
+	const args = resolveSubagentRequestParams(input);
+	if (isManagementCall(args)) return 0;
+	if ((Array.isArray(args.tasks) && args.tasks.length > 0) || (Array.isArray(args.chain) && args.chain.length > 0))
+		return fanoutCount(args);
 	return typeof args.task === "string" &&
 		args.task.length > 0 &&
 		typeof args.description === "string" &&
@@ -45,18 +51,23 @@ interface AssistantMessageLike {
 	content?: ReadonlyArray<{ type?: string; name?: string; arguments?: unknown }>;
 }
 
+/**
+ * Children launched by every `subagent` call in the assistant turn, so mixed
+ * single and fanout calls add up. Falls back to this call's own fanout when the
+ * turn message is missing or does not include it.
+ */
 export function effectiveLargeSubagentLaunchCountForTurn(
 	args: Record<string, unknown>,
 	assistantMessage?: AssistantMessageLike,
 ): number {
 	const own = effectiveLargeSubagentLaunchCount(args);
-	const siblingSingles = (assistantMessage?.content ?? []).reduce((total, block) => {
+	const turnTotal = (assistantMessage?.content ?? []).reduce((total, block) => {
 		if (block.type !== "toolCall" || block.name !== "subagent") return total;
 		const siblingArgs =
 			block.arguments && typeof block.arguments === "object" && !Array.isArray(block.arguments)
 				? (block.arguments as Record<string, unknown>)
 				: undefined;
-		return siblingArgs ? total + siblingSingleCount(siblingArgs) : total;
+		return siblingArgs ? total + siblingLaunchCount(siblingArgs) : total;
 	}, 0);
-	return Math.max(own, siblingSingles);
+	return Math.max(own, turnTotal);
 }

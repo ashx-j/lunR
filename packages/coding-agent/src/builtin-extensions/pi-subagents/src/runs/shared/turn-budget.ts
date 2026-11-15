@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ResolvedTurnBudget, TurnBudgetState } from "../../shared/types.ts";
 
 export const DEFAULT_TURN_BUDGET_GRACE_TURNS = 1;

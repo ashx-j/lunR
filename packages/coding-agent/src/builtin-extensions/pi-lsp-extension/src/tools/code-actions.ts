@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lsp_code_actions — Get available code actions (quick fixes, refactorings) at a position.
  */

@@ -35,7 +35,7 @@ cp permission-gate.ts ~/.lunr/agent/extensions/
 | `question.ts` | Demonstrates `ctx.ui.select()` for asking the user questions with custom UI |
 | `questionnaire.ts` | Multi-question input with tab bar navigation between questions |
 | `tool-override.ts` | Override built-in tools (e.g., add logging/access control to `read`) |
-| `dynamic-tools.ts` | Register tools after startup (`session_start`) and at runtime via command, with prompt snippets and tool-specific prompt guidelines |
+| `dynamic-tools.ts` | Register tools after startup (`session_start`) and at runtime via command |
 | `kimi-deferred-tools.ts` | Search for and progressively activate tools for Kimi's deferred-tool loading protocol |
 | `structured-output.ts` | Final structured-output tool that returns `terminate: true` so the agent can end on the tool call |
 | `built-in-tool-renderer.ts` | Custom compact rendering for built-in tools (read, bash, edit, write) while keeping original behavior |
@@ -49,9 +49,9 @@ cp permission-gate.ts ~/.lunr/agent/extensions/
 | Extension | Description |
 |-----------|-------------|
 | `preset.ts` | Named presets for model, thinking level, tools, and instructions via `--preset` flag and `/preset` command |
-| `plan-mode/` | Claude Code-style plan mode for read-only exploration with `/plan` command and step tracking |
+| `plan-mode/` | Claude Code-style plan mode for read-only exploration with `/plan` command and step tracking. lunR has a built-in `/plan`, which wins over this command in the TUI |
 | `tools.ts` | Interactive `/tools` command to enable/disable tools with session persistence |
-| `handoff.ts` | Transfer context to a new focused session via `/handoff <goal>` |
+| `handoff.ts` | Transfer context to a new focused session via `/handoff <goal>`. lunR has a built-in `/handoff`, which wins over this command in the TUI |
 | `qna.ts` | Extracts questions from last response into editor via `ctx.ui.setEditorText()` |
 | `status-line.ts` | Shows turn progress in footer via `ctx.ui.setStatus()` with themed colors |
 | `github-issue-autocomplete.ts` | Adds `#1234` issue completions by stacking a custom autocomplete provider that preloads open issues from `gh issue list` |
@@ -75,7 +75,7 @@ cp permission-gate.ts ~/.lunr/agent/extensions/
 | `overlay-qa-tests.ts` | Comprehensive overlay QA tests: anchors, margins, stacking, overflow, animation |
 | `doom-overlay/` | DOOM game running as an overlay at 35 FPS (demonstrates real-time game rendering) |
 | `shutdown-command.ts` | Adds `/quit` command demonstrating `ctx.shutdown()` |
-| `reload-runtime.ts` | Adds `/reload-runtime` and `reload_runtime` tool showing safe reload flow |
+| `reload-runtime.ts` | Adds a `/reload-runtime` command showing `ctx.reload()` |
 | `interactive-shell.ts` | Run interactive commands (vim, htop) with full terminal via `user_bash` hook |
 | `inline-bash.ts` | Expands `!{command}` patterns in prompts via `input` event transformation |
 | `input-transform-streaming.ts` | Skips expensive input preprocessing for mid-stream steering via `streamingBehavior` |

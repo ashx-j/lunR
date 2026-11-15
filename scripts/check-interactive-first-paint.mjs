@@ -110,7 +110,51 @@ const optionalModules = [
 	"pi-mcp-adapter/direct-tool-executor.js",
 ];
 
-async function checkRequest(toolUrl, toolKind, browserEnabled = true) {
+/** Tools a session with native tool loading keeps loaded. A new builtin tool fails the deferred run until it is listed here or in DEFERRED_TOOL_GROUPS. */
+const alwaysLoadedTools = [
+	"ast_search",
+	"bash",
+	"code_overview",
+	"edit",
+	"goal_blocked",
+	"goal_complete",
+	"intercom",
+	"load_tools",
+	"mcp",
+	"memory_add",
+	"memory_load",
+	"memory_remove",
+	"present_plan",
+	"read",
+	"subagent_supervisor",
+	"todo",
+	"write",
+];
+/** DEFERRED_TOOL_GROUPS in order, as the deferred run declares them. */
+const deferredTools = [
+	"subagent",
+	"subagent_wait",
+	"web_search",
+	"fetch_content",
+	"get_search_content",
+	"lsp_diagnostics",
+	"lsp_hover",
+	"lsp_definition",
+	"lsp_references",
+	"lsp_symbols",
+	"lsp_rename",
+	"lsp_code_actions",
+	"lsp_completions",
+	"browser",
+	"code_rewrite",
+	"cron",
+	"pr_watch",
+];
+/** First-request tool names per browser setting, from the runs without deferral. */
+const fullToolsByBrowser = new Map();
+
+/** Checks a first request. With `deferred`, the faux model loads tools natively and the deferred groups start unloaded. */
+async function checkRequest(toolUrl, toolKind, browserEnabled = true, deferred = false) {
 	const agentDir = mkdtempSync(join(tmpdir(), "lunr-request-check-"));
 	const home = join(agentDir, "home");
 	const workspace = join(home, "workspace");
@@ -165,6 +209,7 @@ registerHooks({load(url, context, nextLoad) {
 				PI_SKIP_VERSION_CHECK: "1",
 				PI_STARTUP_BENCHMARK_TOOL_URL: toolUrl ?? "",
 				PI_STARTUP_BENCHMARK_TOOL: toolKind ?? "",
+				PI_STARTUP_BENCHMARK_DEFERRED: deferred ? "1" : "",
 			}),
 			stdio: ["ignore", "ignore", "pipe"],
 		},
@@ -184,32 +229,52 @@ registerHooks({load(url, context, nextLoad) {
 		const requestLine = stderr.split(/\r?\n/).find((line) => line.startsWith("LUNR_STARTUP_REQUEST "));
 		assert(requestLine, stderr);
 		const request = JSON.parse(requestLine.slice("LUNR_STARTUP_REQUEST ".length));
-		for (const name of [
-			"read",
-			"bash",
-			"edit",
-			"write",
-			"subagent",
-			"web_search",
-			"fetch_content",
-			"mcp",
-			"lsp_diagnostics",
-			"ast_search",
-			"cron",
-		]) {
-			assert(request.tools.includes(name), `First request is missing ${name}`);
-		}
 		const computerHost = (process.platform === "win32" && ["x64", "arm64"].includes(process.arch)) || (process.platform === "darwin" && process.arch === "arm64");
-		assert.equal(request.tools.includes("computer_load"), computerHost);
-		assert(!request.tools.includes("computer_click"), "Detailed computer tools must load on demand");
-		assert.equal(request.tools.includes("browser"), browserEnabled);
-		assert.equal(
-			request.toolSchemaHash,
-			computerHost
-				? browserEnabled ? "4f547e94fdd1fb78d45e490ef3d404099ecaa1f901f0503de15ad2c7852078b7" : "aba751625ec0818459909c85225b592e2854a4ff908cf77df64cbc35a7b247db"
-				: browserEnabled ? "c7a60ad06073297d688a4ec1b5c7056ae9ff6df1738123b0d471f20aa0a85bbf" : "3693bff47d556206b75ccf61c3c6de2cd53f81e0a40c441fe6210993972287fa",
-			"First request tool payload differs from the baseline fixture",
-		);
+		if (deferred) {
+			const expectedLoaded = [...alwaysLoadedTools, ...(computerHost ? ["computer_load"] : [])].sort();
+			const expectedDeferred = deferredTools.filter((name) => browserEnabled || name !== "browser");
+			assert.deepEqual(request.tools, expectedLoaded, "Deferred first request loads a different tool set");
+			assert.deepEqual(request.deferredTools, expectedDeferred, "Deferred first request declares a different deferred set");
+			const full = fullToolsByBrowser.get(browserEnabled);
+			assert(full, "Run the full first request before the deferred one");
+			assert.deepEqual([...request.tools, ...request.deferredTools].sort(), [...full, "load_tools"].sort());
+			assert.equal(
+				request.loaderHash,
+				browserEnabled
+					? "be7cae2b3656eb818095ac382ae0ba30ed6cee81444cface2bc5aab526215c5f"
+					: "9cf40099c2718ca495d89e54aa05fe3c850f985f660ab75636de2db4ea96be27",
+				"load_tools description or schema differs from the baseline fixture",
+			);
+		} else {
+			for (const name of [
+				"read",
+				"bash",
+				"edit",
+				"write",
+				"subagent",
+				"web_search",
+				"fetch_content",
+				"get_search_content",
+				"mcp",
+				"lsp_diagnostics",
+				"ast_search",
+				"cron",
+				"pr_watch",
+			]) {
+				assert(request.tools.includes(name), `First request is missing ${name}`);
+			}
+			assert.equal(request.tools.includes("computer_load"), computerHost);
+			assert(!request.tools.includes("computer_click"), "Detailed computer tools must load on demand");
+			assert.equal(request.tools.includes("browser"), browserEnabled);
+			assert.equal(
+				request.toolSchemaHash,
+				computerHost
+					? browserEnabled ? "72ffc131ae741b12f0845752834ac10baef4f4b3c2d0589e9f554fc26d7d1a1a" : "72e6a4b3b90a6ad4fd7fcc85b83f4debd792c3f1d234e05a101552f6ca4504be"
+					: browserEnabled ? "4667964a33f8df0b443a8788322cb1423c9492a746579fa729c0eda567df0880" : "798db6e57235adcd252b28667772d8d429558a63d1054b75fdce7f3f8e98226e",
+				"First request tool payload differs from the baseline fixture",
+			);
+			if (!toolUrl && !toolKind) fullToolsByBrowser.set(browserEnabled, request.tools);
+		}
 		assert(request.hasSystemPrompt);
 		assert(stderr.includes('"first_response_completed"'), stderr);
 		if (toolUrl || toolKind) assert(stderr.includes('"first_tool_completed"'), stderr);
@@ -221,7 +286,7 @@ registerHooks({load(url, context, nextLoad) {
 				? "first-turn fetch: real local HTTP extraction completed"
 				: toolKind
 					? `first-turn ${toolKind}: lazy implementation completed`
-					: `stalled optional implementations: first request retains tools and instructions${browserEnabled ? " with browser enabled" : ""}`,
+					: `stalled optional implementations: first request retains ${deferred ? "loaded and deferred tools" : "tools"} and instructions${browserEnabled ? " with browser enabled" : ""}`,
 		);
 		console.log(
 			`  request ${requestMs.toFixed(1)}ms${toolMs === undefined ? "" : `; first tool +${(toolMs - requestMs).toFixed(1)}ms`}`,
@@ -244,6 +309,8 @@ await check(false);
 await check(true);
 await checkRequest();
 await checkRequest(undefined, undefined, false);
+await checkRequest(undefined, undefined, true, true);
+await checkRequest(undefined, undefined, false, true);
 for (const tool of ["subagent", "mcp", "lsp"]) await checkRequest(undefined, tool);
 const server = createServer((_request, response) => {
 	response.writeHead(200, { "Content-Type": "text/html" });

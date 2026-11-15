@@ -1,4 +1,5 @@
 import {
+	type Api,
 	type ImageContent,
 	type Message,
 	type Model,
@@ -56,7 +57,7 @@ const DEFAULT_MODEL = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 0,
 	maxTokens: 0,
-} satisfies Model<any>;
+} satisfies Model<Api>;
 
 type MutableAgentState = Omit<AgentState, "isStreaming" | "streamingMessage" | "pendingToolCalls" | "errorMessage"> & {
 	isStreaming: boolean;
@@ -75,6 +76,7 @@ function createMutableAgentState(
 		systemPrompt: initialState?.systemPrompt ?? "",
 		model: initialState?.model ?? DEFAULT_MODEL,
 		thinkingLevel: initialState?.thinkingLevel ?? "off",
+		deferredTools: initialState?.deferredTools?.slice(),
 		get tools() {
 			return tools;
 		},
@@ -92,6 +94,11 @@ function createMutableAgentState(
 		pendingToolCalls: new Set<string>(),
 		errorMessage: undefined,
 	};
+}
+
+/** Per-run queue boundary. Steering remains part of the active request. */
+export interface AgentRunOptions {
+	consumeFollowUps?: boolean;
 }
 
 /** Options for constructing an {@link Agent}. */
@@ -120,6 +127,7 @@ export interface AgentOptions {
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
+	toolCallMutates?: AgentLoopConfig["toolCallMutates"];
 }
 
 class PendingMessageQueue {
@@ -136,6 +144,17 @@ class PendingMessageQueue {
 
 	hasItems(): boolean {
 		return this.messages.length > 0;
+	}
+
+	hasMessage(predicate: (message: AgentMessage) => boolean): boolean {
+		return this.messages.some(predicate);
+	}
+
+	removeMessage(predicate: (message: AgentMessage) => boolean): boolean {
+		const index = this.messages.findIndex(predicate);
+		if (index === -1) return false;
+		this.messages.splice(index, 1);
+		return true;
 	}
 
 	drain(): AgentMessage[] {
@@ -211,6 +230,8 @@ export class Agent {
 	public maxRetryDelayMs?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	public toolExecution: ToolExecutionMode;
+	/** Flags tool calls that can change state so parallel execution runs them in order. */
+	public toolCallMutates?: AgentLoopConfig["toolCallMutates"];
 
 	constructor(options: AgentOptions = {}) {
 		this._state = createMutableAgentState(options.initialState);
@@ -232,6 +253,7 @@ export class Agent {
 		this.transport = options.transport ?? "auto";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
+		this.toolCallMutates = options.toolCallMutates;
 	}
 
 	/**
@@ -307,6 +329,16 @@ export class Agent {
 		return this.steeringQueue.hasItems() || this.followUpQueue.hasItems();
 	}
 
+	/** Inspect a specific message without draining either queue. */
+	hasQueuedMessage(predicate: (message: AgentMessage) => boolean): boolean {
+		return this.steeringQueue.hasMessage(predicate) || this.followUpQueue.hasMessage(predicate);
+	}
+
+	/** Remove only one matching message that has not entered an agent turn. */
+	removeQueuedMessage(predicate: (message: AgentMessage) => boolean): boolean {
+		return this.steeringQueue.removeMessage(predicate) || this.followUpQueue.removeMessage(predicate);
+	}
+
 	/** Active abort signal for the current run, if any. */
 	get signal(): AbortSignal | undefined {
 		return this.activeRun?.abortController.signal;
@@ -345,20 +377,25 @@ export class Agent {
 	}
 
 	/** Start a new prompt from text, a single message, or a batch of messages. */
-	async prompt(message: AgentMessage | AgentMessage[]): Promise<void>;
+	async prompt(message: AgentMessage | AgentMessage[], options?: AgentRunOptions): Promise<void>;
 	async prompt(input: string, images?: ImageContent[]): Promise<void>;
-	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<void> {
+	async prompt(
+		input: string | AgentMessage | AgentMessage[],
+		imagesOrOptions?: ImageContent[] | AgentRunOptions,
+	): Promise<void> {
 		if (this.activeRun) {
 			throw new Error(
 				"Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
 			);
 		}
+		const images = Array.isArray(imagesOrOptions) ? imagesOrOptions : undefined;
+		const options = Array.isArray(imagesOrOptions) ? undefined : imagesOrOptions;
 		const messages = this.normalizePromptInput(input, images);
-		await this.runPromptMessages(messages);
+		await this.runPromptMessages(messages, options);
 	}
 
 	/** Continue from the current transcript. The last message must be a user or tool-result message. */
-	async continue(): Promise<void> {
+	async continue(options?: AgentRunOptions): Promise<void> {
 		if (this.activeRun) {
 			throw new Error("Agent is already processing. Wait for completion before continuing.");
 		}
@@ -371,20 +408,29 @@ export class Agent {
 		if (lastMessage.role === "assistant") {
 			const queuedSteering = this.steeringQueue.drain();
 			if (queuedSteering.length > 0) {
-				await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
+				await this.runPromptMessages(queuedSteering, { ...options, skipInitialSteeringPoll: true });
 				return;
 			}
 
-			const queuedFollowUps = this.followUpQueue.drain();
+			const queuedFollowUps = options?.consumeFollowUps === false ? [] : this.followUpQueue.drain();
 			if (queuedFollowUps.length > 0) {
-				await this.runPromptMessages(queuedFollowUps);
+				await this.runPromptMessages(queuedFollowUps, options);
 				return;
 			}
 
 			throw new Error("Cannot continue from message role: assistant");
 		}
 
-		await this.runContinuation();
+		await this.runContinuation(options);
+	}
+
+	/** Start queued user work even if a cancelled retry left a non-assistant transcript tail. */
+	async continueQueued(): Promise<void> {
+		if (this.activeRun) throw new Error("Agent is already processing.");
+		const steering = this.steeringQueue.drain();
+		const messages = steering.length > 0 ? steering : this.followUpQueue.drain();
+		if (messages.length === 0) return;
+		await this.runPromptMessages(messages, { skipInitialSteeringPoll: steering.length > 0 });
 	}
 
 	private normalizePromptInput(
@@ -408,7 +454,7 @@ export class Agent {
 
 	private async runPromptMessages(
 		messages: AgentMessage[],
-		options: { skipInitialSteeringPoll?: boolean } = {},
+		options: AgentRunOptions & { skipInitialSteeringPoll?: boolean } = {},
 	): Promise<void> {
 		await this.runWithLifecycle(async (signal) => {
 			await runAgentLoop(
@@ -422,11 +468,11 @@ export class Agent {
 		});
 	}
 
-	private async runContinuation(): Promise<void> {
+	private async runContinuation(options?: AgentRunOptions): Promise<void> {
 		await this.runWithLifecycle(async (signal) => {
 			await runAgentLoopContinue(
 				this.createContextSnapshot(),
-				this.createLoopConfig(),
+				this.createLoopConfig(options),
 				(event) => this.processEvents(event),
 				signal,
 				this.streamFn,
@@ -439,10 +485,11 @@ export class Agent {
 			systemPrompt: this._state.systemPrompt,
 			messages: this._state.messages.slice(),
 			tools: this._state.tools.slice(),
+			deferredTools: this._state.deferredTools,
 		};
 	}
 
-	private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
+	private createLoopConfig(options: AgentRunOptions & { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
 		let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
 		const activeRun = this.activeRun;
 		return {
@@ -456,6 +503,7 @@ export class Agent {
 			thinkingBudgets: this.thinkingBudgets,
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			toolExecution: this.toolExecution,
+			toolCallMutates: this.toolCallMutates,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			prepareNextTurn:
@@ -477,7 +525,7 @@ export class Agent {
 				}
 				return this.steeringQueue.drain();
 			},
-			getFollowUpMessages: async () => this.followUpQueue.drain(),
+			getFollowUpMessages: async () => (options.consumeFollowUps === false ? [] : this.followUpQueue.drain()),
 			shouldStopAfterTurn: () => activeRun?.gracefulStopRequested === true,
 		};
 	}

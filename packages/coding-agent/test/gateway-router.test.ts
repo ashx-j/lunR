@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QUEUED, type TurnCallbacks } from "../src/gateway/agent-bridge.ts";
-import { defaultGatewayConfig, type GatewayConfig } from "../src/gateway/config.ts";
+import { defaultGatewayConfig, type GatewayConfig, saveGatewayConfig } from "../src/gateway/config.ts";
 import { createPairingStore } from "../src/gateway/pairing.ts";
 import { flushGatewayOutbox, startGatewayPresenter, stopGatewayPresenter } from "../src/gateway/presenter.ts";
 import { type BridgeLike, createRouter } from "../src/gateway/router.ts";
@@ -178,6 +178,12 @@ describe("router: group gating", () => {
 		expect(adapter.sent).toEqual([]);
 		expect(bridge.calls).toEqual([]);
 	});
+
+	it("forwarded commands in groups reach the session like they do in DMs", async () => {
+		const { bridge, router } = makeDeps(makeConfig());
+		await router.handleEvent(groupEvent("/cron list"));
+		expect(bridge.calls.map((call) => call.event.text)).toEqual(["/cron list"]);
+	});
 });
 
 describe("router: authorization", () => {
@@ -243,6 +249,48 @@ describe("router: normal path", () => {
 		vi.restoreAllMocks();
 		expect(adapter.sent).toHaveLength(3);
 		expect(JSON.parse(readFileSync(join(dir, "gateway-outbox.json"), "utf8"))).toEqual([]);
+	});
+
+	it("sends one notice when a chunk fails permanently and keeps the failed batch on disk", async () => {
+		const { adapter, bridge, router } = makeDeps(makeConfig());
+		bridge.results = ["x".repeat(230)];
+		const original = adapter.send.bind(adapter);
+		vi.spyOn(adapter, "send").mockImplementation(async (chat, text, opts) => {
+			if (adapter.sent.length === 1 && text.startsWith("x")) return { success: false, retryable: false };
+			return original(chat, text, opts);
+		});
+		await router.handleEvent(dmEvent("go"));
+		expect(adapter.sent.map((m) => m.text)).toEqual([
+			expect.stringMatching(/^x+ \(1\/3\)$/),
+			"⚠ Part of a reply could not be delivered.",
+		]);
+		const pending = JSON.parse(readFileSync(join(dir, "gateway-outbox.json"), "utf8"));
+		expect(pending).toHaveLength(2);
+		expect(pending.every((item: { failed?: boolean }) => item.failed)).toBe(true);
+	});
+
+	it("keeps only the newest failed batches", async () => {
+		const { adapter, bridge, router } = makeDeps(makeConfig());
+		vi.spyOn(adapter, "send").mockResolvedValue({ success: false, retryable: false });
+		for (let i = 0; i < 22; i++) {
+			bridge.results = [`answer ${i}`];
+			await router.handleEvent(dmEvent("go"));
+		}
+		const pending: Array<{ text: string; batchId: string }> = JSON.parse(
+			readFileSync(join(dir, "gateway-outbox.json"), "utf8"),
+		);
+		expect(new Set(pending.map((item) => item.batchId)).size).toBe(20);
+		expect(pending.at(-1)?.text).toBe("answer 21");
+		expect(pending.some((item) => item.text === "answer 0")).toBe(false);
+	});
+
+	it("splits long command replies to the adapter limit", async () => {
+		const { adapter, router } = makeDeps(makeConfig());
+		await router.handleEvent(dmEvent("/help"));
+		expect(adapter.sent.length).toBeGreaterThan(1);
+		expect(adapter.sent.every((m) => m.text.length <= adapter.maxMessageLength)).toBe(true);
+		expect(adapter.sent[0].opts?.replyTo).toBe("msg1");
+		expect(adapter.sent[1].opts?.replyTo).toBeUndefined();
 	});
 
 	it("falls back to a complete durable reply when final preview edit reports failure", async () => {
@@ -358,6 +406,75 @@ describe("router: normal path", () => {
 		// ...and the remainder went out as a new message.
 		expect(adapter.sent[1].text.endsWith(" (2/2)")).toBe(true);
 		expect(adapter.sent[0].text.endsWith("…")).toBe(true);
+	});
+});
+
+describe("router: fresh streaming authorization", () => {
+	it.each(["preview edit", "final edit", "failed initial send", "failed final edit", "pairing"])(
+		"stops delivery after revocation before %s",
+		async (stage) => {
+			const cfg = makeConfig((c) => {
+				c.streaming.enabled = true;
+				c.streaming.editIntervalMs = 0;
+				c.streaming.bufferThreshold = 1;
+				if (stage === "pairing") c.telegram.allowedUsers = [];
+			});
+			saveGatewayConfig(cfg);
+			if (stage === "pairing") {
+				const pairing = createPairingStore({ dir });
+				pairing.approve("telegram", pairing.issueCode("telegram", "u1")!);
+			}
+			const { adapter, bridge, router } = makeDeps(cfg);
+			const revoke = () => {
+				cfg.telegram.allowedUsers = [];
+				saveGatewayConfig(cfg);
+				if (stage === "pairing")
+					writeFileSync(join(dir, "store.json"), JSON.stringify({ pending: [], approved: [] }));
+			};
+			if (stage === "failed initial send")
+				vi.spyOn(adapter, "send").mockImplementationOnce(async (chatId, text, opts) => {
+					adapter.sent.push({ chatId, text, opts });
+					return { success: false, retryable: true };
+				});
+			if (stage === "failed final edit")
+				vi.spyOn(adapter, "editMessage").mockImplementationOnce(async (chatId, messageId, text) => {
+					adapter.edits.push({ chatId, messageId, text });
+					revoke();
+					return { success: false, retryable: true };
+				});
+			bridge.results = ["private final answer"];
+			bridge.onRunTurn = async (callbacks) => {
+				callbacks.onDelta?.("first preview");
+				await new Promise((resolve) => setImmediate(resolve));
+				expect(adapter.sent).toHaveLength(1);
+				if (stage !== "failed final edit") revoke();
+				if (stage === "preview edit" || stage === "failed initial send" || stage === "pairing") {
+					callbacks.onDelta?.(" more private text");
+					await new Promise((resolve) => setImmediate(resolve));
+				}
+			};
+			await router.handleEvent(dmEvent("go"));
+			await flushGatewayOutbox();
+			expect(adapter.sent).toHaveLength(1);
+			expect(adapter.edits).toHaveLength(stage === "failed final edit" ? 1 : 0);
+		},
+	);
+
+	it("checks authorization before sending the first preview or the final reply", async () => {
+		const cfg = makeConfig((c) => {
+			c.streaming.enabled = true;
+			c.streaming.bufferThreshold = 1;
+		});
+		saveGatewayConfig(cfg);
+		const { adapter, bridge, router } = makeDeps(cfg);
+		bridge.onRunTurn = (callbacks) => {
+			cfg.telegram.allowedUsers = [];
+			saveGatewayConfig(cfg);
+			callbacks.onDelta?.("private answer");
+		};
+		await router.handleEvent(dmEvent("go"));
+		expect(adapter.sent).toEqual([]);
+		expect(adapter.edits).toEqual([]);
 	});
 });
 

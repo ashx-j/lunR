@@ -1,6 +1,214 @@
 # Changelog
 
-lunR is derived from pi. The published npm package is **`@ashx-j/lunr@0.2.25`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+lunR is derived from pi. The npm package is **`@ashx-j/lunr@0.2.40`**. Versioned sections below (`0.80.x` and earlier) are **upstream pi history** and do not describe lunR releases.
+
+## [Unreleased]
+
+## [0.2.40] - 2026-10-25
+
+### Added
+
+- 167 more providers in `/login`: every models.dev provider with an OpenAI- or Anthropic-compatible endpoint and an API key variable, such as Nebius, SiliconFlow, Baseten, Chutes, Novita, SambaNova, Volcengine and the MiniMax, Alibaba and Tencent coding plans. Their models arrive with the published catalog after login and through the provider's own model list.
+- A logged-in provider's new models show up as soon as its model list names them, before models.dev or the hourly catalog has them. lunR reads the list of every logged-in provider that has one, including Anthropic and Google with an API key. A new id takes its settings from the closest models.dev model, or starts with a 128K window, 8K output and no thinking controls when nothing is known.
+- `/refresh` says when a Claude subscription's model list came from an older Claude Code and `/login anthropic` would update it.
+- Print-mode sessions show in `/resume`, tagged `print`.
+
+### Changed
+
+- New lab models reach the catalog the day models.dev lists them. Thinking levels, prices, long-context price tiers and limits come from models.dev instead of hand-kept id lists, which had dropped models such as MiniMax-M3.1-Flash.
+- The thinking picker hides levels a model does not accept. Claude no longer shows "minimal", and neither do GPT-5.1 and later. "Off" sends effort "none" where the model takes it, so those models stop reasoning instead of reasoning anyway.
+- Direct OpenAI models start at their base price tier's 272K window whenever a long-context tier costs more. GPT-6 and the Pro models used to start at 1.05M and bill up to twice the rate above 272K.
+- Prices follow models.dev, including its long-context tiers (Haiku 5.5 above 100K, Grok above 200K). DeepSeek V4 moved up to its list price.
+- Claude subscriptions use Claude Code 2.1.310, which lists Opus, Sonnet and Haiku 5.5. Existing connections keep their older model list until `/login anthropic`.
+- Logging in to a provider with no configured default model picks its first model instead of showing an error.
+- Small context windows compact less often. The compaction reserve is capped at 25% of the window and kept tokens at 40%.
+- Provider errors show a readable message instead of raw JSON, with a `/login` hint on 401 and 403. `lunr doctor` counts environment keys and custom providers.
+- A TUI cron owner that skips jobs only the gateway can deliver hands the lease to the gateway. `cron resume` retries interrupted jobs, and missed one-shot jobs are reported.
+- The npm package is 5.41 MB packed, down from 10.96 MB. It no longer ships source maps or catalog extras.
+
+### Fixed
+
+- Claude Opus 5.5, Sonnet 5.5 and Haiku 5.5 appear in the catalog and run reasoning turns with adaptive thinking instead of failing with a 400. Opus 5 gets adaptive thinking too.
+- Copilot sends Claude Fable and GPT-6 to the right API.
+- `/logout` removes the provider's `provider/...` entries from enabled models, and startup removes ones left by earlier logouts, so lunR stops warning about them on every start.
+- Read-only mode blocks commands that bash rewrites before running them (`$(...)`, brace lists, `./rm`, `HOME=` or `PATH=` prefixes, `git -C`, `file -C`, `yarn`, globs after a dash-only prefix), so a read-only session can no longer write files that way.
+- Protected paths match case-insensitively on macOS. Transcripts are created with mode 0600 and session folders with 0700.
+- A bash command killed by a signal reports an error instead of success.
+- `/plan` followed by a newline and a task runs `/plan`. Slash commands split on any whitespace, drafts are restored, Alt+Enter runs builtin commands and clears the editor, and `/compact` during a compaction says one is running.
+- The gateway forwards commands in every chat and keeps Discord native sessions working.
+- The onboarding sign-in rows stay on one line at 80 columns.
+- The terminal title is restored on exit.
+
+## [0.2.39] - 2026-10-20
+
+### Added
+
+- First launch without a provider shows an onboarding screen: sign in with an account, sign in with an API key, connect a custom OpenAI-compatible endpoint, or skip. It returns on every launch until a login exists and no usable model is set. After a login with no default model, `/model` opens on its own.
+- `/help` prints the commands and keys you need most.
+- An unknown `/word` goes back to the editor with suggestions instead of being sent to the model. Start with a space to send it as a message. Paths like `/tmp` still go through.
+
+### Changed
+
+- `/settings` groups its rows under Model, Agent, Display, Features and Terminal headings. Transport, HTTP idle timeout, prompt cache, hardware cursor, padding, autocomplete and clear-on-shrink rows moved into a new Advanced submenu at the bottom. Search still matches setting names, not headings; searching for an Advanced setting shows the Advanced row with the matching names.
+- Ctrl+D on an empty editor quits only on a second press within 1.5 seconds. The first press shows `Press Ctrl+D again to exit`.
+- The `/` list is shorter. Aliases (`/auth`, `/deauth`, `/effort`, `/reasoning`, `/sessions`, `/title`, `/exit`), `/read`, `/yolo`, `/auto` and `/debug` still work when typed but are hidden. `/search` now also runs a web search (`/websearch` is a hidden alias for one release). `/chain` runs workflows and prompt-template chains by name (`/chain-workflows` and `/chain-prompts` are hidden aliases for one release).
+- The no-key message is two lines: run `/login`, then `/model`, plus a docs link.
+- Identical errors or warnings in a row collapse into one line ending in `(×N)`.
+- With no model, the chatbox shows `no model` and the footer shows `no model · /login`.
+- `lunr --help` starts with a Common options block and no longer claims `--provider` defaults to google.
+
+### Removed
+
+- `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh` and `/max`. Use `/thinking <level>` or Ctrl+T.
+
+## [0.2.38] - 2026-10-18
+
+### Added
+
+- `/settings` Notifications rings the terminal bell or sends a desktop notification when a run finishes or stops for an approval or question. It stays quiet while the terminal reports that lunR's window has focus. Off by default.
+- `lunr doctor` checks Node, the config folder, saved logins, the default model, the model catalog's age, a Claude subscription's managed Claude Code, Chromium and the gateway, and prints a fix for each problem. It never prints credentials.
+- `lunr doctor keys` asks for Shift+Enter, Alt+Enter and the image-paste key and says which ones reached lunR and what the terminal sent instead.
+
+### Changed
+
+- The npm package is about 550 KB smaller. It no longer ships an unused upstream announcement image and other code nothing loads.
+- Auto mode now has a review model check risky actions before they run: shell commands that aren't plain reads, writes outside the project, MCP calls, browser and computer actions, cron changes and full-access subagent launches. Anthropic uses Claude Sonnet 5, as Claude Code does. OpenAI, xAI and Qwen use the session model. Other providers ask you to pick a reviewer when you enter auto. After 3 blocks in a row or 20 in a session, lunR asks you instead. `/settings` → Auto review model changes the reviewer.
+- "Work without asking questions" is no longer tied to auto. `/goal`, subagents and the ACP Autonomous mode keep it in any permission mode, and subagents follow their parent's mode. A goal no longer switches yolo to auto; read-only still steps up to yolo for the goal.
+
+### Fixed
+
+- `/settings` no longer offers the `shadow-git` rollback capture mode. It was never built: the menu said it fell back to `copies`, but `/rollback` deleted files like `hybrid` does. A saved `shadow-git` value now behaves as `copies`.
+- `PI_OFFLINE=0` no longer blocks `/refresh` and other live model-catalog lookups. Only `1`, `true` or `yes` turn on offline mode, as the docs say.
+- The MCP setup panel, `/mcp` messages, the invalid-session error and the old extension-folder warning now say lunR instead of Pi. That warning links to lunR's extension docs instead of upstream pi's.
+- Read mode no longer treats `rg --pre`, `git grep -O`, `find -fprint`/`-fls`, `uniq` with an output file, or env variables such as `GIT_EXTERNAL_DIFF`, `PAGER` and `LD_PRELOAD` as read-only, since each can run a program or write a file.
+
+### Removed
+
+- `/share` and `PI_SHARE_VIEWER_URL`. `/share` uploaded the session to a GitHub gist and linked to pi's hosted viewer at pi.dev, which lunR does not run. Use `/export` to write the session to an HTML file instead.
+- The subagent tool's `share` option. It uploaded a child session to a GitHub gist and linked to pi's hosted viewer, which lunR does not run. Child session files stay on disk as before, and runs saved with the old option still resume.
+- The experimental first-run screen that asked to share anonymous usage data. lunR never sent any. The unused `enableAnalytics` and `trackingId` settings and the `FirstTimeSetupComponent` SDK export are gone too; existing values in settings.json are ignored.
+- Two easter eggs inherited from pi: the sponsor tribute card that appeared after picking `opencode/kimi-k2.5`, and the hidden `/arminsayshi` command. Their components are no longer exported.
+
+## [0.2.37] - 2026-10-17
+
+### Fixed
+
+- Claude Opus 5 through a Claude subscription now stays on your plan. lunR used Claude Code's 1M-context Opus, which Claude Code bills from usage credits. `/login anthropic` now asks Claude Code which variant of each model stays on the plan and how large its window is, and lunR compacts before that window. Run `/login anthropic` once after updating.
+
+## [0.2.36] - 2026-10-17
+
+### Fixed
+
+- Claude Haiku 4.5 now works with a Claude subscription or API key. It no longer asks for adaptive thinking, which Anthropic rejected with "adaptive thinking is not supported on this model", and thinking off is really off.
+
+## [0.2.35] - 2026-10-17
+
+### Fixed
+
+- `/login anthropic` selects Claude Code's default model for your plan instead of failing with "default model claude-opus-4-8 is not available". Any provider whose default is not offered now gets its first available model, as at startup.
+- Startup no longer draws a second boot header when a `/scoped-models` pick has no matching model, such as after logging out of its provider. Each unmatched pick now shows as its own warning in the chat.
+
+## [0.2.34] - 2026-10-17
+
+### Added
+
+- `/settings` Scoped models in apps: T3 Code and other connected apps can list only your `/scoped-models` picks instead of every connected model.
+
+### Fixed
+
+- `/login anthropic` no longer fails with "Claude Code model discovery tried to contact Anthropic" when Claude Code is already signed in.
+
+## [0.2.33] - 2026-10-17
+
+### Fixed
+
+- Claude subscription requests now go straight from Claude Code to Anthropic, so your Claude sign-in never passes through lunR. Each generation is still exactly one request.
+
+## [0.2.32] - 2026-10-16
+
+### Fixed
+
+- ACP clients receive a streamed tool call once at start and once with its final input, instead of a growing copy on every streamed piece.
+- ACP no longer asks the client to approve todo updates or other tools lunR treats as read-only.
+- ACP clients can change modes during a turn. Switching to Plan while an approval is open still applies Plan's rules to that tool.
+
+## [0.2.31] - 2026-10-16
+
+### Fixed
+
+- `/login anthropic` honors `CLAUDE_CONFIG_DIR`, replaces a downloaded Claude Code that no longer runs, gives up on a download that stalls for 60 seconds, and ignores a malformed model-discovery line.
+- Claude subscription requests work behind `HTTPS_PROXY`, and Claude Code receives custom CA certificates and the display settings `auth login` needs to open a browser.
+- The Claude Code relay secret no longer appears on the command line, where other local users could read it.
+- After an upstream error, Claude Code gets 2.5 seconds to save a refreshed sign-in before lunR stops it.
+- Connections saved by lunR 0.2.29 drop out of `/model` and ask for `/login anthropic` before the first request.
+- `/logout` labels the Claude subscription and says that Claude Code's own sign-in and downloaded copy stay in place.
+- ACP clients show extension errors and held-question notes as activity instead of assistant text, show unrecognized subagent notices as failed, and tell apart same-name models from one provider.
+
+## [0.2.30] - 2026-10-16
+
+### Changed
+
+- `/login anthropic` downloads its own pinned Claude Code instead of requiring Python and a matching Claude Code install. Existing Claude subscription connections need `/login anthropic` once.
+
+### Fixed
+
+- ACP clients such as T3 Code show extension status and native subagent completion notices as separate activity instead of inside the assistant reply, including after reopening a session. Failed, paused and stopped children no longer show as successful.
+- ACP model pickers show the model name, adding the provider only when two providers offer a model with the same name.
+
+## [0.2.29] - 2026-10-11
+
+### Added
+
+- `lunr --mode acp` lets T3 Code and other ACP clients use native lunR sessions, streamed responses, approvals, MCP servers, and explicit subagents.
+- Bounded GitHub PR watches deliver new feedback and CI results to the owning session through `pr_watch` and `/pr-watch`.
+
+### Changed
+
+- Skill tags default to `$`. Large subagent launch confirmations, footer token totals, tokens per second, Git details, and subscription bars default off. Explicit saved settings still take precedence.
+- Public packages include pi attribution and its complete MIT license in `THIRD_PARTY_NOTICES`.
+
+### Fixed
+
+- Scoped-model startup notices use the TUI renderer, preventing leftover startup borders above the session header.
+
+## [0.2.28] - 2026-10-04
+
+### Fixed
+
+- Session, gateway, goal, and history totals count title, summary, and child requests once, including cached input and failed fallback attempts. Branch navigation retains incurred usage; forks exclude inherited usage.
+- Context estimates include system instructions and tools and discard obsolete measurements after compaction or prompt changes.
+- Provider accounting preserves reported usage and charges, reasoning tokens, and cache writes. Gemini long-context pricing matches the reviewed provider tiers.
+- Usage labels distinguish full input, estimated cache misses, visible thinking, approximate context, and subscription quota. Output-rate counters reset for each response.
+
+## [0.2.27] - 2026-10-04
+
+### Fixed
+
+- Session persistence and rollback retain saved work after failed writes. Project trust covers integration loading, saved sessions, and retention paths.
+- Subagent, browser, web, LSP, and MCP work retain session ownership through cancellation and shutdown.
+- Gateway access revocation and stale controls stop unauthorized actions. Cron execution claims prevent duplicate runs and settle the scheduled turn.
+- Provider errors follow the credential used by each request. Installation teardown, packaged assets, and dependency resolution preserve the required files and notices.
+- Editor undo and narrow rendering preserve draft state. Interactive exit restores a clean terminal without a stats box or resume hint.
+
+### Changed
+
+- Release tests use shorter isolated temporary paths so nested intercom socket tests can start on POSIX systems.
+- Shipped guidance and tool descriptions match the current lunR behavior. Release preparation runs on a branch and tags only an explicitly selected merged commit.
+
+## [0.2.26] - 2026-09-27
+
+### Added
+
+- Image-only native computer control uses bounded screenshots, fresh observation tokens, one action with its post-action image, and explicit recovery details. It supports Windows x64/arm64 and Apple Silicon macOS with optional platform-specific runtime packages.
+
+### Changed
+
+- Paired and allowlisted gateway users can use approved projects, sessions, permissions, downloads, and Discord suggestions without a second owner grant.
+- Async chain rows show pending children and give the next chain step a clearer handoff. Everyday delegated work now defaults to standard-tier guidance.
+
+### Fixed
+
+- Large child image events are chunked and reconstructed without losing token accounting. Current CI fixtures match the merged provider and first-request schemas.
 
 ## [0.2.25] - 2026-09-26
 

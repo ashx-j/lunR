@@ -1,6 +1,6 @@
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve as nodeResolvePath, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve as nodeResolvePath, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnProcessSync } from "./child-process.ts";
 
@@ -30,6 +30,33 @@ export function canonicalizePath(path: string): string {
 		return realpathSync(path);
 	} catch {
 		return path;
+	}
+}
+
+/** Resolve an existing target, or the nearest existing parent of a new target.
+ * Permission checks must not fall back to an unresolved alias on other I/O errors.
+ */
+export function canonicalizeTargetPath(path: string): string {
+	let ancestor = nodeResolvePath(path);
+	const suffix: string[] = [];
+	for (;;) {
+		try {
+			return join(realpathSync(ancestor), ...suffix);
+		} catch (error) {
+			if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") throw error;
+			// A dangling link is an existing alias with an unresolved destination.
+			// Reject it instead of treating it as an ordinary missing filename.
+			try {
+				if (lstatSync(ancestor).isSymbolicLink()) throw new Error(`Cannot resolve symbolic link: ${ancestor}`);
+			} catch (statError) {
+				if (!statError || typeof statError !== "object" || !("code" in statError) || statError.code !== "ENOENT")
+					throw statError;
+			}
+			const parent = dirname(ancestor);
+			if (parent === ancestor) throw error;
+			suffix.unshift(basename(ancestor));
+			ancestor = parent;
+		}
 	}
 }
 

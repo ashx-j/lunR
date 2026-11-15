@@ -14,6 +14,8 @@ See these complete provider examples:
 - [`examples/extensions/custom-provider-anthropic/`](../examples/extensions/custom-provider-anthropic/)
 - [`examples/extensions/custom-provider-gitlab-duo/`](../examples/extensions/custom-provider-gitlab-duo/)
 
+The examples import pi's `@earendil-works/pi-*` package names. lunR's extension loader also accepts those names, so they work as written.
+
 ## Table of Contents
 
 - [Example Extensions](#example-extensions)
@@ -211,7 +213,7 @@ models: [{
   id: "custom-model",
   // ...
   reasoning: true,
-  thinkingLevelMap: {              // map pi levels to provider values; null hides unsupported levels
+  thinkingLevelMap: {              // map lunR levels to provider values; null hides unsupported levels
     minimal: null,
     low: null,
     medium: null,
@@ -234,10 +236,6 @@ Use `openrouter` for OpenRouter-style `reasoning: { effort }` controls. Use `tog
 Use `cacheControlFormat: "anthropic"` for OpenAI-compatible providers that expose Anthropic-style prompt caching via `cache_control` on the system prompt, last tool definition, and last user/assistant text content.
 
 For Anthropic-compatible providers using `api: "anthropic-messages"`, set `compat.forceAdaptiveThinking: true` on models or providers whose upstream model requires adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`). Built-in adaptive Claude models set this automatically. Set `compat.allowEmptySignature: true` only for providers that emit empty thinking signatures and expect `signature: ""` on replay.
-
-> Migration note: Mistral moved from `openai-completions` to `mistral-conversations`.
-> Use `mistral-conversations` for native Mistral models.
-> If you intentionally route Mistral-compatible/custom endpoints through `openai-completions`, set `compat` flags explicitly as needed.
 
 ### Auth Header
 
@@ -369,12 +367,12 @@ interface OAuthCredentials {
 For providers with non-standard APIs, implement `streamSimple`. Study the existing provider implementations before writing your own:
 
 **Reference implementations:**
-- [anthropic.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/providers/anthropic.ts) - Anthropic Messages API
-- [mistral.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/providers/mistral.ts) - Mistral Conversations API
-- [openai-completions.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/providers/openai-completions.ts) - OpenAI Chat Completions
-- [openai-responses.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/providers/openai-responses.ts) - OpenAI Responses API
-- [google.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/providers/google.ts) - Google Generative AI
-- [amazon-bedrock.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/providers/amazon-bedrock.ts) - AWS Bedrock
+- [anthropic-messages.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/api/anthropic-messages.ts) - Anthropic Messages API
+- [mistral-conversations.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/api/mistral-conversations.ts) - Mistral Conversations API
+- [openai-completions.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/api/openai-completions.ts) - OpenAI Chat Completions
+- [openai-responses.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/api/openai-responses.ts) - OpenAI Responses API
+- [google-generative-ai.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/api/google-generative-ai.ts) - Google Generative AI
+- [bedrock-converse-stream.ts](https://github.com/ashx-j/lunR/blob/master/packages/ai/src/api/bedrock-converse-stream.ts) - AWS Bedrock
 
 ### Stream Pattern
 
@@ -571,7 +569,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-`message_end` runs before lunR tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what pi checks. With this in place, lunR will:
+`message_end` runs before lunR tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what lunR checks. With this in place, lunR will:
 
 1. Detect the overflow from `errorMessage`.
 2. Drop the failed assistant message from live context.
@@ -609,7 +607,6 @@ Test your provider against the same test suites used by built-in providers. Copy
 | `abort.test.ts` | AbortSignal handling |
 | `empty.test.ts` | Empty/minimal responses |
 | `context-overflow.test.ts` | Context window limits |
-| `image-limits.test.ts` | Image input handling |
 | `unicode-surrogate.test.ts` | Unicode edge cases |
 | `tool-call-without-result.test.ts` | Tool call edge cases |
 | `image-tool-result.test.ts` | Images in tool results |
@@ -628,7 +625,7 @@ interface ProviderConfig {
   /** API endpoint URL. Required when defining models. */
   baseUrl?: string;
 
-  /** API key literal, env interpolation ($ENV_VAR or ${ENV_VAR}), or !command. Required when defining models (unless oauth). */
+  /** API key literal, env interpolation ($ENV_VAR or ${ENV_VAR}), or !command. Optional: auth can also come from /login or --api-key. */
   apiKey?: string;
 
   /** API type for streaming. Required at provider or model level when defining models. */
@@ -679,7 +676,7 @@ interface ProviderModelConfig {
   /** Whether the model supports extended thinking. */
   reasoning: boolean;
 
-  /** Maps pi thinking levels to provider/model-specific values; null marks a level unsupported. */
+  /** Maps lunR thinking levels to provider/model-specific values; null marks a level unsupported. */
   thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
 
   /** Supported input types. */

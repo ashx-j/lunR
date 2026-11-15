@@ -130,7 +130,7 @@ export interface AgentLoopTurnUpdate {
 	/** Context for the next provider request. */
 	context?: AgentContext;
 	/** Model for the next provider request. */
-	model?: Model<any>;
+	model?: Model<Api>;
 	/** Thinking level for the next provider request. */
 	thinkingLevel?: ThinkingLevel;
 }
@@ -138,7 +138,7 @@ export interface AgentLoopTurnUpdate {
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
-	model: Model<any>;
+	model: Model<Api>;
 
 	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -250,13 +250,22 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	/**
 	 * Tool execution mode.
 	 * - "sequential": execute tool calls one by one
-	 * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently;
+	 * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently
+	 *   (calls flagged by `toolCallMutates` run in source order);
 	 *   emit `tool_execution_end` in tool completion order after each tool is finalized,
 	 *   then emit tool-result message artifacts later in assistant source order
 	 *
 	 * Default: "parallel"
 	 */
 	toolExecution?: ToolExecutionMode;
+
+	/**
+	 * Says whether a tool call can change state, given its validated arguments.
+	 * In parallel mode such a call waits for every earlier call in the message to finish,
+	 * and no later call starts until it is done. Other calls still run concurrently.
+	 * Without this hook every call is concurrent, as before.
+	 */
+	toolCallMutates?: (toolCall: AgentToolCall, args: unknown) => boolean;
 
 	/**
 	 * Called before a tool is executed, after arguments have been validated.
@@ -323,12 +332,14 @@ export interface AgentState {
 	/** System prompt sent with each model request. */
 	systemPrompt: string;
 	/** Active model used for future turns. */
-	model: Model<any>;
+	model: Model<Api>;
 	/** Requested reasoning level for future turns. */
 	thinkingLevel: ThinkingLevel;
 	/** Available tools. Assigning a new array copies the top-level array. */
 	set tools(tools: AgentTool<any>[]);
 	get tools(): AgentTool<any>[];
+	/** Tools the session started unloaded, in a fixed order, loaded or not. Passed to `Context.deferredTools`. */
+	deferredTools?: AgentTool<any>[];
 	/** Conversation transcript. Assigning a new array copies the top-level array. */
 	set messages(messages: AgentMessage[]);
 	get messages(): AgentMessage[];
@@ -403,6 +414,8 @@ export interface AgentContext {
 	messages: AgentMessage[];
 	/** Tools available for this run. */
 	tools?: AgentTool<any>[];
+	/** Tools the session started unloaded. A call to one that is not in `tools` gets a load hint. */
+	deferredTools?: AgentTool<any>[];
 }
 
 /**

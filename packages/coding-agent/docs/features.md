@@ -4,15 +4,19 @@ lunR ships these workflows as baked-in extensions. You do not need a third-party
 
 Sample code under `examples/extensions/plan-mode`, `examples/extensions/todo.ts`, and `examples/extensions/subagent/` is **Extension API sample code**, not the product implementation.
 
+PR watching polls GitHub every minute without model calls during quiet cycles. The `pr_watch` tool starts or waits on a session-owned finite watch. Set its duration in `/settings`; use `/pr-watch` to view, cancel, or restart watches. A new head resets the original duration. Monitoring ends at its deadline, PR completion, or user cancellation and never declares the PR ready. See [PR watching](pr-watch.md).
+
 ## Permissions and planning
 
 Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The TUI labels read-only as `read` in its footer and settings. Ctrl+T cycles thinking levels.
 
-- **yolo** auto-approves tools but still confirms large subagent launches. This is the default.
-- **auto** runs without questions or large-launch confirmation.
-- **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. The shell command check is heuristic, not an OS sandbox.
+- **yolo** auto-approves tools. Large subagent launch confirmation is optional and off by default. This is the default mode.
+- **auto** has a review model check each risky action before it runs, the way Claude Code, Codex, Grok Build and Qwen Code do in their own auto modes. Reads, informational shell commands, edits inside the project, todos and goal updates run straight away. Other shell commands, writes outside the project, MCP calls, browser and computer actions, cron changes and full-access subagent launches go to the reviewer first. The reviewer sees what you asked for, the agent's earlier actions this turn and the pending action, but never tool output, so text in files or web pages can't argue with it. A blocked action returns the reviewer's reason to the model. After 3 blocks in a row or 20 in a session, lunR asks you instead; the gateway asks on your phone, and cron or `-p` runs keep the action blocked. Each review is one extra request and appears in `/usage`.
+- **Which model reviews.** Anthropic sessions use the newest Claude Sonnet your login offers, since Claude Code reviews with Sonnet, falling back to the session model when the login offers no Sonnet. OpenAI (API and Codex), xAI and Qwen sessions use the session model at low reasoning effort, since their agents don't name one. Other providers' own agents offer no reviewer, so entering auto warns you and opens the model list to pick one. `/settings` → Auto review model changes or resets the choice. Without a usable reviewer, auto asks you before each risky action. If a review request fails, the blocked action names the review model that failed.
+- **No questions** is separate from the permission mode. `/goal`, subagents and the ACP Autonomous mode work without stopping to ask you and skip the large-launch confirmation. Subagents follow their parent's mode: reviewed in auto, unreviewed in yolo.
+- **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. Shell calls permit known informational forms. Project scripts and tests such as `npm test`, package executors, interpreter execution, and unknown Git operations require a writable mode. The shell command check is heuristic, not an OS sandbox.
 
-Use `/read` or `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves, or enters yolo if no writable previous mode exists. Existing saved defaults migrate `manual` to `yolo` and `plan` to `read-only`.
+Use `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves, or enters yolo if no writable previous mode exists.
 
 ## Subagents
 
@@ -28,11 +32,17 @@ In the interactive TUI, normal Enter during an executing `subagent_wait` release
 
 The legacy extension config keys `asyncByDefault` and `forceTopLevelAsync` remain accepted but no longer change launch mode. Omitted `async` resolves to async, while explicit `async:false`, `clarify:true`, and internal `foregroundOnly` calls stay foreground. RPC and scheduled launches remain always async.
 
+`/prompt-workflow <name> [args]` runs a prompt workflow with a declared `tier` through native subagents. `/chain analyze -> fix -- auth --foreground` runs those workflows as a native chain with shared arguments. Omit `--foreground` to run in the background. Use `/prompt-workflow list` to list available workflows.
+
+`/chain analyze -> fix --loop 3 --chain-context` runs prompt templates through the separate prompt-template engine. It supports template model selection, loops, and delegated step summaries. The optional `run-prompt` tool uses this same engine and queues commands until the current turn ends. A successful queue receipt confirms acceptance. Disabled, busy, uninitialized, empty, or already-queued requests return tool errors. `/prompt-tool on` enables the tool, and `/prompt-tool off` disables it.
+
+`/chain` picks its engine from the arguments. A first step with inline `[tier=...]` or `[model=...]` config, or one that opens a `(` parallel group, runs a subagent task chain, so a task step named like a workflow always stays a task chain. Otherwise, when every step is a single workflow name, it runs those workflows; when every step names a prompt template, it runs the template chain. Anything else is treated as a task chain and gets its usual usage error. A workflow wins when a name is both. `/chain-workflows` and `/chain-prompts` still work as hidden aliases for one release.
+
 Collapsed subagent rows (foreground and async) are one line: status glyph, description, selected tier or explicit model, tokens, and elapsed time. Mixed async runs use the same flat child rows without an aggregate tree. Running rows keep a live spinner and clock; completed collapsed rows freeze those stats. Choose the running child spinner under `/settings` → Customize. Async launches show `subagent async` in the tool header. Completed notify cards show title and status only; the model still receives the full result text.
 
-A launch of 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls, receives one aggregate confirmation in **yolo**. Sequential work stays `chain`. Auto bypasses this confirmation, and it can be disabled independently in `/settings`.
+Enable Confirm big subagent launches in `/settings` to receive one aggregate confirmation in **yolo** for 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls. This setting is off by default. Sequential work stays `chain`. Auto, where the reviewer checks full-access launches, and sessions that work without questions (`/goal`, subagents, ACP Autonomous) bypass confirmation even when the setting is enabled.
 
-`/goal` sets a session goal and **forces session auto** permission mode.
+`/goal` sets a session goal and makes the session work without asking questions, keeping your permission mode. A read-only session switches to yolo for the goal and back afterwards.
 
 ### Child communication
 
@@ -64,30 +74,38 @@ A child must have an active question-capable input channel. Only one question ma
 
 The agent must ask only when the child has missing context, the answer changes a concrete next decision, and waiting for completion would block progress or risk rework. It must use available results first and batch related questions. Routine progress checks, duplicate questions, polling, and step-by-step supervision are prohibited. A follow-up is appropriate only when the answer leaves the original decision unresolved.
 
-### Measuring communication cost
+## Token usage
 
-Compare the same task, models, thinking levels, and starting checkout before and after a communication change. Count parent wakeups by their triggering event, provider calls in both parent and child sessions, duplicate deliveries, input/output tokens, cache reads/writes, elapsed time, and blocked time. Check task correctness and delivery of required escalations before comparing cost. Cached input is separate from uncached input; fewer messages or a quieter UI alone do not establish savings. Keep transcript evidence local.
+`/usage` and `/session` separate parent requests, completed child receipts, and their combined total. Input includes ordinary input, cache reads, and cache writes. Output includes reasoning when the provider reports it. Summary and automatic-title requests count as parent requests even though their text does not enter the chat. Goal token budgets use parent and child totals and retain consumed tokens after branch navigation.
+
+Child totals include failed fallback attempts and auxiliary requests. Completion notifications, waits, and resumed sessions deduplicate requests rather than charging the same history again. A fork retains the conversation as context but starts with zero newly incurred usage. Children still running may not have supplied their final receipt yet.
+
+Current context and its visible-thinking breakdown are estimates of the next request. They include the system prompt and tool definitions, and exclude `!!` shell output. The `~` footer marker means the context count includes an estimate. Image sizes, provider formatting, and hidden reasoning can differ from local estimates. Cache-miss estimates describe inferred overlap, not measured waste.
+
+Costs use a provider's reported charge when available, otherwise catalog prices. Subscription quota remains the provider's account measurement and can be cached for up to 60 seconds. Missing or incomplete usage is labeled separately from reported zero. Older sessions cannot recover requests or breakdowns that were never recorded.
 
 ## Todos, memory, and global instructions
 
 - **Todos** — lunr-todos is a full-replace list. `/settings` → Todos disables its system-prompt guidance, model-facing tool, and editor widget. Collapsed lists show all four active items; lists of five or more show three and a `+N more` line. Completed todos prune on the next user turn, so the footer does not leave a `✓ N done` line.
 - **Agent memory** — durable established facts and stable preferences in `~/.lunr/simple-memory/memory.md`. `/settings` → Agent memory controls injection and the `memory_add`, `memory_remove`, and `memory_load` tools without deleting stored facts. `memoryCharCap` defaults to 5000. Behavior instructions, transient task state, transcripts, guesses, and secrets do not belong in memory.
-- **Global instructions** — create `~/.lunr/agent/agents/AGENTS.md` yourself when you want global behavior or instructions. lunR injects it through the normal context loader; `/reload` picks up changes. The model cannot modify this user-managed file. The retired `behavior.md` file and behavior presets are no longer loaded.
+- **Global instructions** — create `~/.lunr/agent/agents/AGENTS.md` yourself when you want global behavior or instructions. lunR injects it through the normal context loader; `/reload` picks up changes. The model cannot modify this user-managed file.
 - **Model instructions** — `/settings` can enable `~/.lunr/agent/agents/<model-name>/AGENTS.md` and choose **Both** (global then model-specific) or **Model only**. The folder name is provider-independent and filesystem-safe. Project `AGENTS.md`/`CLAUDE.md` files are unaffected, and `--no-context-files` disables all instruction files.
 
 ## Cron
 
-`/cron list | create <schedule> <prompt> | pause|resume|run|remove <id-or-name> | status`
+`/cron list | create <schedule> <prompt> | pause|resume|run|remove|rebind <id-or-name> | status`
 
-Jobs persist in `~/.lunr/agent/cron/` (`jobs.json`). Interactive TUI cron runs in the live session. `lunr gateway` runs the same scheduler with a fresh headless session. TUI cron uses the same deliver allowlist as the gateway.
+Jobs persist in `~/.lunr/agent/cron/` (`jobs.json`). One process owns scheduling for a profile until its work and shutdown settle. Interactive TUI cron admits a turn only when its live session is idle. `lunr gateway` uses fresh headless sessions and can deliver to platforms. A TUI owner saves output locally and records platform delivery as unavailable. Stop that operator before starting the gateway to move scheduling there. A nonowner manual run returns an owner conflict.
 
-`cronFallbackModels` in settings is a hand-edited list of `provider/modelId` entries tried in order when a gateway cron fire fails.
+Gateway creation preserves the requester, chat and approved project directory. Delivery checks current grants before every chunk. Legacy origin jobs keep local output but report a delivery error until an approved gateway requester uses `/cron rebind <id-or-name>`. Explicit approved destinations follow their own current grants. After a crash during started work, the next owner pauses that job with an unknown-effects error. Inspect its effects before using `/cron run` to retry deliberately. Timeout and stop cancel the owned request and wait for cleanup before recording one terminal result or releasing ownership.
+
+`cronFallbackModels` in settings is a hand-edited list of `provider/modelId` entries tried in order when gateway session setup fails before prompt dispatch. Failures after admission never replay the prompt through a fallback model.
 
 Schedule examples: `every 30m`, `every 2h`, `every 1d`, a duration one-shot (`30m`), an ISO timestamp, or a 5-field cron expression.
 
 ## Gateway for Telegram and Discord
 
-Run `lunr gateway setup` in your terminal. Use Up/Down and Enter to choose the platform, saved token and owner options, default project, startup preference, provider, and model. Long lists scroll; Escape cancels. Only a new bot token, user ID, or custom folder path needs typing. Token entry stays hidden. Setup explains bot creation, validates the bot identity, and asks before saving or starting the gateway. Log in to a model provider locally with `/login` first. Setup does not create model-provider accounts.
+Run `lunr gateway setup` in your terminal. Use Up/Down and Enter to choose the platform, saved token and approved-user options, default project, startup preference, provider, and model. Long lists scroll; Escape cancels. Only a new bot token, user ID, or custom folder path needs typing. Token entry stays hidden. Setup explains bot creation, validates the bot identity, and asks before saving or starting the gateway. Log in to a model provider locally with `/login` first. Setup does not create model-provider accounts.
 
 Telegram uses BotFather and long polling. Discord needs the bot and `applications.commands` installation scopes. Enable Message Content Intent for ordinary text messages. GuildMembers intent is not required. Discord registers native slash commands; Telegram registers a command menu. Both platforms use buttons for selections and approvals.
 
@@ -113,25 +131,27 @@ Bare `lunr gateway` also runs in the foreground. The terminal's `/settings` Gate
 
 Login startup runs after you sign in. Boot startup runs before login and may require administrator approval or OS-managed account credentials. Linux uses a systemd user service, with lingering for boot startup. macOS uses a LaunchAgent for login or a LaunchDaemon running as your user for boot. Windows uses Scheduled Tasks; its boot option asks Windows to obtain the account credentials rather than saving the password in lunR. lunR checks the native installation command before recording a successful startup change. Changing or disabling startup removes the previous lunR service, not other applications' services.
 
-Encrypted home directories, missing user-service support, network restrictions, and OS permissions can prevent boot startup. Use `status`, `doctor`, and `logs` to check the installed service and bot connections. Service definitions are separate for each lunR profile. Native startup specifications have automated tests; installing and rebooting services on all three operating systems still requires host verification.
+Encrypted home directories, missing user-service support, network restrictions, and OS permissions can prevent boot startup. Use `status`, `doctor`, and `logs` to check the installed service and bot connections. Service definitions are separate for each lunR profile.
 
-### Owner access
+### Gateway access
 
 Configuration lives in `~/.lunr/agent/gateway.json` and may contain bot tokens. It is written with mode 0600 where supported; Windows security follows the profile directory's ACL. Tokens are not stored in `install-features.json` or startup command arguments. Environment tokens override file tokens in this order: `LUNR_<PLATFORM>_BOT_TOKEN`, then `<PLATFORM>_BOT_TOKEN`.
 
 If you skipped your user ID during setup, message the bot privately and approve its pairing code locally:
 
 ```bash
-lunr gateway pair approve telegram <code> --owner
-lunr gateway pair approve discord <code> --owner
+lunr gateway pair approve telegram <code>
+lunr gateway pair approve discord <code>
 lunr gateway pair list
 ```
 
-Owner access includes local projects and saved TUI conversation history. Ordinary `lunr gateway pair approve <platform> <code>` grants chat access only; add `--owner` locally to grant owner access. Ordinary pairing, group access, and Discord roles do not grant it. Project browsing, cross-project sessions, permission changes, and file downloads require an explicitly configured owner in a private DM. Removing owner access invalidates later owner actions and approvals.
+Approval grants full gateway access, including local projects, saved TUI conversations, permission changes, and file downloads. Existing paired users work immediately without pairing again or receiving a separate owner grant. User allowlists and approved chats use the same access check for messages and commands. Only approve people and chats you trust with this computer. In shared chats, other members may see replies and downloaded files.
+
+Legacy `owners` entries and the `--owner` flag remain compatible, but do not grant a separate permission level. Unapproved users remain blocked. Removing every applicable access grant prevents later commands, approvals, and result delivery. Picker and approval buttons still belong to the user who requested them; session transfer and tool permission checks remain in effect.
 
 ### Projects and mobile controls
 
-The owner can send `/start` to check setup before the first task, `/model` to select an authenticated model before a task, and a normal message immediately when setup's default project remains approved. With multiple approved roots and no explicit default, choose `/project` first. A paired non-owner without a project must ask the local owner to configure access; `/project` and `/continue` are owner-only. Use `/project` to browse approved roots, open child folders, go back, select a folder, or create one. `/project <path>` opens the browser at an approved path. The gateway remembers the selected working directory for that conversation. Project instruction files, skills, tools, and trust checks use that directory rather than the daemon's launch directory.
+Approved users can send `/start` to check setup before the first task, `/model` to select an authenticated model before a task, and a normal message immediately when setup's default project remains approved. With multiple approved roots and no explicit default, choose `/project` first. Use `/project` to browse approved roots, open child folders, go back, select a folder, or create one. `/project <path>` opens the browser at an approved path. The gateway remembers the selected working directory for that conversation. Project instruction files, skills, tools, and trust checks use that directory rather than the daemon's launch directory.
 
 **The selected project is a working directory, not a shell sandbox.** Shell commands and tools can access other locations allowed by your OS account. The folder browser and `/download` check their own path boundaries, including symlinks.
 
@@ -143,9 +163,9 @@ The owner can send `/start` to check setup before the first task, `/model` to se
 - `/stop` aborts the current turn and pending transfer. `/stopall` also requests cancellation of background subagents and tracked shell processes. `/processes` lists this session's processes; `/processes stop <pid>` requests a stop.
 - `/cancel` cancels a pending selection or transfer. `/new` aborts the current turn and drops queued input, but refuses to discard a session that still has attached background work.
 
-Upload images or documents in chat. Images reach the model as images; documents are saved under the project's `.lunr/uploads/` directory and passed to the model as paths. `/download <project-relative path>` sends a file back. Files are limited to 8 MB; common credential filenames are blocked from download. This filename check is not a content-based secret scanner. Only send files you intend to share with the chat platform.
+Upload images or documents in chat. Images reach the model as images; documents are saved under the project's `.lunr/gateway-uploads/` directory and passed to the model as paths. `/download <project-relative path>` sends a file back. Files are limited to 8 MB; common credential filenames are blocked from download. This filename check is not a content-based secret scanner. Only send files you intend to share with the chat platform.
 
-Foreground replies, follow-up answers, errors, and extension notices enter a disk-backed outbox before sending. Successfully sent chunks are acknowledged in order; failed sends retry up to five times per destination without blocking other chats. A failed final preview edit falls back to a full reply. Permanently failed deliveries remain in `gateway-outbox.json` with `failed: true` and an error in gateway logs for diagnosis; they do not retry forever. A send can still reach the platform just before the process exits without recording its acknowledgement, so a restart can repeat that chunk. Existing outbox entries without the newer fields remain eligible for delivery. Session changes cancel stale interactive prompts and notices, but finished assistant results still reach their originating chat when authorized. Revoked access prevents delivery. Discord role-only authorization needs a fresh inbound role check after restart before it can authorize new sends; an old stored role assertion cannot authorize outbox replay. Tool approvals, pickers, and text questions do not become model prompts; they expire when the session changes. Terminal-only custom screens report that limitation rather than pretending they accepted a selection.
+Foreground replies, follow-up answers, errors, and extension notices enter a disk-backed outbox before sending. Successfully sent chunks are acknowledged in order; failed sends retry up to five times per destination without blocking other chats. A failed final preview edit falls back to a full reply. Permanently failed deliveries remain in `gateway-outbox.json` with `failed: true` and an error in gateway logs for diagnosis; they do not retry forever. A send can still reach the platform just before the process exits without recording its acknowledgement, so a restart can repeat that chunk. Existing outbox entries without the newer fields remain eligible for delivery. Session changes cancel stale interactive prompts and notices, but finished assistant results still reach their originating chat when authorized. Revoked access prevents delivery. Tool approvals, pickers, and text questions do not become model prompts; they expire when the session changes. Terminal-only custom screens report that limitation rather than pretending they accepted a selection.
 
 ### Continue between desktop and phone
 
@@ -165,7 +185,9 @@ All concurrent writers must use a lunR version with session ownership support. O
 
 - **MCP** — `/mcp`, `/mcp-auth`. Footer MCP segment is on by default (`footerMcp`).
 - **LSP** — `/lsp`, `/lsp-restart`, `/lsp-config`. Footer LSP segment is off by default (`footerLsp`). On Windows, npm `.cmd` shims need a real LSP start (`shell: true`); if the server never starts, tools silently fall back to tree-sitter. Check `/lsp` if language features look missing.
-- **Web search** — `/websearch` (and related search commands). Interactive TUI attaches web-access after first paint; print/RPC/gateway load it before the first turn.
+- **Web search** — `/search <query>[, query...]` opens the search curator; `/search` alone lists stored results. Interactive TUI attaches web-access after first paint; print/RPC/gateway load it before the first turn.
+
+Stored web results belong to the current session. `get_search_content` returns pages of at most 50 KiB and 2,000 lines, including selector lists and errors. Start with `responseId` and a query or URL selector. If the page is truncated, repeat the same call with `offset` set to the returned `nextOffset`. Offsets count UTF-8 bytes. Direct HTTP extraction limits decoded bodies to 5 MiB for text and 20 MiB for PDFs before parsing.
 
 ## Headless browser
 
@@ -175,12 +197,17 @@ The browser uses ephemeral session-owned contexts. Read-only mode blocks interac
 
 See [Headless browser](browser.md) for action parameters, installation exceptions, legacy setting precedence, private-network risks, lifecycle limits, and validation.
 
+## Computer use
+
+`/computer setup` installs the bundled runtime for image-only desktop control on Windows and Apple Silicon macOS. Setup is unavailable in headless and gateway sessions, and the computer tools need an image-capable model. See [Computer use](computer-use.md) for permissions and limits.
+
 ## Thinking, usage, streaming, UI
 
-- `/thinking`, `/effort`, and `/reasoning` are full-parity aliases. `/off`, `/minimal`, `/low`, `/medium`, `/high`, `/xhigh`, and `/max` set a level when the current model supports it. `/thinking` completions follow the session model. `xhigh` and `max` are opt-in. `/thinking hide|show|toggle` still hides thinking blocks.
-- `/usage` is **this-session** context plus every stored-credential subscription plan. The current provider is included for env-only auth. There is no `/token-usage`.
+- `/thinking <level>` sets the level when the current model supports it; `/effort` and `/reasoning` are hidden aliases. `/thinking` completions follow the session model. `xhigh` and `max` are opt-in. `/thinking hide|show|toggle` still hides thinking blocks.
+- `/usage` is **this-session** context plus every stored-credential subscription plan. The current provider is included for env-only auth.
 - `/fast [on|off|status]` controls `service_tier: "fast"` for OpenAI Codex subscriptions only. It persists across new sessions, gateway turns, and subagents. Paid `openai` API models do not use it.
 - Footer plan bar prefers a 5h window and falls back to weekly (`planUsageWindow`). In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps the percent.
+- `/settings` Notifications (default off) rings the terminal bell or sends a desktop notification when a run finishes or stops for an approval or question. lunR asks the terminal for focus reports and stays quiet while you are looking at it; terminals without focus reports get every notice. Desktop notices use OSC 9, which iTerm2, WezTerm and Ghostty show. Other terminals ignore it, so pick the bell there.
 - Click a ✻ Thought or tool card to expand/collapse that item. `app.tools.expand` is unbound. `/tree` still uses `ctrl+o` for filters.
 - Smooth streaming (`smoothStreaming`, default off) reveals assistant text and thinking in small character batches at about 30 FPS in the interactive TUI. The thinking preview shows the last four revealed lines. Completed thinking collapses after its reveal catches up. Message completion flushes any remaining text immediately. Print, RPC, and gateway stay unsmoothed.
 - Image paste inserts `[image_n]` chips. Windows uses **Alt+V**; VS Code must forward it because it owns Ctrl+V and Alt+V. `/paste-image` bypasses terminal shortcuts.
@@ -189,11 +216,11 @@ See [Headless browser](browser.md) for action parameters, installation exception
 
 ## Updates, catalogs, local models
 
-- `lunr update` / `lunr update --self` reinstalls global `@ashx-j/lunr` only. Workspace `npx lunr` is not a published install and will not self-update.
+- `lunr update` / `lunr update --self` reinstalls global `@ashx-j/lunr` only.
 - Catalog refresh is `/refresh`. First paint is cache-only. `/model` lists stored-cred providers only.
 - **xAI SuperGrok:** `/login xai` can import `~/.grok/auth.json` from the Grok CLI. `/logout xai` does not delete that file.
 - **Ollama / LM Studio:** `/login` and select the local provider (localhost probe).
-- **OpenCode Zen:** `/login opencode` then `/refresh`. Do not add a second Zen provider.
+- **OpenCode Zen:** `/login opencode` then `/refresh`.
 
 ## Intercom and skill-creator
 

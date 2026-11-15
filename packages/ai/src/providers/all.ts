@@ -20,6 +20,7 @@ import { kimiCodingProvider } from "./kimi-coding.ts";
 import { minimaxProvider } from "./minimax.ts";
 import { minimaxCnProvider } from "./minimax-cn.ts";
 import { mistralProvider } from "./mistral.ts";
+import { modelsDevProviders } from "./models-dev.ts";
 import { moonshotaiProvider } from "./moonshotai.ts";
 import { moonshotaiCnProvider } from "./moonshotai-cn.ts";
 import { nvidiaProvider } from "./nvidia.ts";
@@ -78,8 +79,13 @@ export function getBuiltinModels<TProvider extends BuiltinProvider>(
 		: [];
 }
 
-/** All built-in providers, freshly constructed. */
+/** All built-in providers, freshly constructed: the hand-written ones, then the generic models.dev ones. */
 export function builtinProviders(): Provider[] {
+	const handWritten = handWrittenProviders();
+	return [...handWritten, ...modelsDevProviders(new Set(handWritten.map((provider) => provider.id)))];
+}
+
+function handWrittenProviders(): Provider[] {
 	return [
 		amazonBedrockProvider(),
 		antLingProvider(),

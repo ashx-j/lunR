@@ -1,4 +1,4 @@
-import type { Model, ThinkingLevelMap } from "../types.ts";
+import type { Api, Model, ThinkingLevelMap } from "../types.ts";
 
 // Version of the Codex discovery protocol we implement, independent of lunR's package version.
 export const CODEX_CATALOG_CLIENT_VERSION = "0.153.4";
@@ -40,7 +40,7 @@ export function parseCodexCatalog(payload: unknown, baseUrl: string): Model<"ope
 		if (!value || typeof value !== "object") throw new Error("Invalid Codex model entry");
 		const row = value as Record<string, unknown>;
 		if (typeof row.slug !== "string" || !row.slug.trim()) throw new Error("Codex model is missing its slug");
-		const supplied: NonNullable<Model<any>["catalog"]>["supplied"] = [];
+		const supplied: NonNullable<Model<Api>["catalog"]>["supplied"] = [];
 		const positive = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value > 0;
 		const context = row.context_window;
 		if (positive(context)) supplied.push("contextWindow");

@@ -13,6 +13,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export interface CronOriginContext {
+	userId?: string;
 	platform: string;
 	chatId: string;
 	threadId?: string;

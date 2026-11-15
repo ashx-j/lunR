@@ -117,7 +117,7 @@ vim ~/.lunr/agent/themes/my-theme.json
 
 3. Select the theme via `/settings`.
 
-**Hot reload:** When you edit the currently active custom theme file, pi reloads it automatically for immediate visual feedback.
+**Hot reload:** When you edit the currently active custom theme file, lunR reloads it automatically for immediate visual feedback.
 
 ## Theme Format
 
@@ -236,6 +236,23 @@ Editor border colors indicating thinking level (visual hierarchy from subtle to 
 | Token | Purpose |
 |-------|---------|
 | `bashMode` | Editor border in bash mode (`!` prefix) |
+
+### Other optional colors
+
+| Token | Purpose |
+|-------|---------|
+| `accent2` | Secondary accent (boot border, separators, brand highlights). Falls back to `accent`. |
+| `white` | Body-text white. Falls back to `text`. |
+
+### Prompt glyph (optional)
+
+The top-level `glyphs.promptArrow` string sets the prompt character in the input box. The default is `>`.
+
+```json
+{
+  "glyphs": { "promptArrow": "❯" }
+}
+```
 
 ### HTML Export (optional)
 

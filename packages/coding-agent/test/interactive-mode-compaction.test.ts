@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { NothingToCompactError } from "../src/core/agent-session.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
 interface CompactionEndEvent {
@@ -14,6 +15,9 @@ function createFakeMode(isIdle: boolean) {
 	const fakeThis = {
 		isInitialized: true,
 		session: { isIdle },
+		sessionManager: { buildContextEntries: () => [] },
+		disposeChatToolComponents: vi.fn(),
+		renderSessionEntries: vi.fn(),
 		footer: { invalidate: vi.fn() },
 		autoCompactionEscapeHandler: undefined as (() => void) | undefined,
 		autoCompactionLoader: undefined,
@@ -21,18 +25,21 @@ function createFakeMode(isIdle: boolean) {
 		defaultEditor: {},
 		statusContainer: { clear: vi.fn() },
 		chatContainer: { clear: vi.fn() },
-		rebuildChatFromMessages: vi.fn(),
 		addMessageToChat: vi.fn(),
 		showError: vi.fn(),
 		showStatus: vi.fn(),
 		clearStatusIndicator: vi.fn(),
 		flushCompactionQueue: vi.fn().mockResolvedValue(undefined),
 		checkShutdownRequested: vi.fn().mockResolvedValue(undefined),
-		settingsManager: { getShowTerminalProgress: () => false },
+		settingsManager: { getShowTerminalProgress: () => false, getAttentionNotification: () => "off" },
 		ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
 	};
 	Object.setPrototypeOf(fakeThis, InteractiveMode.prototype);
-	return fakeThis;
+	const rebuild = vi.spyOn(
+		fakeThis as typeof fakeThis & { rebuildChatFromMessages(): void },
+		"rebuildChatFromMessages",
+	);
+	return Object.assign(fakeThis, { rebuildChatFromMessages: rebuild });
 }
 
 const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
@@ -100,5 +107,83 @@ describe("InteractiveMode compaction events", () => {
 		);
 		expect(fakeThis.pendingCompactionRender).toBeUndefined();
 		expect(fakeThis.checkShutdownRequested).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("InteractiveMode /compact outcomes", () => {
+	const handleCompactCommand = Reflect.get(InteractiveMode.prototype, "handleCompactCommand") as (
+		this: object,
+		customInstructions?: string,
+	) => Promise<void>;
+
+	function createCompactMode(compact: () => Promise<unknown>, isCompacting = false) {
+		return {
+			session: { compact, subscribe: () => () => {}, isCompacting },
+			showError: vi.fn(),
+			showStatus: vi.fn(),
+			clearStatusIndicator: vi.fn(),
+		};
+	}
+
+	test("a session too small to compact gets a dim status, not an error", async () => {
+		const mode = createCompactMode(() => Promise.reject(new NothingToCompactError()));
+		await handleCompactCommand.call(mode);
+		expect(mode.showStatus).toHaveBeenCalledWith("Nothing to compact yet.");
+		expect(mode.showError).not.toHaveBeenCalled();
+	});
+
+	test("a repeat /compact that returns the earlier result says so", async () => {
+		const mode = createCompactMode(() => Promise.resolve({ summary: "s", tokensBefore: 1 }));
+		await handleCompactCommand.call(mode, "focus on tests");
+		expect(mode.showStatus).toHaveBeenCalledWith("Already compacted.");
+	});
+
+	test("a /compact while one is running says so instead of joining it", async () => {
+		const compact = vi.fn(() => Promise.resolve({ summary: "s", tokensBefore: 1 }));
+		const mode = createCompactMode(compact, true);
+		await handleCompactCommand.call(mode);
+		expect(compact).not.toHaveBeenCalled();
+		expect(mode.showStatus).toHaveBeenCalledWith("Compaction is already running.");
+	});
+
+	test("an error before compaction starts is shown", async () => {
+		const mode = createCompactMode(() => Promise.reject(new Error("No model selected.")));
+		await handleCompactCommand.call(mode);
+		expect(mode.showError).toHaveBeenCalledWith("No model selected.");
+	});
+});
+
+describe("messages queued during a compaction", () => {
+	const flush = Reflect.get(InteractiveMode.prototype, "flushCompactionQueue") as (
+		this: object,
+		options?: { willRetry?: boolean },
+	) => Promise<void>;
+
+	function createQueueMode(isStreaming: boolean) {
+		const fakeThis = {
+			compactionQueuedMessages: [{ text: "steer me please", mode: "steer" as const }],
+			session: { isStreaming, steer: vi.fn(async () => {}), followUp: vi.fn(async () => {}), clearQueue: vi.fn() },
+			isExtensionCommand: () => false,
+			promptAfterDeferredBuiltins: vi.fn(async () => {}),
+			updatePendingMessagesDisplay: vi.fn(),
+			showError: vi.fn(),
+		};
+		Object.setPrototypeOf(fakeThis, InteractiveMode.prototype);
+		return fakeThis;
+	}
+
+	test("steers them into a run still streaming after an end-of-prompt, failed or cancelled compaction", async () => {
+		const mode = createQueueMode(true);
+		await flush.call(mode, { willRetry: false });
+		expect(mode.session.steer).toHaveBeenCalledWith("steer me please", undefined);
+		expect(mode.promptAfterDeferredBuiltins).not.toHaveBeenCalled();
+		expect(mode.showError).not.toHaveBeenCalled();
+	});
+
+	test("sends them as a new prompt once the run has ended", async () => {
+		const mode = createQueueMode(false);
+		await flush.call(mode, { willRetry: false });
+		expect(mode.session.steer).not.toHaveBeenCalled();
+		expect(mode.promptAfterDeferredBuiltins).toHaveBeenCalledWith("steer me please", { images: undefined });
 	});
 });

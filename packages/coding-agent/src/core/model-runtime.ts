@@ -31,7 +31,7 @@ import {
 	type StreamOptions,
 } from "@earendil-works/pi-ai";
 import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
-import { getAgentDir } from "../config.ts";
+import { getAgentDir, isOfflineModeEnabled } from "../config.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { catalogCacheScope } from "./catalog-cache-scope.ts";
 import { CatalogOverlaySource, knownModelKeys, withCatalogOverlay } from "./catalog-merge.ts";
@@ -40,10 +40,13 @@ import {
 	buildLiveOverlay,
 	fetchLiveProviderModels,
 	type IncompleteLiveModel,
-	LIVE_LIST_PROVIDER_IDS,
+	LIVE_LIST_REJECTED,
 	type LiveCatalogResult,
+	listNeedsApiKey,
+	liveListProtocol,
 } from "./live-catalog.ts";
 import { ModelConfig } from "./model-config.ts";
+import { loadModelFacts } from "./model-facts.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
 	loadOfficialCatalog,
@@ -64,7 +67,7 @@ import {
 	validateExtensionProvider,
 } from "./provider-composer.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
-import { SubscriptionManager } from "./subscriptions.ts";
+import { type RequestSubscriptionKey, SubscriptionManager, subscriptionKeyFingerprint } from "./subscriptions.ts";
 import { clearPlanUsageCache } from "./usage-service.ts";
 import { type UserModelEntry, UserModelsStore, userEntryToModel, userModelsPath } from "./user-models.ts";
 
@@ -131,6 +134,7 @@ export class ModelRuntime implements Models {
 	private readonly credentials: RuntimeCredentials;
 	/** lunr: per-provider subscription-key pools; rotation mirrors the active key into the credential store. */
 	readonly subscriptionManager: SubscriptionManager;
+	private readonly requestSubscriptionKeys = new WeakMap<AssistantMessage, RequestSubscriptionKey>();
 	private readonly defaultBuiltins: ReadonlyMap<string, Provider>;
 	private readonly builtins = new Map<string, Provider>();
 	private readonly extensionProviders = new Map<string, ProviderConfigInput>();
@@ -222,7 +226,7 @@ export class ModelRuntime implements Models {
 			modelsPath,
 			modelsStore,
 			providers,
-			options.allowModelNetwork ?? process.env.PI_OFFLINE === undefined,
+			options.allowModelNetwork ?? !isOfflineModeEnabled(),
 			subscriptionManager,
 			catalogDir,
 			grokHome,
@@ -290,6 +294,11 @@ export class ModelRuntime implements Models {
 
 	private bakedInModels(providerId: string): Model<Api>[] {
 		return [...(this.defaultBuiltins.get(providerId)?.getModels() ?? [])];
+	}
+
+	/** Built-in providers whose own model list lunR reads after login. */
+	private liveListProviderIds(): string[] {
+		return [...this.defaultBuiltins.keys()].filter((id) => liveListProtocol(id, this.bakedInModels(id)));
 	}
 
 	private rebuildProviders(): void {
@@ -409,7 +418,12 @@ export class ModelRuntime implements Models {
 	}
 
 	getModel(providerId: string, modelId: string): Model<Api> | undefined {
-		return this.models.getModel(providerId, modelId);
+		// Available rows carry limits that depend on the stored credential, such as Claude Code's
+		// window for a Claude subscription; the plain catalog row does not.
+		return (
+			this.snapshot.available.find((model) => model.provider === providerId && model.id === modelId) ??
+			this.models.getModel(providerId, modelId)
+		);
 	}
 
 	async checkAuth(providerId: string): Promise<AuthCheck | undefined> {
@@ -502,11 +516,8 @@ export class ModelRuntime implements Models {
 		return this.credentials.hasRuntimeApiKey(providerId);
 	}
 
-	async setRuntimeApiKey(
-		providerId: string,
-		apiKey: string,
-		options?: { allowNetwork?: boolean },
-	): Promise<void> {
+	async setRuntimeApiKey(providerId: string, apiKey: string, options?: { allowNetwork?: boolean }): Promise<void> {
+		clearPlanUsageCache();
 		this.credentials.setRuntimeApiKey(providerId, apiKey);
 		const auth = new Map(this.snapshot.auth).set(providerId, { type: "api_key", source: "runtime API key" });
 		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
@@ -524,6 +535,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async removeRuntimeApiKey(providerId: string): Promise<void> {
+		clearPlanUsageCache();
 		this.credentials.removeRuntimeApiKey(providerId);
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
 	}
@@ -535,6 +547,11 @@ export class ModelRuntime implements Models {
 
 	listCredentials(): Promise<readonly CredentialInfo[]> {
 		return this.credentials.list();
+	}
+
+	/** Stored credential for one provider, for UI that describes what removing it leaves behind. */
+	readCredential(providerId: string): Promise<Credential | undefined> {
+		return this.credentials.read(providerId);
 	}
 
 	getProviderAuthStatus(providerId: string): AuthStatus {
@@ -552,22 +569,48 @@ export class ModelRuntime implements Models {
 	private async prepareRequest(
 		model: Model<Api>,
 		options: (StreamOptions & ModelsStreamTransforms) | undefined,
-	): Promise<{ provider: Provider; model: Model<Api>; options: StreamOptions }> {
+	): Promise<{
+		provider: Provider;
+		model: Model<Api>;
+		options: StreamOptions;
+		subscriptionKey?: RequestSubscriptionKey;
+	}> {
 		const provider = this.models.getProvider(model.provider);
 		if (!provider) throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
-		const resolution = await this.getAuth(model, { apiKey: options?.apiKey, env: options?.env });
+		let storedKeyFingerprint: string | undefined;
+		const resolution = await this.credentials.withStoredApiKeyRead(
+			model.provider,
+			(apiKey) => {
+				storedKeyFingerprint = apiKey ? subscriptionKeyFingerprint(model.provider, apiKey) : undefined;
+			},
+			() => this.getAuth(model, { apiKey: options?.apiKey, env: options?.env }),
+		);
 		if (!resolution) throw new ModelsError("auth", `Provider is not configured: ${model.provider}`);
 
 		const { transformHeaders, ...providerOptions } = options ?? {};
 		const route = anthropicRequestRoute(model.provider, resolution, options);
 		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
 		if (transformHeaders) headers = await transformHeaders(headers ?? {});
+		const overridesAuth = Object.entries(headers ?? {}).some(
+			([name, value]) =>
+				/^(authorization|x-api-key|api-key|x-goog-api-key)$/i.test(name) &&
+				value !== route.apiKey &&
+				value !== `Bearer ${route.apiKey}`,
+		);
+		const subscriptionKey =
+			route.apiKey &&
+			options?.apiKey === undefined &&
+			storedKeyFingerprint === subscriptionKeyFingerprint(model.provider, route.apiKey) &&
+			!overridesAuth
+				? { providerId: model.provider, fingerprint: subscriptionKeyFingerprint(model.provider, route.apiKey) }
+				: undefined;
 		const env =
 			resolution.env || providerOptions.env
 				? { ...(resolution.env ?? {}), ...(providerOptions.env ?? {}) }
 				: undefined;
 		return {
 			provider,
+			subscriptionKey,
 			model: resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model,
 			options: {
 				...providerOptions,
@@ -578,22 +621,33 @@ export class ModelRuntime implements Models {
 		};
 	}
 
+	/** The final response identity stays process-local and never enters saved chat. */
+	getRequestSubscriptionKey(message: AssistantMessage): RequestSubscriptionKey | undefined {
+		return this.requestSubscriptionKeys.get(message);
+	}
+
 	stream<TApi extends Api>(
 		model: Model<TApi>,
 		context: Context,
 		options?: ModelsApiStreamOptions<TApi>,
 	): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
+		let subscriptionKey: RequestSubscriptionKey | undefined;
+		const stream = lazyStream(model, async () => {
 			const prepared = await this.prepareRequest(
 				model,
 				options as (StreamOptions & ModelsStreamTransforms) | undefined,
 			);
+			subscriptionKey = prepared.subscriptionKey;
 			return prepared.provider.stream(
 				prepared.model as Model<TApi>,
 				context,
 				prepared.options as ApiStreamOptions<TApi>,
 			);
 		});
+		void stream.result().then((message) => {
+			if (subscriptionKey) this.requestSubscriptionKeys.set(message, subscriptionKey);
+		});
+		return stream;
 	}
 
 	complete<TApi extends Api>(
@@ -605,10 +659,16 @@ export class ModelRuntime implements Models {
 	}
 
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
+		let subscriptionKey: RequestSubscriptionKey | undefined;
+		const stream = lazyStream(model, async () => {
 			const prepared = await this.prepareRequest(model, options);
+			subscriptionKey = prepared.subscriptionKey;
 			return prepared.provider.streamSimple(prepared.model, context, prepared.options as SimpleStreamOptions);
 		});
+		void stream.result().then((message) => {
+			if (subscriptionKey) this.requestSubscriptionKeys.set(message, subscriptionKey);
+		});
+		return stream;
 	}
 
 	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage> {
@@ -616,6 +676,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<Credential> {
+		clearPlanUsageCache();
 		const credential = await this.models.login(providerId, type, interaction);
 		clearPlanUsageCache();
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
@@ -623,6 +684,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async logout(providerId: string): Promise<void> {
+		clearPlanUsageCache();
 		await this.models.logout(providerId);
 		await this.modelsStore.delete(providerId);
 		this.userModels.evictProvider(providerId);
@@ -730,7 +792,9 @@ export class ModelRuntime implements Models {
 		// Bound retries on a broken source; a successful refresh extends the deadline to one hour.
 		this.nextAutomaticRefresh = Date.now() + 60_000;
 		const result = await this.refresh({ allowNetwork: true, signal: options.signal });
-		if (!result.aborted && !result.errors.size) this.nextAutomaticRefresh = Date.now() + 3_600_000;
+		// A refused login stays refused for a minute too; only transient failures earn an early retry.
+		const transient = [...result.errors.values()].some((error) => !error.message.startsWith(LIVE_LIST_REJECTED));
+		if (!result.aborted && !transient) this.nextAutomaticRefresh = Date.now() + 3_600_000;
 		return result;
 	}
 
@@ -761,14 +825,18 @@ export class ModelRuntime implements Models {
 		);
 		this.lastOfficial = loaded;
 		const evicted = this.userModels.evictOfficial(officialModelKeys(loaded.catalog));
-		const templateByProvider = new Map<string, Model<Api> | undefined>();
+		const bakedInByProvider = new Map<string, Model<Api>[]>();
 		const officialModels = loaded.catalog.models
 			.filter((entry) => storedProviders.has(entry.provider))
 			.map((entry) => {
-				if (!templateByProvider.has(entry.provider)) {
-					templateByProvider.set(entry.provider, this.bakedInModels(entry.provider)[0]);
+				let bakedIn = bakedInByProvider.get(entry.provider);
+				if (!bakedIn) {
+					bakedIn = this.bakedInModels(entry.provider);
+					bakedInByProvider.set(entry.provider, bakedIn);
 				}
-				return officialEntryToModel(entry, templateByProvider.get(entry.provider));
+				// A row without compat or a thinking map falls back to its own baked-in model first. Another
+				// model's settings can be wrong for it: Anthropic's first model would give Haiku 4.5 adaptive thinking.
+				return officialEntryToModel(entry, bakedIn.find((model) => model.id === entry.id) ?? bakedIn[0]);
 			});
 		this.overlay.setOfficial(officialModels);
 		this.overlay.setUser(this.userModelsForStoredProviders(storedProviders));
@@ -778,7 +846,7 @@ export class ModelRuntime implements Models {
 	private async restoreLiveCatalogs(): Promise<LiveCatalogResult[]> {
 		const storedProviders = await this.listStoredProviderIds();
 		const results: LiveCatalogResult[] = [];
-		for (const providerId of LIVE_LIST_PROVIDER_IDS) {
+		for (const providerId of this.liveListProviderIds()) {
 			const stored = storedProviders.has(providerId) ? await this.modelsStore.read(providerId) : undefined;
 			const valid =
 				(!stored?.scope && providerId !== "openai-codex") || stored?.scope === (await this.scopeFor(providerId));
@@ -798,14 +866,21 @@ export class ModelRuntime implements Models {
 
 	private async refreshLiveCatalogs(officialKeys: Set<string>, signal?: AbortSignal): Promise<LiveCatalogResult[]> {
 		const storedProviders = await this.listStoredProviderIds();
+		const providerIds = this.liveListProviderIds();
 		const known = knownModelKeys(
-			LIVE_LIST_PROVIDER_IDS.flatMap((id) => this.bakedInModels(id)),
+			providerIds.flatMap((id) => this.bakedInModels(id)),
 			officialKeys,
 			this.userModels.keys(),
 		);
+		// One facts download per refresh, and only if some list names a model the catalog lacks.
+		let facts: ReturnType<typeof loadModelFacts> | undefined;
+		const getFacts = () => {
+			facts ??= loadModelFacts({ allowNetwork: true, signal });
+			return facts;
+		};
 
 		const results = await Promise.all(
-			LIVE_LIST_PROVIDER_IDS.map(async (providerId) => {
+			providerIds.map(async (providerId) => {
 				if (!storedProviders.has(providerId)) {
 					this.overlay.setLive(providerId, []);
 					return {
@@ -849,10 +924,23 @@ export class ModelRuntime implements Models {
 					};
 				}
 
+				// Anthropic and Google lists take API keys only. A subscription or an old OAuth record would
+				// fail auth on every refresh, so it skips the list quietly instead.
+				const keyOnly = listNeedsApiKey(liveListProtocol(providerId, bakedIn));
+				const skipped = {
+					providerId,
+					status: "skipped" as const,
+					discoveries: [],
+					added: 0,
+					total: stored?.models.length ?? 0,
+					incomplete: [],
+				};
+				if (keyOnly && (await this.credentials.read(providerId))?.type !== "api_key") return skipped;
 				let credential: Credential | undefined;
 				try {
 					credential = await this.refreshCredentialFor(providerId);
 				} catch (error) {
+					if (keyOnly) return skipped;
 					return {
 						providerId,
 						status: "error" as const,
@@ -882,6 +970,7 @@ export class ModelRuntime implements Models {
 					bakedIn,
 					credential,
 					knownKeys: known,
+					getFacts,
 					signal,
 				});
 				// A login/logout during the request must not install the previous account's result.

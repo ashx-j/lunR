@@ -48,6 +48,16 @@ describe("StdinBuffer", () => {
 			processInput("hello 世界");
 			assert.deepStrictEqual(emittedSequences, ["h", "e", "l", "l", "o", " ", "世", "界"]);
 		});
+
+		it("should keep surrogate pairs together", () => {
+			processInput("a😀b");
+			assert.deepStrictEqual(emittedSequences, ["a", "😀", "b"]);
+		});
+
+		it("should drop the raw emoji after a matching Kitty printable sequence", () => {
+			processInput("\x1b[128512u😀");
+			assert.deepStrictEqual(emittedSequences, ["\x1b[128512u"]);
+		});
 	});
 
 	describe("Complete Escape Sequences", () => {
@@ -331,6 +341,37 @@ describe("StdinBuffer", () => {
 			const longSeq = `\x1b[${"1;".repeat(50)}H`;
 			processInput(longSeq);
 			assert.deepStrictEqual(emittedSequences, [longSeq]);
+		});
+	});
+
+	describe("Partial sequence timeout", () => {
+		let slowBuffer: StdinBuffer;
+		let slowSequences: string[];
+
+		beforeEach(() => {
+			slowBuffer = new StdinBuffer({ timeout: 10, partialSequenceTimeout: 50 });
+			slowSequences = [];
+			slowBuffer.on("data", (sequence) => slowSequences.push(sequence));
+		});
+
+		it("keeps a lone escape on the short timeout", async () => {
+			slowBuffer.process("\x1b");
+			await wait(20);
+			assert.deepStrictEqual(slowSequences, ["\x1b"]);
+		});
+
+		it("waits longer for the rest of a split mouse report", async () => {
+			slowBuffer.process("\x1b[<35;20");
+			await wait(20);
+			assert.deepStrictEqual(slowSequences, []);
+			slowBuffer.process(";5M");
+			assert.deepStrictEqual(slowSequences, ["\x1b[<35;20;5M"]);
+		});
+
+		it("flushes a partial sequence after the longer timeout", async () => {
+			slowBuffer.process("\x1b[");
+			await wait(70);
+			assert.deepStrictEqual(slowSequences, ["\x1b["]);
 		});
 	});
 

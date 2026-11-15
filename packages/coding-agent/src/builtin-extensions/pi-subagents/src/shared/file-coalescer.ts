@@ -1,4 +1,3 @@
-// @ts-nocheck
 interface TimerApi {
 	setTimeout(handler: () => void, delayMs: number): unknown;
 	clearTimeout(handle: unknown): void;

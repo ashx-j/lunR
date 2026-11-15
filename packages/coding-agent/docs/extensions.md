@@ -58,7 +58,7 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 Create `~/.lunr/agent/extensions/my-extension.ts`:
 
 ```typescript
-import type { ExtensionAPI } from "@ashx-j/lunr";
+import { isToolCallEventType, type ExtensionAPI } from "@ashx-j/lunr";
 import { Type } from "typebox";
 
 export default function (pi: ExtensionAPI) {
@@ -68,7 +68,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName === "bash" && event.input.command?.includes("rm -rf")) {
+    if (isToolCallEventType("bash", event) && event.input.command.includes("rm -rf")) {
       const ok = await ctx.ui.confirm("Dangerous!", "Allow rm -rf?");
       if (!ok) return { block: true, reason: "Blocked by user" };
     }
@@ -145,7 +145,7 @@ To share extensions via npm or git as packages, see [packages.md](packages.md).
 | `@ashx-j/lunr-ai` | AI utilities (`StringEnum` for Google-compatible enums) |
 | `@ashx-j/lunr-tui` | TUI components for custom rendering |
 
-The factory argument is conventionally named `pi` (`export default function (pi: ExtensionAPI)`). Keep that. The jiti loader aliases both published names (`@ashx-j/lunr`, `@ashx-j/lunr-ai`, `@ashx-j/lunr-tui`, `@ashx-j/lunr-agent`) and workspace names (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `@earendil-works/pi-tui`, `@earendil-works/pi-agent-core`).
+The factory argument is conventionally named `pi` (`export default function (pi: ExtensionAPI)`). Keep that. The loader resolves `@ashx-j/lunr`, `@ashx-j/lunr-ai`, `@ashx-j/lunr-tui` and `@ashx-j/lunr-agent`. It also accepts pi's `@earendil-works/pi-*` names so extensions written for pi keep working. The examples in the repo use those names.
 
 npm dependencies work too. Add a `package.json` next to your extension (or in a parent directory), run `npm install`, and imports from `node_modules/` are resolved automatically.
 
@@ -180,7 +180,7 @@ export default function (pi: ExtensionAPI) {
 
 Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript works without compilation.
 
-If the factory returns a `Promise`, pi awaits it before continuing startup. That means async initialization completes before `session_start`, before `resources_discover`, and before provider registrations queued via `pi.registerProvider()` are flushed.
+If the factory returns a `Promise`, lunR awaits it before continuing startup. That means async initialization completes before `session_start`, before `resources_discover`, and before provider registrations queued via `pi.registerProvider()` are flushed.
 
 ### Async factory functions
 
@@ -286,7 +286,7 @@ lunR starts
       ▼
 user sends prompt ─────────────────────────────────────────┐
   │                                                        │
-  ├─► (extension commands checked first, bypass if found)  │
+  ├─► (built-in, then extension commands; bypass if found) │
   ├─► input (can intercept, transform, or handle)          │
   ├─► (skill/template expansion if not handled)            │
   ├─► before_agent_start (can inject message, modify system prompt)
@@ -526,8 +526,8 @@ pi.on("before_agent_start", async (event, ctx) => {
   // event.systemPromptOptions - structured options used to build the system prompt
   //   .customPrompt - any custom system prompt (from --system-prompt, SYSTEM.md, or custom templates)
   //   .selectedTools - tools currently active in the prompt
-  //   .toolSnippets - one-line descriptions for each tool
-  //   .promptGuidelines - custom guideline bullets
+  //   .toolSnippets - legacy, one-line tool snippets (the default prompt ignores them)
+  //   .promptGuidelines - legacy, tool guideline bullets (the default prompt ignores them)
   //   .appendSystemPrompt - text from --append-system-prompt flags
   //   .cwd - working directory
   //   .contextFiles - AGENTS.md files and other loaded context files
@@ -546,7 +546,7 @@ pi.on("before_agent_start", async (event, ctx) => {
 });
 ```
 
-The `systemPromptOptions` field gives extensions access to the same structured data lunR uses to build the system prompt. This lets you inspect what lunR has loaded — custom prompts, guidelines, tool snippets, context files, skills — without re-discovering resources or re-parsing flags. Use it when your extension needs to make deep, informed changes to the system prompt while respecting user-provided configuration.
+The `systemPromptOptions` field gives extensions access to the same structured data lunR uses to build the system prompt. This lets you inspect what lunR has loaded — custom prompts, context files, skills — without re-discovering resources or re-parsing flags. Use it when your extension needs to make deep, informed changes to the system prompt while respecting user-provided configuration.
 
 Inside `before_agent_start`, `event.systemPrompt` and `ctx.getSystemPrompt()` both reflect the chained system prompt as of the current handler. Later `before_agent_start` handlers can still modify it again.
 
@@ -663,8 +663,8 @@ pi.on("before_provider_headers", (event, ctx) => {
   // Add or override — e.g. a session id for gateway tracing/attribution
   event.headers["x-session-id"] = ctx.sessionManager.getSessionId();
 
-  // Drop a tracking header pi adds for this call
-  event.headers["X-OpenRouter-Title"] = null;
+  // Remove a header from this request
+  event.headers["x-example-header"] = null;
 });
 ```
 
@@ -877,14 +877,16 @@ pi.on("user_bash", (event, ctx) => {
 
 #### input
 
-Fired when user input is received, after extension commands are checked but before skill and template expansion. The event sees the raw input text, so `/skill:foo` and `/template` are not yet expanded.
+Fired when user input is received, after built-in and extension commands are checked but before skill and template expansion. The event sees the raw input text, so `/skill:foo` and `/template` are not yet expanded.
 
 **Processing order:**
-1. Extension commands (`/cmd`) checked first - if found, handler runs and input event is skipped
+1. Commands are checked first. In the TUI, built-in commands such as `/model` run before everything else. Then extension commands (`/cmd`) are checked. If one is found, its handler runs and the input event is skipped
 2. `input` event fires - can intercept, transform, or handle
 3. If not handled: skill commands (`/skill:name`) expanded to skill content
 4. If not handled: prompt templates (`/template`) expanded to template content
 5. Agent processing begins (`before_agent_start`, etc.)
+
+Interactive mode reports a `/word` that no extension command, prompt template or builtin claims as an unknown command before the `input` event fires, so handle slash commands with `registerCommand`, not in an `input` handler.
 
 ```typescript
 pi.on("input", async (event, ctx) => {
@@ -934,11 +936,11 @@ UI methods for user interaction. See [Custom UI](#custom-ui) for full details.
 
 ### ctx.mode
 
-Current run mode: `"tui"`, `"rpc"`, `"json"`, or `"print"`. Use `ctx.mode === "tui"` to guard terminal-only features such as `custom()`, component factories, terminal input, and direct TUI rendering.
+Current run mode: `"tui"`, `"rpc"`, `"json"`, `"print"`, or `"gateway"` (Telegram and Discord chat sessions). Use `ctx.mode === "tui"` to guard terminal-only features such as `custom()`, component factories, terminal input, and direct TUI rendering.
 
 ### ctx.hasUI
 
-`true` in TUI and RPC modes. `false` in print mode (`-p`) and JSON mode. Use this to guard dialog methods (`select`, `confirm`, `input`, `editor`) and fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`, `setEditorText`) that work in both TUI and RPC modes. In RPC mode, some TUI-specific methods are no-ops or return defaults (see [rpc.md](rpc.md#extension-ui-protocol)).
+`true` in TUI, RPC and gateway modes. `false` in print mode (`-p`) and JSON mode. Use this to guard dialog methods (`select`, `confirm`, `input`, `editor`) and fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`, `setEditorText`) that work in TUI and RPC modes. In RPC mode, some TUI-specific methods are no-ops or return defaults (see [rpc.md](rpc.md#extension-ui-protocol)). In gateway mode, dialogs and notifications go to the chat, `custom()` throws, and the other UI methods are no-ops.
 
 ### ctx.cwd
 
@@ -1010,9 +1012,17 @@ pi.on("tool_result", async (event, ctx) => {
 
 Control flow helpers. `ctx.isIdle()` is false while lunR is processing an agent run, automatic retry, auto-compaction retry, or queued continuation.
 
+### Advanced delivery methods
+
+These optional methods are for unattended features such as lunR's own cron and PR watch. Most extensions only need `pi.sendMessage()` and `pi.sendUserMessage()`.
+
+- `await ctx.promptWithCompletion?.(text, { source: "extension", signal })` runs one prompt on an idle session and resolves with the messages it produced. It rejects if the session is busy or closing. Pass a dedicated `AbortSignal` to cancel that request.
+- `await ctx.sendMessage?.(message, options)` takes the same arguments as `pi.sendMessage()`, but returns a promise that rejects on failure. A busy session queues the message. An idle `triggerTurn` call resolves after its agent turn completes. A turn can fail after the session has saved the message, so check for the saved message before retrying.
+- `ctx.hasQueuedMessage?.({ customType, details })` returns whether that message is still queued. `ctx.removeQueuedMessage?.({ customType, details })` removes it and returns `true`, or returns `false` if it already left the queue. Pass the same `details` object you sent, because matching compares it by identity. Removal fails while the session is closing or transferring.
+
 ### ctx.shutdown()
 
-Request a graceful shutdown of pi.
+Request a graceful shutdown of lunR.
 
 - **Interactive mode:** Deferred until the agent becomes idle (after processing all queued steering and follow-up messages).
 - **RPC mode:** Deferred until the next idle state (after completing the current command response, when waiting for the next command).
@@ -1034,7 +1044,7 @@ Returns current context usage for the active model. Uses last assistant usage wh
 
 ```typescript
 const usage = ctx.getContextUsage();
-if (usage && usage.tokens > 100_000) {
+if (usage?.tokens != null && usage.tokens > 100_000) {
   // ...
 }
 ```
@@ -1084,7 +1094,7 @@ const options = ctx.getSystemPromptOptions();
 const contextPaths = options.contextFiles?.map((file) => file.path) ?? [];
 ```
 
-This has the same shape and mutability as `before_agent_start` `event.systemPromptOptions`: custom prompt, active tools, tool snippets, prompt guidelines, appended system prompt text, cwd, loaded context files, and loaded skills. It may include full context file contents, so treat it as sensitive extension-local data and avoid exposing it through command lists, logs, or autocomplete metadata.
+This has the same shape and mutability as `before_agent_start` `event.systemPromptOptions`: custom prompt, active tools, legacy tool snippets and prompt guidelines (the default prompt ignores them), appended system prompt text, cwd, loaded context files, and loaded skills. It may include full context file contents, so treat it as sensitive extension-local data and avoid exposing it through command lists, logs, or autocomplete metadata.
 
 This reports the current base prompt inputs. It does not include per-turn `before_agent_start` chained system-prompt changes, later `context` event message mutations, or `before_provider_request` payload rewrites.
 
@@ -1209,7 +1219,7 @@ pi.registerCommand("switch", {
     if (sessions.length === 0) return;
     const choice = await ctx.ui.select(
       "Pick session:",
-      sessions.map(s => s.file),
+      sessions.map(s => s.path),
     );
     if (choice) {
       await ctx.switchSession(choice, {
@@ -1289,37 +1299,7 @@ Important behavior:
 
 For predictable behavior, treat reload as terminal for that handler (`await ctx.reload(); return;`).
 
-Tools run with `ExtensionContext`, so they cannot call `ctx.reload()` directly. Use a command as the reload entrypoint, then expose a tool that queues that command as a follow-up user message.
-
-Example tool the LLM can call to trigger reload:
-
-```typescript
-import type { ExtensionAPI } from "@ashx-j/lunr";
-import { Type } from "typebox";
-
-export default function (pi: ExtensionAPI) {
-  pi.registerCommand("reload-runtime", {
-    description: "Reload extensions, skills, prompts, themes, and context files",
-    handler: async (_args, ctx) => {
-      await ctx.reload();
-      return;
-    },
-  });
-
-  pi.registerTool({
-    name: "reload_runtime",
-    label: "Reload Runtime",
-    description: "Reload extensions, skills, prompts, themes, and context files",
-    parameters: Type.Object({}),
-    async execute() {
-      pi.sendUserMessage("/reload-runtime", { deliverAs: "followUp" });
-      return {
-        content: [{ type: "text", text: "Queued /reload-runtime as a follow-up command." }],
-      };
-    },
-  });
-}
-```
+Tools and shortcuts run with `ExtensionContext`, so they cannot call `ctx.reload()`. Reload is only reachable from a command. `pi.sendUserMessage("/reload-runtime")` does not run the command. It sends the text to the model as a normal user message.
 
 ## ExtensionAPI Methods
 
@@ -1335,9 +1315,7 @@ Register a custom tool callable by the LLM. See [Custom Tools](#custom-tools) fo
 
 Use `pi.setActiveTools()` to enable or disable tools (including dynamically added tools) at runtime.
 
-Use `promptSnippet` to opt a custom tool into a one-line entry in `Available tools`, and `promptGuidelines` to append tool-specific bullets to the default `Guidelines` section when the tool is active.
-
-**Important:** `promptGuidelines` bullets are appended flat to the `Guidelines` section with no tool name prefix. Each guideline must name the tool it refers to — avoid "Use this tool when..." because the LLM cannot tell which tool "this" means. Write "Use my_tool when..." instead.
+lunR sends each tool's `name`, `description` and `parameters` to the model. Put usage guidance in the `description`. `promptSnippet` and `promptGuidelines` are accepted for compatibility with pi extensions, but the default system prompt ignores them.
 
 See [dynamic-tools.ts](../examples/extensions/dynamic-tools.ts) for a full example.
 
@@ -1348,9 +1326,7 @@ import { StringEnum } from "@ashx-j/lunr-ai";
 pi.registerTool({
   name: "my_tool",
   label: "My Tool",
-  description: "What this tool does",
-  promptSnippet: "Summarize or transform text according to action",
-  promptGuidelines: ["Use my_tool when the user asks to summarize previously generated text."],
+  description: "Summarize or transform text according to action",
   parameters: Type.Object({
     action: StringEnum(["list", "add"] as const),
     text: Type.Optional(Type.String()),
@@ -1364,7 +1340,7 @@ pi.registerTool({
 
   async execute(toolCallId, params, signal, onUpdate, ctx) {
     // Stream progress
-    onUpdate?.({ content: [{ type: "text", text: "Working..." }] });
+    onUpdate?.({ content: [{ type: "text", text: "Working..." }], details: {} });
 
     return {
       content: [{ type: "text", text: "Done" }],
@@ -1412,7 +1388,7 @@ pi.sendUserMessage("What is 2+2?");
 // With content array (text + images)
 pi.sendUserMessage([
   { type: "text", text: "Describe this image:" },
-  { type: "image", source: { type: "base64", mediaType: "image/png", data: "..." } },
+  { type: "image", data: "<base64 data>", mimeType: "image/png" },
 ]);
 
 // During streaming - must specify delivery mode
@@ -1425,7 +1401,9 @@ pi.sendUserMessage("And then summarize", { deliverAs: "followUp" });
   - `"steer"` - Queues the message for delivery after the current assistant turn finishes executing its tool calls
   - `"followUp"` - Waits for agent to finish all tools
 
-When not streaming, the message is sent immediately and triggers a new turn. When streaming without `deliverAs`, throws an error.
+When not streaming, the message is sent immediately and triggers a new turn. When streaming without `deliverAs`, lunR does not queue the message and reports an extension error. The call itself does not throw.
+
+The text is sent to the model as typed. Slash commands are not run, so `pi.sendUserMessage("/my-command")` does not call your command.
 
 See [send-user-message.ts](../examples/extensions/send-user-message.ts) for a complete example.
 
@@ -1487,7 +1465,9 @@ Labels persist in the session and survive restarts. Use them to mark important p
 
 Register a command.
 
-If multiple extensions register the same command name, pi keeps them all and assigns numeric invocation suffixes in load order, for example `/review:1` and `/review:2`.
+If multiple extensions register the same command name, lunR keeps them all and assigns numeric invocation suffixes in load order, for example `/review:1` and `/review:2`.
+
+Do not reuse a built-in command name such as `/plan` or `/handoff`. In the TUI the built-in command runs first, so yours never runs.
 
 ```typescript
 pi.registerCommand("stats", {
@@ -1518,9 +1498,11 @@ pi.registerCommand("deploy", {
 });
 ```
 
+Set `hidden: true` for aliases you keep for compatibility. A hidden command still runs when typed, but it stays out of `/` autocomplete, `pi.getCommands()` and RPC `get_commands`.
+
 ### pi.getCommands()
 
-Get the slash commands available for invocation via `prompt` in the current session. Includes extension commands, prompt templates, and skill commands.
+Get the slash commands available for invocation via `prompt` in the current session. Includes extension commands that are not hidden, prompt templates, and skill commands.
 The list matches the RPC `get_commands` ordering: extensions first, then templates, then skills.
 
 ```typescript
@@ -1631,10 +1613,12 @@ const all = pi.getAllTools();
 const builtinTools = all.filter((t) => t.sourceInfo.source === "builtin");
 const extensionTools = all.filter((t) => t.sourceInfo.source !== "builtin" && t.sourceInfo.source !== "sdk");
 pi.setActiveTools([...new Set([...active, "my_custom_tool"])]); // Keep current tools and enable my_custom_tool
-pi.setActiveTools(["read", "bash"]); // Switch to read-only
+pi.setActiveTools(["read", "bash"]); // Limit to read and bash
 ```
 
 `pi.getAllTools()` returns `name`, `description`, `parameters`, `promptGuidelines`, and `sourceInfo`.
+
+`pi.setDeferredTools(names)` starts registered tools unloaded. They leave the active set, and models with native deferred loading keep seeing them as deferred definitions. Load one later by adding it back with `pi.setActiveTools()` from a tool's `execute`. It returns the accepted names, and accepts none when the session has an explicit tool allowlist (`--tools`, `--no-tools`) or the user turned off "Load tools on demand" in `/settings`. See [Dynamic Tool Loading](#dynamic-tool-loading).
 
 Typical `sourceInfo.source` values:
 - `builtin` for built-in tools
@@ -1815,15 +1799,13 @@ export default function (pi: ExtensionAPI) {
 
 ## Custom Tools
 
-Register tools the LLM can call via `pi.registerTool()`. Tools appear in the system prompt and can have custom rendering.
+Register tools the LLM can call via `pi.registerTool()`. Tools can have custom rendering.
 
-Use `promptSnippet` for a short one-line entry in the `Available tools` section in the default system prompt. If omitted, custom tools are left out of that section.
+lunR sends each tool's `name`, `description` and `parameters` to the model. Put usage guidance in the `description`. `promptSnippet` and `promptGuidelines` are accepted for compatibility with pi extensions, but the default system prompt ignores them.
 
-Use `promptGuidelines` to add tool-specific bullets to the default system prompt `Guidelines` section. These bullets are included only while the tool is active (for example, after `pi.setActiveTools([...])`).
+Note: Some models include the @ prefix in tool path arguments. Built-in tools strip a leading @ before resolving paths. If your custom tool accepts a path, normalize a leading @ as well.
 
-**Important:** `promptGuidelines` bullets are appended flat to the `Guidelines` section with no tool name prefix or grouping. Each guideline must name the tool it refers to — avoid "Use this tool when..." because the LLM cannot tell which tool "this" means. Write "Use my_tool when..." instead.
-
-Note: Some models are idiots and include the @ prefix in tool path arguments. Built-in tools strip a leading @ before resolving paths. If your custom tool accepts a path, normalize a leading @ as well.
+Permission modes apply to extension tools. `yolo` runs them. In `auto`, a review model checks each call first. `read-only` blocks them with the message `Read-only mode cannot verify that my_tool is safe`, and a custom tool has no way to declare itself read-only. See [features.md](features.md) for the modes.
 
 If your custom tool mutates files, use `withFileMutationQueue()` so it participates in the same per-file queue as built-in `edit` and `write`. This matters because tool calls run in parallel by default. Without the queue, two tools can read the same old file contents, compute different updates, and then whichever write lands last overwrites the other.
 
@@ -1865,11 +1847,7 @@ import { Text } from "@ashx-j/lunr-tui";
 pi.registerTool({
   name: "my_tool",
   label: "My Tool",
-  description: "What this tool does (shown to LLM)",
-  promptSnippet: "List or add items in the project todo list",
-  promptGuidelines: [
-    "Use my_tool for todo planning instead of direct file edits when the user asks for a task list."
-  ],
+  description: "List or add items in the project todo list (shown to LLM)",
   parameters: Type.Object({
     action: StringEnum(["list", "add"] as const),  // Use StringEnum for Google compatibility
     text: Type.Optional(Type.String()),
@@ -1886,7 +1864,7 @@ pi.registerTool({
   async execute(toolCallId, params, signal, onUpdate, ctx) {
     // Check for cancellation
     if (signal?.aborted) {
-      return { content: [{ type: "text", text: "Cancelled" }] };
+      return { content: [{ type: "text", text: "Cancelled" }], details: {} };
     }
 
     // Stream progress updates
@@ -1930,7 +1908,7 @@ async execute(toolCallId, params) {
 
 **Important:** Use `StringEnum` from `@ashx-j/lunr-ai` for string enums. `Type.Union`/`Type.Literal` doesn't work with Google's API.
 
-**Argument preparation:** `prepareArguments(args)` is optional. If defined, it runs before schema validation and before `execute()`. Use it to mimic an older accepted input shape when pi resumes an older session whose stored tool call arguments no longer match the current schema. Return the object you want validated against `parameters`. Keep the public schema strict. Do not add deprecated compatibility fields to `parameters` just to keep old resumed sessions working.
+**Argument preparation:** `prepareArguments(args)` is optional. If defined, it runs before schema validation and before `execute()`. Use it to mimic an older accepted input shape when lunR resumes an older session whose stored tool call arguments no longer match the current schema. Return the object you want validated against `parameters`. Keep the public schema strict. Do not add deprecated compatibility fields to `parameters` just to keep old resumed sessions working.
 
 Example: an older session may contain an `edit` tool call with top-level `oldText` and `newText`, while the current schema only accepts `edits: [{ oldText, newText }]`.
 
@@ -1979,7 +1957,7 @@ pi.registerTool({
 
 ### Overriding Built-in Tools
 
-Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) by registering a tool with the same name. Interactive mode displays a warning when this happens.
+Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) by registering a tool with the same name.
 
 ```bash
 # Extension's read tool replaces built-in read
@@ -1995,8 +1973,6 @@ lunr --no-builtin-tools -e ./my-extension.ts
 See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.ts) for a complete example that overrides `read` with logging and access control.
 
 **Rendering:** Built-in renderer inheritance is resolved per slot. Execution override and rendering override are independent. If your override omits `renderCall`, the built-in `renderCall` is used. If your override omits `renderResult`, the built-in `renderResult` is used. If your override omits both, the built-in renderer is used automatically (syntax highlighting, diffs, etc.). This lets you wrap built-in tools for logging or access control without reimplementing the UI.
-
-**Prompt metadata:** `promptSnippet` and `promptGuidelines` are not inherited from the built-in tool. If your override should keep those prompt instructions, define them on the override explicitly.
 
 **Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking.
 
@@ -2098,7 +2074,7 @@ async execute(toolCallId, params, signal, onUpdate, ctx) {
     result += ` Full output saved to: ${tempFile}]`;
   }
 
-  return { content: [{ type: "text", text: result }] };
+  return { content: [{ type: "text", text: result }], details: {} };
 }
 ```
 
@@ -2286,7 +2262,15 @@ For all other models and providers, dynamic activation still works: lunR sends t
 
 lunR also uses this safe fallback when the active set is not purely additive, such as replacing one group of tools with another. Tool removals therefore work, but they do not use deferred loading.
 
-For the best cache behavior, keep the loader tool active for the whole session and add tools instead of replacing the active set. Also note that activating a tool with `promptSnippet` or `promptGuidelines` rebuilds the system prompt; that system-prompt change can invalidate the prefix even when the provider supports deferred schemas. Lazily loaded tools should usually rely on their tool `description` and omit active-only prompt metadata.
+For the best cache behavior, keep the loader tool active for the whole session and add tools instead of replacing the active set.
+
+#### Declaring the deferred set
+
+Call `pi.setDeferredTools(names)` instead of removing tools with `pi.setActiveTools()` when the tools should start unloaded. On Anthropic models with native loading, lunR then sends every declared tool with `defer_loading` from the first request in a fixed order, loaded or not. The `tools` array stays byte-identical when a tool result loads one, so the cached tools and system prompt survive the load. Tools that are removed with `pi.setActiveTools()` instead are absent until they load, and the first load rewrites the cached prefix.
+
+Call it at the first `before_agent_start`, after the tools are registered. Each call adds its names after the ones declared earlier in the session, so several extensions can declare their own tools; a name declared earlier keeps its place and its loaded state. A direct call to a declared tool that is not loaded yet returns an error telling the model to load it first; the error names no loader, so the loader's description must say which tools it loads. A loader with `executionMode: "sequential"` lets a call that follows it in the same message use the tool it just loaded. Other providers ignore the declaration and send a loaded declared tool as a normal tool.
+
+lunR's builtin `lunr-tool-loader` uses this for its own rarely used tools (subagents, web, LSP, browser, `code_rewrite`, cron, PR watch) and registers `load_tools` as their loader on Anthropic models with native loading.
 
 #### Search tool example
 
@@ -2328,11 +2312,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "search_tools",
     label: "Search Tools",
-    description: "Search for and enable tools relevant to a task",
-    promptSnippet: "Search for additional tools when the active tools cannot perform the task",
-    promptGuidelines: [
-      "Use search_tools when a task requires a capability that is not currently available.",
-    ],
+    description: "Search for and enable tools relevant to a task. Use search_tools when a task needs a capability that is not currently available.",
     parameters: Type.Object({
       query: Type.String({ description: "Capability or task to search for" }),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
@@ -2516,7 +2496,7 @@ ctx.ui.setFooter((tui, theme) => ({
 ctx.ui.setFooter(undefined);  // Restore built-in footer
 
 // Terminal title
-ctx.ui.setTitle("pi - my-project");
+ctx.ui.setTitle("lunR - my-project");
 
 // Editor text
 ctx.ui.setEditorText("Prefill text");
@@ -2537,7 +2517,7 @@ ctx.ui.addAutocompleteProvider((current) => ({
 
     return {
       prefix: `#${match[1] ?? ""}`,
-      items: [{ value: "#2983", label: "#2983", description: "Extension API for autocomplete" }],
+      items: [{ value: "#1", label: "#1", description: "Fix login redirect" }],
     };
   },
   applyCompletion(lines, line, col, item, prefix) {
@@ -2600,8 +2580,8 @@ pi.on("session_start", (_event, ctx) => {
       return {
         prefix: `#${match[1] ?? ""}`,
         items: [
-          { value: "#2983", label: "#2983", description: "Extension API for registering custom @ autocomplete providers" },
-          { value: "#2753", label: "#2753", description: "Reload stale resource settings" },
+          { value: "#1", label: "#1", description: "Fix login redirect" },
+          { value: "#2", label: "#2", description: "Add a dark theme" },
         ],
       };
     },
@@ -2624,18 +2604,19 @@ See [github-issue-autocomplete.ts](../examples/extensions/github-issue-autocompl
 For complex UI, use `ctx.ui.custom()`. This temporarily replaces the editor with your component until `done()` is called:
 
 ```typescript
-import { Text, Component } from "@ashx-j/lunr-tui";
+import { matchesKey, type Component } from "@ashx-j/lunr-tui";
 
 const result = await ctx.ui.custom<boolean>((tui, theme, keybindings, done) => {
-  const text = new Text("Press Enter to confirm, Escape to cancel", 1, 1);
-
-  text.onKey = (key) => {
-    if (key === "return") done(true);
-    if (key === "escape") done(false);
-    return true;
+  const component: Component = {
+    render: () => ["Press Enter to confirm, Escape to cancel"],
+    handleInput(data) {
+      if (matchesKey(data, "enter")) done(true);
+      if (matchesKey(data, "escape")) done(false);
+    },
+    invalidate() {},
   };
 
-  return text;
+  return component;
 });
 
 if (result) {
@@ -2710,8 +2691,8 @@ class VimEditor extends CustomEditor {
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
-    ctx.ui.setEditorComponent((_tui, theme, keybindings) =>
-      new VimEditor(theme, keybindings)
+    ctx.ui.setEditorComponent((tui, theme, keybindings) =>
+      new VimEditor(tui, theme, keybindings)
     );
   });
 }
@@ -2720,7 +2701,7 @@ export default function (pi: ExtensionAPI) {
 **Key points:**
 - Extend `CustomEditor` (not base `Editor`) to get app keybindings (escape to abort, ctrl+d, model switching)
 - Call `super.handleInput(data)` for keys you don't handle
-- Factory receives `theme` and `keybindings` from the app
+- Factory receives `tui`, `theme` and `keybindings` from the app
 - Use `ctx.ui.getEditorComponent()` before `setEditorComponent()` to wrap the previously configured custom editor
 - Pass `undefined` to restore default: `ctx.ui.setEditorComponent(undefined)`
 
@@ -2803,12 +2784,13 @@ For syntax highlighting in custom tool renderers:
 ```typescript
 import { highlightCode, getLanguageFromPath } from "@ashx-j/lunr";
 
-// Highlight code with explicit language
-const highlighted = highlightCode("const x = 1;", "typescript", theme);
+// Highlight code with explicit language. Returns one string per line.
+const lines = highlightCode("const x = 1;", "typescript");
 
-// Auto-detect language from file path
+// Detect language from file path (undefined if unknown)
 const lang = getLanguageFromPath("/path/to/file.rs");  // "rust"
-const highlighted = highlightCode(code, lang, theme);
+const rustLines = highlightCode(code, lang);
+const text = rustLines.join("\n");
 ```
 
 ## Error Handling
@@ -2823,14 +2805,17 @@ const highlighted = highlightCode(code, lang, theme);
 |------|------------|-------------|-------|
 | Interactive | `"tui"` | `true` | Full TUI with terminal rendering |
 | RPC (`--mode rpc`) | `"rpc"` | `true` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. See [rpc.md](rpc.md) |
+| Gateway (Telegram/Discord) | `"gateway"` | `true` | `select`, `confirm`, `input`, `editor` and `notify` go to the chat; `custom()` throws; other UI methods are no-ops |
 | JSON (`--mode json`) | `"json"` | `false` | Event stream to stdout; UI methods are no-ops |
 | Print (`-p`) | `"print"` | `false` | Extensions run but can't prompt |
 
-Use `ctx.mode === "tui"` before TUI-specific features (`custom()`, component factories, terminal input). Use `ctx.hasUI` before dialog and notification methods that work in both TUI and RPC modes.
+Use `ctx.mode === "tui"` before TUI-specific features (`custom()`, component factories, terminal input). Use `ctx.hasUI` before dialog and notification methods that work in TUI, RPC and gateway modes.
 
 ## Examples Reference
 
 All examples in [examples/extensions/](../examples/extensions/).
+
+`plan-mode/`, `todo.ts` and `subagent/` are API samples. lunR already has plan mode, todos and subagents built in (see [features.md](features.md)).
 
 | Example | Description | Key APIs |
 |---------|-------------|----------|
@@ -2846,10 +2831,10 @@ All examples in [examples/extensions/](../examples/extensions/).
 | **Commands** |||
 | `pirate.ts` | Modify system prompt per-turn | `registerCommand`, `before_agent_start` |
 | `summarize.ts` | Conversation summary command | `registerCommand`, `ui.custom` |
-| `handoff.ts` | Cross-provider model handoff | `registerCommand`, `ui.editor`, `ui.custom` |
+| `handoff.ts` | Cross-provider model handoff. The built-in `/handoff` wins over its `/handoff` command in the TUI | `registerCommand`, `ui.editor`, `ui.custom` |
 | `qna.ts` | Q&A with custom UI | `registerCommand`, `ui.custom`, `setEditorText` |
 | `send-user-message.ts` | Inject user messages | `registerCommand`, `sendUserMessage` |
-| `reload-runtime.ts` | Reload command and LLM tool handoff | `registerCommand`, `ctx.reload()`, `sendUserMessage` |
+| `reload-runtime.ts` | Reload command | `registerCommand`, `ctx.reload()` |
 | `shutdown-command.ts` | Graceful shutdown command | `registerCommand`, `shutdown()` |
 | **Events & Gates** |||
 | `permission-gate.ts` | Block dangerous commands | `on("tool_call")`, `ui.confirm` |
@@ -2886,7 +2871,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `timed-confirm.ts` | Dialogs with timeout | `ui.confirm` with timeout/signal |
 | `mac-system-theme.ts` | Auto-switch theme | `setTheme`, `exec` |
 | **Complex Extensions** |||
-| `plan-mode/` | Full plan mode implementation | All event types, `registerCommand`, `registerShortcut`, `registerFlag`, `setStatus`, `setWidget`, `sendMessage`, `setActiveTools` |
+| `plan-mode/` | Sample plan mode extension. The built-in `/plan` wins over its `/plan` command in the TUI | All event types, `registerCommand`, `registerShortcut`, `registerFlag`, `setStatus`, `setWidget`, `sendMessage`, `setActiveTools` |
 | `preset.ts` | Saveable presets (model, tools, thinking) | `registerCommand`, `registerShortcut`, `registerFlag`, `setModel`, `setActiveTools`, `setThinkingLevel`, `appendEntry` |
 | `tools.ts` | Toggle tools on/off UI | `registerCommand`, `setActiveTools`, `SettingsList`, session events |
 | **Remote & Sandbox** |||

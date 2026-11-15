@@ -17,16 +17,23 @@
  */
 
 import { existsSync } from "node:fs";
-import { type BridgeSession, type BridgeSessionStatus, QUEUED, type TurnCallbacks } from "./agent-bridge.ts";
+import {
+	type BridgeSession,
+	type BridgeSessionStatus,
+	QUEUED,
+	type ResetOptions,
+	type TurnCallbacks,
+} from "./agent-bridge.ts";
 import { registerGatewayApprovalHandler, runWithApprovalContext } from "./approval.ts";
-import { isAuthorized, isGatewayOwner, requireGatewayOwner } from "./authz.ts";
+import { isAuthorized, requireAuthorized } from "./authz.ts";
 import { CHAT_COMMANDS, runChatCommand, sendCommandReply } from "./commands.ts";
 import { type GatewayConfig, gatewayConfigPath, loadGatewayConfig, platformConfigFor } from "./config.ts";
 import { bindConversation, conversationBinding } from "./conversations.ts";
-import { resolveWithinRoots } from "./mobile-commands.ts";
+import { FORWARDED_COMMANDS, resolveWithinRoots } from "./mobile-commands.ts";
 import type { PairingStore } from "./pairing.ts";
 import {
 	acceptGatewayInput,
+	canDeliverGatewayText,
 	gatewayEpoch,
 	invalidateGatewayDialogs,
 	queueGatewayText,
@@ -42,7 +49,7 @@ import type { MessageEvent, PlatformAdapter } from "./types.ts";
 export interface BridgeLike {
 	runTurn(key: string, event: MessageEvent, callbacks: TurnCallbacks): Promise<string>;
 	abort(key: string): Promise<void> | void;
-	reset(key: string): void | Promise<void>;
+	reset(key: string, options?: ResetOptions): void | Promise<void>;
 	getStatus(key: string): BridgeSessionStatus;
 	getSession(key: string, create?: boolean): Promise<BridgeSession | null>;
 	peekSession?(key: string): BridgeSession | undefined;
@@ -143,7 +150,7 @@ export function createRouter(deps: RouterDeps): Router {
 		if (code === null) return true; // rate-limited or pending list full: stay silent
 		await adapter.send(
 			source.chatId,
-			`Your lunR pairing code: ${formatPairingCode(code)}. Ask the computer's owner to run lunr gateway pair approve ${source.platform} ${formatPairingCode(code)} --owner if this is their account. Approval without --owner grants chat access only.`,
+			`Your lunR pairing code: ${formatPairingCode(code)}. On the computer running lunr, approve access with: lunr gateway pair approve ${source.platform} ${formatPairingCode(code)}. Approval grants full gateway access, including local projects and saved sessions.`,
 			{ replyTo: event.messageId, threadId: source.threadId },
 		);
 		return true;
@@ -151,10 +158,8 @@ export function createRouter(deps: RouterDeps): Router {
 
 	function workspaceReadiness(event: MessageEvent, key: string, cfg: GatewayConfig): string | undefined {
 		if (getStoredSession(key) || conversationBinding(key)?.cwd) return undefined;
-		if (!isGatewayOwner(event.source, cfg))
-			return "This chat is paired but has no project. Ask the computer's gateway owner to configure your access locally. /project and /continue require owner access.";
 		const root = cfg.defaultProject;
-		if (!root) return "No default project selected. Use /project in this private chat to choose an approved folder.";
+		if (!root) return "No default project selected. Use /project to choose an approved folder.";
 		try {
 			const cwd = resolveWithinRoots(root, cfg.projectRoots ?? []);
 			bindConversation(key, event.source, { cwd, owner: event.source.userId });
@@ -162,6 +167,11 @@ export function createRouter(deps: RouterDeps): Router {
 		} catch {
 			return "Default project is no longer an approved folder. Use /project to choose an approved folder.";
 		}
+	}
+
+	/** Approval context for this chat; plan approval reaches the live session through the bridge. */
+	function approvalContext(key: string, adapter: PlatformAdapter, event: MessageEvent) {
+		return { key, adapter, source: event.source, session: () => bridge.peekSession?.(key) };
 	}
 
 	/** Step 3: command registry. Returns true when the event was consumed. */
@@ -181,7 +191,7 @@ export function createRouter(deps: RouterDeps): Router {
 				});
 				return true;
 			}
-			const consumed = await runWithApprovalContext({ key, adapter, source: event.source }, () =>
+			const consumed = await runWithApprovalContext(approvalContext(key, adapter, event), () =>
 				handleMobileCommand({ key, event, adapter, bridge, cfg: freshCfg() }, commandWord, args),
 			);
 			if (consumed) return true;
@@ -231,6 +241,8 @@ export function createRouter(deps: RouterDeps): Router {
 		}
 		const cmd = CHAT_COMMANDS.find((c) => c.name === commandWord || c.aliases?.includes(commandWord));
 		if (!cmd) {
+			// Forwarded commands are extension commands the session runs as a normal turn, in any chat type.
+			if (FORWARDED_COMMANDS.some((c) => c.name === commandWord)) return false;
 			return event.source.chatType !== "dm";
 		}
 		const ctx = {
@@ -242,7 +254,7 @@ export function createRouter(deps: RouterDeps): Router {
 			args,
 			reply: (message: string) => sendCommandReply(adapter, event, message),
 		};
-		return runWithApprovalContext({ key, adapter, source: event.source }, () => runChatCommand(cmd, ctx));
+		return runWithApprovalContext(approvalContext(key, adapter, event), () => runChatCommand(cmd, ctx));
 	}
 
 	/** A successful preview is finalized by edit; failed edits fall back to a durable full reply. */
@@ -252,8 +264,10 @@ export function createRouter(deps: RouterDeps): Router {
 		text: string,
 		key: string,
 		cfg: GatewayConfig,
-		opts: { reply: boolean; editMessageId?: string; previewTruncated?: boolean },
+		opts: { reply: boolean; editMessageId?: string; previewTruncated?: boolean; valid?: () => boolean },
 	): Promise<void> {
+		if (opts.valid && !opts.valid()) return;
+		if (!canDeliverGatewayText(key, event.source, cfg, pairing)) return;
 		const filtered = applySilenceFilter(text);
 		if (filtered === null) return;
 		if (opts.editMessageId) {
@@ -286,10 +300,16 @@ export function createRouter(deps: RouterDeps): Router {
 	): Promise<void> {
 		const epoch = gatewayEpoch(key);
 		const streaming = cfg.streaming.enabled && typeof adapter.editMessage === "function";
+		let denied = false;
+		const valid = () => {
+			if (!denied) denied = !canDeliverGatewayText(key, event.source, cfg, pairing);
+			return !denied;
+		};
 		let consumer: StreamConsumer | undefined;
 		if (streaming) {
 			consumer = new StreamConsumer({
 				sendInitial: async (text) => {
+					if (!valid() || gatewayEpoch(key) !== epoch) return null;
 					const result = await adapter.send(event.source.chatId, text, {
 						replyTo: event.messageId,
 						threadId: event.source.threadId,
@@ -297,6 +317,7 @@ export function createRouter(deps: RouterDeps): Router {
 					return result.success ? (result.messageId ?? null) : null;
 				},
 				edit: async (messageId, text) => {
+					if (!valid() || gatewayEpoch(key) !== epoch) return;
 					const result = await adapter.editMessage(event.source.chatId, messageId, text);
 					if (!result.success) throw new Error(result.error ?? "Preview edit failed");
 				},
@@ -320,7 +341,7 @@ export function createRouter(deps: RouterDeps): Router {
 			},
 		};
 
-		const result = await runWithApprovalContext({ key, adapter, source: event.source }, () =>
+		const result = await runWithApprovalContext(approvalContext(key, adapter, event), () =>
 			bridge.runTurn(key, event, callbacks),
 		);
 		if (result === QUEUED) return; // queued behind a running turn: no reply
@@ -329,6 +350,7 @@ export function createRouter(deps: RouterDeps): Router {
 			reply: !consumer,
 			editMessageId: consumer?.sentMessageId ?? undefined,
 			previewTruncated: consumer?.truncated ?? false,
+			valid,
 		});
 	}
 
@@ -346,9 +368,9 @@ export function createRouter(deps: RouterDeps): Router {
 				if (deps.remoteControls) {
 					const binding = conversationBinding(key);
 					if (binding?.owner) {
-						requireGatewayOwner(event.source, cfg);
+						requireAuthorized(event.source, cfg);
 						if (binding.owner !== event.source.userId)
-							throw new Error("This session belongs to a different owner.");
+							throw new Error("This session belongs to a different user.");
 					}
 					bindConversation(key, event.source);
 					if (acceptGatewayInput(key, event)) return;

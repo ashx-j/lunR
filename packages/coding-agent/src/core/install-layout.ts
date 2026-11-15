@@ -3,10 +3,11 @@
  * never under <prefix>/agent. --prefix relocates versions/ + bin/ only.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getAgentDir } from "../config.ts";
+import { writeJsonFileAtomic } from "../utils/json.ts";
 
 export interface InstallLayoutFile {
 	schemaVersion: 1;
@@ -46,12 +47,7 @@ export function loadInstallLayout(): InstallLayoutFile | undefined {
 }
 
 export function saveInstallLayout(file: InstallLayoutFile): void {
-	const path = installLayoutPath();
-	const dir = getAgentDir();
-	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}`;
-	writeFileSync(tmp, `${JSON.stringify(file, null, 2)}\n`, "utf-8");
-	renameSync(tmp, path);
+	writeJsonFileAtomic(installLayoutPath(), file);
 }
 
 /** LUNR_PREFIX → install-layout.json → default ~/.lunr */

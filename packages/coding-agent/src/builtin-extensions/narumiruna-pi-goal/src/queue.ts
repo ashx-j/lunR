@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import { checkpointGoalActiveTime } from "./accounting.js";
 import type { ActiveGoal } from "./persistence.js";

@@ -168,28 +168,16 @@ export function writeCache(models: Record<string, CachedOllamaModel>): void {
 }
 
 // --- Fetch Models ---
-/** Env key first, then stored auth.json api_key. */
-export function resolveOllamaApiKey(): string | undefined {
-  const envKey = process.env.OLLAMA_API_KEY?.trim();
-  if (envKey) return envKey;
-  try {
-    const raw = readFileSync(join(getAgentDir(), "auth.json"), "utf-8");
-    const data = JSON.parse(raw) as Record<string, { type?: string; key?: string }>;
-    const cred = data["ollama-cloud"];
-    if (cred?.type === "api_key" && typeof cred.key === "string") {
-      const key = cred.key.trim();
-      if (key) return key;
-    }
-  } catch {
-    // Missing or unreadable auth.json — treat as no key.
-  }
-  return undefined;
+/** Canonical request auth is supplied by the owning runtime, never reread from global storage. */
+export interface OllamaDiscoveryAuth {
+  apiKey?: string;
+  headers?: Record<string, string>;
 }
 
-export async function fetchModelIds(timeoutMs = FETCH_TIMEOUT_MS): Promise<string[]> {
-  const headers: Record<string, string> = {};
-  const apiKey = resolveOllamaApiKey();
-  if (apiKey) {
+export async function fetchModelIds(auth: OllamaDiscoveryAuth, timeoutMs = FETCH_TIMEOUT_MS): Promise<string[]> {
+  const headers: Record<string, string> = { ...auth.headers };
+  const apiKey = auth.apiKey;
+  if (apiKey && !Object.keys(headers).some((name) => name.toLowerCase() === "authorization")) {
     headers.Authorization = `Bearer ${apiKey}`;
   }
 
@@ -209,10 +197,10 @@ export async function fetchModelIds(timeoutMs = FETCH_TIMEOUT_MS): Promise<strin
   return res.data.data.map((m) => m.id);
 }
 
-export async function fetchModelDetails(id: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<CachedOllamaModel> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const apiKey = resolveOllamaApiKey();
-  if (apiKey) {
+export async function fetchModelDetails(id: string, auth: OllamaDiscoveryAuth, timeoutMs = FETCH_TIMEOUT_MS): Promise<CachedOllamaModel> {
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...auth.headers };
+  const apiKey = auth.apiKey;
+  if (apiKey && !Object.keys(headers).some((name) => name.toLowerCase() === "authorization")) {
     headers.Authorization = `Bearer ${apiKey}`;
   }
 
@@ -237,18 +225,19 @@ export async function fetchModelDetails(id: string, timeoutMs = FETCH_TIMEOUT_MS
 }
 
 export async function refreshOllamaCloudModels(params: {
+  auth?: OllamaDiscoveryAuth;
   notify?: (message: string, level?: "info" | "error") => void;
   onProgress?: (progress: RefreshProgress) => void;
   workers?: number;
 }): Promise<Record<string, CachedOllamaModel>> {
   const notify = params.notify ?? (() => undefined);
   const onProgress = params.onProgress ?? (() => undefined);
-  if (!resolveOllamaApiKey()) {
+  if (!params.auth?.apiKey && !Object.entries(params.auth?.headers ?? {}).some(([name, value]) => name.toLowerCase() === "authorization" && value)) {
     notify("Ollama Cloud skipped (no API key)");
     return {};
   }
   onProgress({ stage: "list", message: "Fetching model list..." });
-  const modelIds = await fetchModelIds();
+  const modelIds = await fetchModelIds(params.auth ?? {});
   notify(`Found ${modelIds.length} models, fetching details...`);
   onProgress({ stage: "details", current: 0, total: modelIds.length, failed: 0, message: "Fetching model details" });
 
@@ -256,7 +245,7 @@ export async function refreshOllamaCloudModels(params: {
   let detailsFailed = 0;
   const detailResults = await concurrentMap(modelIds, params.workers ?? 8, async (id) => {
     try {
-      return [id, await fetchModelDetails(id)] as const;
+      return [id, await fetchModelDetails(id, params.auth ?? {})] as const;
     } catch (error) {
       detailsFailed++;
       throw error;
@@ -293,11 +282,12 @@ export async function refreshOllamaCloudModels(params: {
 }
 
 export async function fetchModels(
-  ctx: Pick<ExtensionCommandContext, "ui">,
+  ctx: Pick<ExtensionCommandContext, "ui"> & { auth?: OllamaDiscoveryAuth },
   onProgress?: (progress: RefreshProgress) => void,
 ): Promise<Record<string, CachedOllamaModel> | null> {
   try {
     return await refreshOllamaCloudModels({
+      auth: ctx.auth,
       notify: (message, level) => ctx.ui.notify(message, level),
       onProgress,
     });

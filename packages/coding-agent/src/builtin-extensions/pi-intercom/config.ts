@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { getIntercomDirPath } from "./broker/paths.ts";

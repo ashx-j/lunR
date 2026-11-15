@@ -35,7 +35,6 @@ For the JSONL file format and SessionManager API, see [Session Format](session-f
 | `/clone` | Duplicate the current active branch into a new session |
 | `/compact [prompt]` | Summarize older context; see [Compaction](compaction.md) |
 | `/export [file]` | Export session to HTML |
-| `/share` | Upload as private GitHub gist with shareable HTML link |
 
 ## Session ownership
 
@@ -47,7 +46,7 @@ For marking a desktop session, choosing it on Telegram or Discord, and handling 
 
 ## Resuming and Deleting Sessions
 
-`/resume` opens an interactive session picker for the current project. `pi -r` opens the same picker at startup.
+`/resume` opens an interactive session picker for the current project. `lunr -r` opens the same picker at startup.
 
 In the picker you can:
 
@@ -75,13 +74,11 @@ lunr --name "Refactor auth module"
 lunr --name "CI audit" -p "Review this build failure"
 ```
 
-Named sessions are easier to find in `/resume` and `pi -r`.
+Named sessions are easier to find in `/resume` and `lunr -r`.
 
 ## Branching with `/tree`
 
 Sessions are stored as trees. Every entry has an `id` and `parentId`, and the current position is the active leaf. `/tree` lets you jump to any previous point and continue from there without creating a new file.
-
-<p align="center"><img src="images/tree-view.png" alt="Tree View" width="600"></p>
 
 Example shape:
 

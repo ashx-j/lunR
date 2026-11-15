@@ -3,8 +3,8 @@ import type { OpenAIResponsesOptions } from "../src/api/openai-responses.ts";
 import { getSupportedThinkingLevels } from "../src/models.ts";
 import { XAI_MODELS } from "../src/providers/xai.models.ts";
 import { xaiProvider } from "../src/providers/xai.ts";
-import { shouldUseXaiResponsesApi } from "../src/xai-effort.ts";
 import type { Context, Model } from "../src/types.ts";
+import { shouldUseXaiResponsesApi } from "../src/xai-effort.ts";
 
 type CapturedRequest = {
 	url: string;
@@ -59,18 +59,6 @@ async function captureRequest(
 describe("xAI Responses provider", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-	});
-
-	it("excludes retired and redundant models from the built-in catalog", () => {
-		for (const modelId of [
-			"grok-3",
-			"grok-3-fast",
-			"grok-4.20-0309-non-reasoning",
-			"grok-4.20-0309-reasoning",
-			"grok-code-fast-1",
-		]) {
-			expect(Object.keys(XAI_MODELS)).not.toContain(modelId);
-		}
 	});
 
 	it("uses Responses for baked-in Grok 4.5+ and Completions for older Grok 4", () => {

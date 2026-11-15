@@ -17,6 +17,7 @@ import ashxjThinking from "./ashxj-thinking.ts";
 import lunrLocalProviders from "./lunr-local-providers/index.ts";
 import lunrTodos from "./lunr-todos.ts";
 import lunrPlanTools from "./lunr-plan-tools.ts";
+import lunrToolLoader from "./lunr-tool-loader.ts";
 import lunrSkillCreator from "./lunr-skill-creator/index.ts";
 
 /**
@@ -39,6 +40,7 @@ export const lightBuiltinExtensions: InlineExtension[] = [
 	ext("lunr-local-providers", lunrLocalProviders),
 	ext("lunr-todos", lunrTodos),
 	ext("lunr-plan-tools", lunrPlanTools),
+	ext("lunr-tool-loader", lunrToolLoader),
 	ext("lunr-skill-creator", lunrSkillCreator),
 ];
 
@@ -49,6 +51,7 @@ const DEFERRED_BUILTIN_LOADERS: Array<{
 	{ name: "pi-ollama-cloud", load: () => import("./pi-ollama-cloud/index.ts") },
 	{ name: "narumiruna-pi-goal", load: () => import("./narumiruna-pi-goal/src/goal.ts") },
 	{ name: "lunr-cron", load: () => import("./lunr-cron.ts") },
+	{ name: "lunr-pr-watch", load: () => import("./lunr-pr-watch.ts") },
 	{ name: "pi-intercom", load: () => import("./pi-intercom/index.ts") },
 	{ name: "pi-prompt-template-model", load: () => import("./pi-prompt-template-model/index.ts") },
 	{ name: "pi-subagents", load: () => import("./pi-subagents/index.ts") },

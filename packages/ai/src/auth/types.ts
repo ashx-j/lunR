@@ -34,18 +34,35 @@ export interface OAuthCredential extends OAuthCredentials {
 	type: "oauth";
 }
 
-/** One type-tagged credential per provider — the shape of today's auth.json. */
-export interface ExternalClaudeCodeCredential {
-	type: "external_claude_code";
-	version: 1;
-	manager: "claude-code";
-	command: string;
-	python: string;
-	configDir?: string;
-	accountFingerprint?: string;
-	routes?: string[];
+/** A model Claude Code offers the account, as discovered at setup. */
+export interface ClaudeCodeModelRoute {
+	/** lunR model id: Claude Code's model id without its `[1m]` suffix. */
+	id: string;
+	/** `--model` value lunR passes to Claude Code, such as `claude-sonnet-5[1m]`. */
+	route: string;
+	/** Context window of that route. Absent when it is not a `[1m]` route, so the catalog window applies. */
+	contextWindow?: number;
 }
 
+/**
+ * Non-secret record of a Claude subscription connection. Claude Code owns the sign-in; lunR stores where
+ * its pinned Claude Code binary lives and which models the account offers. Version 1 records came from the
+ * retired Python bridge and version 2 records carry no routes or windows; both need /login anthropic again.
+ */
+export interface ExternalClaudeCodeCredential {
+	type: "external_claude_code";
+	version: 1 | 2 | 3;
+	manager: "claude-code";
+	/** Absolute path of the Claude Code binary. */
+	command: string;
+	/** Claude Code configuration directory override (`CLAUDE_CONFIG_DIR`). */
+	configDir?: string;
+	accountFingerprint?: string;
+	/** Claude Code's picker order, so its default for the plan comes first. */
+	models?: ClaudeCodeModelRoute[];
+}
+
+/** One type-tagged credential per provider — the shape of today's auth.json. */
 export type Credential = ApiKeyCredential | OAuthCredential | ExternalClaudeCodeCredential;
 
 /** Non-secret credential metadata for account/status enumeration. */

@@ -46,10 +46,10 @@ argument-hint: "<PR-URL>"
 This renders in the autocomplete dropdown as:
 
 ```
-→ pr   <PR-URL>       — Review PRs from URLs with structured issue and code analysis
-  is   <issue>        — Analyze GitHub issues (bugs or feature requests)
-  wr   [instructions] — Finish the current task end-to-end
-  cl   — Audit changelog entries before release
+→ pr      <PR-URL>       — Review PRs from URLs with structured issue and code analysis
+  issue   <issue>        — Analyze GitHub issues (bugs or feature requests)
+  wrap    [instructions] — Finish the current task end-to-end
+  review  — Review staged git changes
 ```
 
 ## Usage

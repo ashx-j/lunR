@@ -1,4 +1,3 @@
-// @ts-nocheck
 import {
 	SUBAGENT_DELEGATION_PROTOCOL_VERSION,
 	type SubagentDelegationRequest,

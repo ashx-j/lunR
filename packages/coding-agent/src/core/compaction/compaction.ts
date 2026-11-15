@@ -7,6 +7,7 @@
 
 import type { AgentMessage, StreamFn, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type {
+	Api,
 	AssistantMessage,
 	CacheRetention,
 	Context,
@@ -14,7 +15,11 @@ import type {
 	SimpleStreamOptions,
 	Usage,
 } from "@earendil-works/pi-ai/compat";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
+import {
+	completeSimple,
+	estimateContextTokens as estimateRequestContextTokens,
+	estimateTextTokens,
+} from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "../messages.ts";
 import {
 	buildSessionContext,
@@ -108,6 +113,8 @@ export interface CompactionSettings {
 	enabled: boolean;
 	reserveTokens: number;
 	keepRecentTokens: number;
+	/** Compact once context passes this many tokens, even when the window is larger. Unset means off. */
+	ceilingTokens?: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
@@ -168,121 +175,138 @@ export interface ContextUsageEstimate {
 	lastUsageIndex: number | null;
 }
 
-function getLastAssistantUsageInfo(messages: AgentMessage[]): { usage: Usage; index: number } | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const usage = getAssistantUsage(messages[i]);
-		if (usage) return { usage, index: i };
-	}
-	return undefined;
+/** Prior usage must describe the current prefix, including a newer compaction summary. */
+export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
+	return estimateRequestContextTokens(convertToLlm(messages));
 }
 
+/** Largest share of the context window compaction reserves for the prompt and summary. */
+const MAX_RESERVE_SHARE = 0.25;
+/** Largest share of the context window compaction keeps as recent messages. */
+const MAX_KEEP_RECENT_SHARE = 0.4;
+
 /**
- * Estimate context tokens from messages, using the last assistant usage when available.
- * If there are messages after the last usage, estimate their tokens with estimateTokens.
+ * Caps `reserveTokens` and `keepRecentTokens` to a share of the context window. Without the caps a
+ * window at or below the 16k default reserve would compact after every turn, and keeping 20k recent
+ * tokens would leave nothing older to summarize. Normal windows (200k) keep the configured values
+ * because the caps sit above them. A missing or zero window returns the settings unchanged.
  */
-export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
-	const usageInfo = getLastAssistantUsageInfo(messages);
-
-	if (!usageInfo) {
-		let estimated = 0;
-		for (const message of messages) {
-			estimated += estimateTokens(message);
-		}
-		return {
-			tokens: estimated,
-			usageTokens: 0,
-			trailingTokens: estimated,
-			lastUsageIndex: null,
-		};
-	}
-
-	const usageTokens = calculateContextTokens(usageInfo.usage);
-	let trailingTokens = 0;
-	for (let i = usageInfo.index + 1; i < messages.length; i++) {
-		trailingTokens += estimateTokens(messages[i]);
-	}
-
+export function compactionSettingsForWindow(
+	settings: CompactionSettings,
+	contextWindow: number | undefined,
+): CompactionSettings {
+	if (!contextWindow || contextWindow <= 0) return settings;
 	return {
-		tokens: usageTokens + trailingTokens,
-		usageTokens,
-		trailingTokens,
-		lastUsageIndex: usageInfo.index,
+		...settings,
+		reserveTokens: Math.min(settings.reserveTokens, Math.floor(contextWindow * MAX_RESERVE_SHARE)),
+		keepRecentTokens: Math.min(settings.keepRecentTokens, Math.floor(contextWindow * MAX_KEEP_RECENT_SHARE)),
 	};
 }
 
 /**
- * Check if compaction should trigger based on context usage.
+ * The ceiling compaction actually uses, or undefined when none is set. A freshly compacted context
+ * still holds the prompt and tool schemas (`prefixTokens`), the kept messages and a summary of up to
+ * the reserve, so the ceiling is raised to at least twice that size: every compaction then frees at
+ * least as much room as it keeps, and a low ceiling cannot compact on every prompt. When the last
+ * compaction measurably kept more (`compactedTokens`, the first request after it, for example a tool
+ * batch larger than `keepRecentTokens`), twice that counts instead, so compaction waits until the
+ * context has grown by what it kept rather than firing again on every tool turn.
  */
-export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
+export function effectiveCompactionCeiling(
+	contextWindow: number,
+	settings: CompactionSettings,
+	prefixTokens = 0,
+	compactedTokens = 0,
+): number | undefined {
+	if (!settings.ceilingTokens || settings.ceilingTokens <= 0) return undefined;
+	return Math.max(
+		settings.ceilingTokens,
+		compactionCeilingFloor(contextWindow, settings, prefixTokens, compactedTokens),
+	);
+}
+
+/** The lowest ceiling lunR uses: twice a compacted context (see `effectiveCompactionCeiling`). */
+export function compactionCeilingFloor(
+	contextWindow: number,
+	settings: CompactionSettings,
+	prefixTokens = 0,
+	compactedTokens = 0,
+): number {
+	const scaled = compactionSettingsForWindow(settings, contextWindow);
+	return 2 * Math.max(prefixTokens + scaled.keepRecentTokens + scaled.reserveTokens, compactedTokens);
+}
+
+/**
+ * Token count above which compaction triggers: the window minus the scaled reserve, or the
+ * effective ceiling when that is lower.
+ */
+export function compactionThreshold(
+	contextWindow: number,
+	settings: CompactionSettings,
+	prefixTokens = 0,
+	compactedTokens = 0,
+): number {
+	const windowThreshold = contextWindow - compactionSettingsForWindow(settings, contextWindow).reserveTokens;
+	const ceiling = effectiveCompactionCeiling(contextWindow, settings, prefixTokens, compactedTokens);
+	return ceiling === undefined ? windowThreshold : Math.min(windowThreshold, ceiling);
+}
+
+/**
+ * Check if compaction should trigger based on context usage (see `compactionThreshold`).
+ */
+export function shouldCompact(
+	contextTokens: number,
+	contextWindow: number,
+	settings: CompactionSettings,
+	prefixTokens = 0,
+	compactedTokens = 0,
+): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+	return contextTokens > compactionThreshold(contextWindow, settings, prefixTokens, compactedTokens);
 }
 
 // ============================================================================
 // Cut point detection
 // ============================================================================
 
-const ESTIMATED_IMAGE_CHARS = 4800;
+const ESTIMATED_IMAGE_TOKENS = 1200;
 
-function estimateTextAndImageContentChars(content: string | Array<{ type: string; text?: string }>): number {
-	if (typeof content === "string") {
-		return content.length;
-	}
-
-	let chars = 0;
+function estimateTextAndImageContentTokens(content: string | Array<{ type: string; text?: string }>): number {
+	if (typeof content === "string") return estimateTextTokens(content);
+	let text = "";
+	let images = 0;
 	for (const block of content) {
-		if (block.type === "text" && block.text) {
-			chars += block.text.length;
-		} else if (block.type === "image") {
-			chars += ESTIMATED_IMAGE_CHARS;
-		}
+		if (block.type === "text") text += block.text ?? "";
+		else if (block.type === "image") images++;
 	}
-	return chars;
+	return estimateTextTokens(text) + images * ESTIMATED_IMAGE_TOKENS;
 }
 
-/**
- * Estimate token count for a message using chars/4 heuristic.
- * This is conservative (overestimates tokens).
- */
+/** Local approximation using the shared text heuristic; provider formatting and images can differ. */
 export function estimateTokens(message: AgentMessage): number {
-	let chars = 0;
-
 	switch (message.role) {
-		case "user": {
-			chars = estimateTextAndImageContentChars(
-				(message as { content: string | Array<{ type: string; text?: string }> }).content,
-			);
-			return Math.ceil(chars / 4);
-		}
-		case "assistant": {
-			const assistant = message as AssistantMessage;
-			for (const block of assistant.content) {
-				if (block.type === "text") {
-					chars += block.text.length;
-				} else if (block.type === "thinking") {
-					chars += block.thinking.length;
-				} else if (block.type === "toolCall") {
-					chars += block.name.length + JSON.stringify(block.arguments).length;
-				}
-			}
-			return Math.ceil(chars / 4);
-		}
+		case "user":
 		case "custom":
-		case "toolResult": {
-			chars = estimateTextAndImageContentChars(message.content);
-			return Math.ceil(chars / 4);
-		}
-		case "bashExecution": {
-			chars = message.command.length + message.output.length;
-			return Math.ceil(chars / 4);
-		}
+		case "toolResult":
+			return estimateTextAndImageContentTokens(message.content);
+		case "assistant":
+			return estimateTextTokens(
+				message.content
+					.map((block) =>
+						block.type === "text"
+							? block.text
+							: block.type === "thinking"
+								? block.thinking
+								: block.name + JSON.stringify(block.arguments),
+					)
+					.join(""),
+			);
+		case "bashExecution":
+			return message.excludeFromContext ? 0 : estimateTextTokens(message.command + message.output);
 		case "branchSummary":
-		case "compactionSummary": {
-			chars = message.summary.length;
-			return Math.ceil(chars / 4);
-		}
+		case "compactionSummary":
+			return estimateTextTokens(message.summary);
 	}
-
 	return 0;
 }
 
@@ -522,7 +546,7 @@ Use this EXACT format:
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
 function createSummarizationOptions(
-	model: Model<any>,
+	model: Model<Api>,
 	maxTokens: number,
 	apiKey: string | undefined,
 	headers: Record<string, string> | undefined,
@@ -539,7 +563,7 @@ function createSummarizationOptions(
 }
 
 async function completeSummarization(
-	model: Model<any>,
+	model: Model<Api>,
 	context: Context,
 	options: SimpleStreamOptions,
 	streamFn?: StreamFn,
@@ -557,7 +581,7 @@ async function completeSummarization(
  */
 export async function generateSummary(
 	currentMessages: AgentMessage[],
-	model: Model<any>,
+	model: Model<Api>,
 	reserveTokens: number,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
@@ -567,6 +591,7 @@ export async function generateSummary(
 	thinkingLevel?: ThinkingLevel,
 	streamFn?: StreamFn,
 	env?: Record<string, string>,
+	onUsage?: (response: AssistantMessage) => void,
 ): Promise<string> {
 	const maxTokens = Math.min(
 		Math.floor(0.8 * reserveTokens),
@@ -608,6 +633,7 @@ export async function generateSummary(
 		streamFn,
 	);
 
+	onUsage?.(response);
 	if (response.stopReason === "error") {
 		throw new Error(`Summarization failed: ${response.errorMessage || "Unknown error"}`);
 	}
@@ -638,14 +664,21 @@ export interface CompactionPreparation {
 	previousSummary?: string;
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
-	/** Compaction settions from settings.jsonl	*/
+	/** Compaction settings from settings.json, scaled to the context window */
 	settings: CompactionSettings;
 }
 
+/**
+ * Picks what to summarize and what to keep. Pass the model's `contextWindow` so small windows keep
+ * and reserve a share of the window instead of the fixed defaults; the scaled settings travel in
+ * the preparation and also bound the summary's output tokens.
+ */
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
-	settings: CompactionSettings,
+	configuredSettings: CompactionSettings,
+	contextWindow?: number,
 ): CompactionPreparation | undefined {
+	const settings = compactionSettingsForWindow(configuredSettings, contextWindow);
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
 	}
@@ -751,7 +784,7 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
  */
 export async function compact(
 	preparation: CompactionPreparation,
-	model: Model<any>,
+	model: Model<Api>,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	customInstructions?: string,
@@ -759,6 +792,7 @@ export async function compact(
 	thinkingLevel?: ThinkingLevel,
 	streamFn?: StreamFn,
 	env?: Record<string, string>,
+	onUsage?: (response: AssistantMessage) => void,
 ): Promise<CompactionResult> {
 	const {
 		firstKeptEntryId,
@@ -789,6 +823,7 @@ export async function compact(
 						thinkingLevel,
 						streamFn,
 						env,
+						onUsage,
 					)
 				: "No prior history.";
 		const turnPrefixResult = await generateTurnPrefixSummary(
@@ -801,6 +836,7 @@ export async function compact(
 			signal,
 			thinkingLevel,
 			streamFn,
+			onUsage,
 		);
 		// Merge into single summary
 		summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
@@ -818,6 +854,7 @@ export async function compact(
 			thinkingLevel,
 			streamFn,
 			env,
+			onUsage,
 		);
 	}
 
@@ -842,7 +879,7 @@ export async function compact(
  */
 async function generateTurnPrefixSummary(
 	messages: AgentMessage[],
-	model: Model<any>,
+	model: Model<Api>,
 	reserveTokens: number,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
@@ -850,6 +887,7 @@ async function generateTurnPrefixSummary(
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
 	streamFn?: StreamFn,
+	onUsage?: (response: AssistantMessage) => void,
 ): Promise<string> {
 	const maxTokens = Math.min(
 		Math.floor(0.5 * reserveTokens),
@@ -873,6 +911,7 @@ async function generateTurnPrefixSummary(
 		streamFn,
 	);
 
+	onUsage?.(response);
 	if (response.stopReason === "error") {
 		throw new Error(`Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`);
 	}

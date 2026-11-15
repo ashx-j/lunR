@@ -10,9 +10,9 @@ Requires **Node.js ≥ 22.19**.
 npm i -g @ashx-j/lunr
 ```
 
-`--ignore-scripts` is optional; lunR does not require install scripts for a normal npm install.
+A normal install also downloads Chromium for the browser tool. `--ignore-scripts` skips it, and `lunr browser install` adds it later.
 
-There is no pi.dev curl installer. Then run it in a project directory:
+Then run lunR in a project directory:
 
 ```bash
 lunr
@@ -28,16 +28,11 @@ lunr features list
 lunr features enable chat-platforms
 ```
 
-To uninstall the CLI:
+To uninstall the CLI, run `npm uninstall -g @ashx-j/lunr`. That keeps `~/.lunr/agent`. To delete that directory too, run `lunr uninstall --purge` first. It asks for confirmation, or pass `--yes`.
 
-```bash
-lunr uninstall              # keeps ~/.lunr/agent
-lunr uninstall --purge      # also wipes ~/.lunr/agent
-```
+`lunr uninstall` without `--purge` only prints the npm command for an npm install. `lunr uninstall <source>` removes an extension package (alias for `lunr remove`).
 
-`lunr uninstall <source>` removes an extension package (alias for `lunr remove`). `npm uninstall -g @ashx-j/lunr` also leaves `~/.lunr/agent` in place.
-
-Config: `~/.lunr/agent` globally, project `.lunr/`. Override with `PI_CODING_AGENT_DIR`. Never use `~/.pi/` as the lunR home.
+Config: `~/.lunr/agent` globally, project `.lunr/`. Override with `PI_CODING_AGENT_DIR`.
 
 For the full first-run flow, see [Quickstart](quickstart.md).
 

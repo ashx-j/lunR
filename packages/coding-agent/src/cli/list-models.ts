@@ -36,7 +36,7 @@ export async function listModels(modelRuntime: ModelRuntime, searchPattern?: str
 	const models = [...(await modelRuntime.getAvailable())];
 
 	if (models.length === 0) {
-		console.log(formatNoModelsAvailableMessage());
+		console.log(formatNoModelsAvailableMessage("print"));
 		return;
 	}
 

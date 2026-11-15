@@ -1,3 +1,4 @@
+import { globalBridge } from "./global-bridge.ts";
 export const SUBAGENT_WAIT_INTERRUPTION_SYMBOL = Symbol.for("@lunr/subagent-wait-interruption");
 
 export interface SubagentWaitInterruptionRegistration {
@@ -14,13 +15,19 @@ interface SubagentWaitInterruptionBridge {
 	owners: Map<string, SubagentWaitInterruptionOwner>;
 }
 
+const slot = globalBridge<SubagentWaitInterruptionBridge>(SUBAGENT_WAIT_INTERRUPTION_SYMBOL);
+
 function getBridge(): SubagentWaitInterruptionBridge {
-	const globals = globalThis as Record<symbol, unknown>;
-	const existing = globals[SUBAGENT_WAIT_INTERRUPTION_SYMBOL] as SubagentWaitInterruptionBridge | undefined;
+	const existing = slot.get();
 	if (existing) return existing;
 	const bridge: SubagentWaitInterruptionBridge = { owners: new Map() };
-	globals[SUBAGENT_WAIT_INTERRUPTION_SYMBOL] = bridge;
+	slot.set(bridge);
 	return bridge;
+}
+
+/** Session-bound waits share normal Enter's existing prompt admission and interruption path. */
+export function registerSessionWaitInterruption(sessionId: string): SubagentWaitInterruptionRegistration | undefined {
+	return getBridge().owners.get(sessionId)?.register();
 }
 
 export function registerSubagentWaitInterruptionOwner(

@@ -23,6 +23,7 @@ describe("early launch routing", () => {
 		["--list-models"],
 		["--export", "session.jsonl"],
 		["gateway"],
+		["doctor", "keys"],
 		["update"],
 		["install", "package"],
 	])("keeps command %j off the TUI path", (...args) => {

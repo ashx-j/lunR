@@ -1,8 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-	formatFetchChrome,
-	formatSearchChrome,
-} from "../src/builtin-extensions/pi-web-access/render-search-chrome.ts";
+import { formatFetchChrome, formatSearchChrome } from "../src/builtin-extensions/pi-web-access/render-search-chrome.ts";
 
 describe("web_search chrome", () => {
 	const queries = [
@@ -16,9 +13,7 @@ describe("web_search chrome", () => {
 		successfulQueries: 4,
 		totalResults: 20,
 		summary: { text: "Summary of four searches about OAuth and catalog refresh." },
-		curatedQueries: [
-			{ query: queries[0], sources: [{ title: "Source A", url: "https://example.com/a" }] },
-		],
+		curatedQueries: [{ query: queries[0], sources: [{ title: "Source A", url: "https://example.com/a" }] }],
 	};
 
 	test("collapsed 4-query search is a single title line that includes the count", () => {

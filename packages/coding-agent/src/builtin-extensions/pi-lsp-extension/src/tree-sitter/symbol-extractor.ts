@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Symbol Extractor — extracts symbols from tree-sitter ASTs.
  *

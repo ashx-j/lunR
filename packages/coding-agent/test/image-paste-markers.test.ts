@@ -10,6 +10,8 @@ const TINY_PNG_BASE64 =
 type QueuedUserInput = { text: string; images?: Array<{ type: "image"; mimeType: string; data: string }> };
 
 type SubmitContext = {
+	runtimeHost: { isDetached: boolean; services: { agentDir: string } };
+	sessionManager: { isPersisted(): boolean };
 	defaultEditor: { onSubmit?: (text: string) => void };
 	editor: {
 		addToHistory?: (text: string) => void;
@@ -34,10 +36,12 @@ type SubmitContext = {
 	loadImageAttachments: (
 		attachments: Array<{ id: number; path: string; mimeType: string }>,
 	) => Promise<Array<{ type: "image"; mimeType: string; data: string }> | undefined>;
+	slashCommandHost?: unknown;
 };
 
 type InteractiveModePrivate = {
 	setupEditorSubmitHandler(this: SubmitContext): void;
+	createSlashCommandHost(this: SubmitContext): unknown;
 	loadImageAttachments(
 		this: {
 			settingsManager: { getImageAutoResize: () => boolean };
@@ -95,6 +99,8 @@ describe("InteractiveMode image paste chips", () => {
 			},
 		];
 		const context: SubmitContext = {
+			runtimeHost: { isDetached: false, services: { agentDir: "unused-in-memory-profile" } },
+			sessionManager: { isPersisted: () => false },
 			defaultEditor: {},
 			editor: {
 				addToHistory: vi.fn(),
@@ -126,6 +132,8 @@ describe("InteractiveMode image paste chips", () => {
 
 	it("runs /paste-image without sending a model prompt", async () => {
 		const context: SubmitContext = {
+			runtimeHost: { isDetached: false, services: { agentDir: "unused-in-memory-profile" } },
+			sessionManager: { isPersisted: () => false },
 			defaultEditor: {},
 			editor: {
 				addToHistory: vi.fn(),
@@ -148,6 +156,7 @@ describe("InteractiveMode image paste chips", () => {
 			loadImageAttachments: vi.fn(async () => undefined),
 		};
 
+		context.slashCommandHost = proto.createSlashCommandHost.call(context);
 		proto.setupEditorSubmitHandler.call(context);
 		await context.defaultEditor.onSubmit?.("/paste-image");
 

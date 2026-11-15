@@ -999,9 +999,10 @@ describe("ToolExecutionComponent parity", () => {
 		},
 		{
 			title: "outside AGENTS.md",
-			path: resolve(process.cwd(), "..", "AGENTS.md"),
+			// A fixed path outside the checkout, so the header cannot wrap when the checkout path is long.
+			path: resolve("/outside/AGENTS.md"),
 			content: "Hidden outside resource instructions",
-			compact: `read resource ${resolve(process.cwd(), "..", "AGENTS.md").replace(/\\/g, "/")}`,
+			compact: `read resource ${resolve("/outside/AGENTS.md").replace(/\\/g, "/")}`,
 			hidden: "Hidden outside resource instructions",
 			absent: undefined,
 		},

@@ -1,20 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { stream as directMessages } from "../src/api/anthropic-messages.ts";
-import { ANTHROPIC_SETUP_REQUIRED, anthropicRequestRoute } from "../src/auth/anthropic-route.ts";
+import {
+	ANTHROPIC_SETUP_REQUIRED,
+	anthropicRequestRoute,
+	CLAUDE_CODE_UPDATE_REQUIRED,
+	CLAUDE_CODE_VERSION,
+	claudeCodeUpdateNote,
+} from "../src/auth/anthropic-route.ts";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
-import { isQualifiedClaudeCodeVersion } from "../src/auth/oauth/anthropic.ts";
 import type { AuthContext, ExternalClaudeCodeCredential } from "../src/auth/types.ts";
 import { createModels } from "../src/models.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
 
 const connection: ExternalClaudeCodeCredential = {
 	type: "external_claude_code",
-	version: 1,
+	version: 3,
 	manager: "claude-code",
-	python: "python3",
 	command: "/opt/claude",
 	accountFingerprint: "test-account",
-	routes: ["claude-sonnet-5[1m]"],
+	models: [{ id: "claude-sonnet-5", route: "claude-sonnet-5[1m]", contextWindow: 1_000_000 }],
 };
 
 function configured(env: Record<string, string> = {}) {
@@ -26,12 +30,6 @@ function configured(env: Record<string, string> = {}) {
 }
 
 describe("Anthropic subscription route", () => {
-	it("accepts only the qualified Claude Code version", () => {
-		expect(isQualifiedClaudeCodeVersion("2.1.263 (Claude Code)")).toBe(true);
-		expect(isQualifiedClaudeCodeVersion("2.1.2630")).toBe(false);
-		expect(isQualifiedClaudeCodeVersion("2.1.263-dev")).toBe(false);
-	});
-
 	it("preserves API-key HTTP auth and selects the external route only for the external record", async () => {
 		const { credentials, models } = configured();
 		await credentials.modify("anthropic", async () => connection);
@@ -43,12 +41,49 @@ describe("Anthropic subscription route", () => {
 		expect((await models.getAuth("anthropic", { apiKey: "sk-ant-api-key" }))?.auth.apiKey).toBe("sk-ant-api-key");
 	});
 
+	it("lists the models Claude Code offered in its picker order, with the windows it reported", async () => {
+		const { credentials, models } = configured();
+		await credentials.modify("anthropic", async () => ({
+			...connection,
+			models: [
+				{ id: "claude-sonnet-5", route: "claude-sonnet-5[1m]", contextWindow: 1_000_000 },
+				{ id: "claude-haiku-4-5-20251001", route: "claude-haiku-4-5-20251001", contextWindow: 150_000 },
+			],
+		}));
+		expect((await models.getAvailable("anthropic")).map((model) => [model.id, model.contextWindow])).toEqual([
+			["claude-sonnet-5", 1_000_000],
+			["claude-haiku-4-5-20251001", 150_000],
+		]);
+	});
+
 	it("routes an ambient genuine API key to HTTP even with a stored subscription connection", async () => {
 		const { credentials, models } = configured({ ANTHROPIC_API_KEY: "sk-ant-ambient" });
 		await credentials.modify("anthropic", async () => connection);
 		expect((await models.getAuth("anthropic"))?.auth.apiKey).toBe("sk-ant-ambient");
 		expect((await models.checkAuth("anthropic"))?.type).toBe("api_key");
 		expect((await models.getAvailable("anthropic")).map((model) => model.id)).toContain("claude-opus-4-8");
+	});
+
+	it.each([1, 2] as const)("reports a version %i connection as needing /login before any request", async (version) => {
+		const { credentials, models } = configured();
+		const legacy: ExternalClaudeCodeCredential = { ...connection, version };
+		await credentials.modify("anthropic", async () => legacy);
+		expect(await models.checkAuth("anthropic")).toBeUndefined();
+		expect(await models.getAvailable("anthropic")).toEqual([]);
+		await expect(models.getAuth("anthropic")).rejects.toThrow(CLAUDE_CODE_UPDATE_REQUIRED);
+		// The record stays on disk so /login can replace it.
+		expect(await credentials.read("anthropic")).toEqual(legacy);
+	});
+
+	it("still serves API keys when a version 1 connection is stored", async () => {
+		const { credentials, models } = configured({ ANTHROPIC_API_KEY: "sk-ant-ambient" });
+		await credentials.modify("anthropic", async () => ({ ...connection, version: 1 as const }));
+		expect((await models.getAuth("anthropic"))?.auth.apiKey).toBe("sk-ant-ambient");
+		expect((await models.checkAuth("anthropic"))?.type).toBe("api_key");
+		expect((await models.getAvailable("anthropic")).map((model) => model.id)).toContain("claude-opus-4-8");
+		const stored = configured();
+		await stored.credentials.modify("anthropic", async () => ({ type: "api_key", key: "sk-ant-api03-stored" }));
+		expect((await stored.models.checkAuth("anthropic"))?.type).toBe("api_key");
 	});
 
 	it("rejects legacy stored and ambient OAuth without refreshing or sending HTTP", async () => {
@@ -103,5 +138,21 @@ describe("Anthropic subscription route", () => {
 		expect(() =>
 			anthropicRequestRoute("anthropic", resolution, { transformHeaders: async (headers) => headers }),
 		).toThrow("custom headers");
+	});
+});
+
+describe("claudeCodeUpdateNote", () => {
+	const connection = (command: string) =>
+		({ type: "external_claude_code", version: 3, manager: "claude-code", command, models: [] }) as const;
+
+	it("asks for /login anthropic only when the saved Claude Code is older than the pinned release", () => {
+		expect(claudeCodeUpdateNote(connection("/home/me/.lunr/agent/claude-code/2.1.263/claude"))).toBe(
+			`Claude subscription models come from Claude Code 2.1.263. Run /login anthropic to update to ${CLAUDE_CODE_VERSION} and get newer models.`,
+		);
+		expect(
+			claudeCodeUpdateNote(connection("C:\\Users\\me\\.lunr\\agent\\claude-code\\2.1.263\\claude.exe")),
+		).toContain("Claude Code 2.1.263.");
+		expect(claudeCodeUpdateNote(connection(`/a/claude-code/${CLAUDE_CODE_VERSION}/claude`))).toBeUndefined();
+		expect(claudeCodeUpdateNote({ type: "api_key", key: "sk-ant-api" })).toBeUndefined();
 	});
 });

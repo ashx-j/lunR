@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { AsyncParallelGroupStatus } from "../../shared/types.ts";
 
 function isValidParallelGroup(group: unknown, stepCount: number, chainStepCount: number): group is AsyncParallelGroupStatus {

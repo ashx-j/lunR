@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { matchesKey } from "@earendil-works/pi-tui";
 
 /** The `tui.select.*` keybinding ids the adapter panels resolve. */

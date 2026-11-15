@@ -2,8 +2,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ── Spinner frames for streaming animation ──
 const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-let spinnerIdx = 0;
-let spinnerInterval: ReturnType<typeof setInterval> | null = null;
 
 // ── ANSI color helpers ──
 const GREEN = "\x1b[32m";
@@ -27,9 +25,22 @@ export default function (pi: ExtensionAPI) {
 	let messageStartTime = 0;
 	let lastAvgTps = 0;
 	let lastOutputTokens = 0;
-	let isStreaming = false;
+	let spinnerIdx = 0;
+	let spinnerInterval: ReturnType<typeof setInterval> | undefined;
+
+	function stopAnimation(): void {
+		if (spinnerInterval !== undefined) {
+			clearInterval(spinnerInterval);
+			spinnerInterval = undefined;
+		}
+	}
+
+	pi.on("session_start", stopAnimation);
+	pi.on("session_shutdown", stopAnimation);
+	pi.on("agent_end", stopAnimation);
 
 	pi.on("agent_start", async (_event, ctx) => {
+		stopAnimation();
 		lastAvgTps = 0;
 		lastOutputTokens = 0;
 		if (ctx.hasUI) {
@@ -37,16 +48,19 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("message_start", (event) => {
+	pi.on("message_start", (event, ctx) => {
 		if (event.message.role === "assistant") {
 			messageStartTime = Date.now();
-			isStreaming = true;
+			lastAvgTps = 0;
+			lastOutputTokens = 0;
+			stopAnimation();
+			if (!ctx.hasUI) return;
 			spinnerIdx = 0;
 			// Start spinner animation
-			if (spinnerInterval) clearInterval(spinnerInterval);
 			spinnerInterval = setInterval(() => {
 				spinnerIdx = (spinnerIdx + 1) % spinner.length;
 			}, 80);
+			spinnerInterval.unref();
 		}
 	});
 
@@ -61,15 +75,17 @@ export default function (pi: ExtensionAPI) {
 		if (outputTokens === 0) return;
 
 		const elapsed = (Date.now() - messageStartTime) / 1000;
+		if (elapsed <= 0) return;
 		const tps = outputTokens / elapsed;
 		const color = colorForTps(tps);
 		const frame = spinner[spinnerIdx % spinner.length];
 
-		ctx.ui.setStatus("tps", `${color}${frame} ${tps.toFixed(1)} t/s${RESET} ↓ ${formatTokens(outputTokens)} tokens`);
+		ctx.ui.setStatus("tps", `${color}${frame} ${tps.toFixed(1)} output t/s overall${RESET} ↓ ${formatTokens(outputTokens)} tokens`);
 	});
 
 	pi.on("message_end", (event, ctx) => {
 		if (event.message.role !== "assistant") return;
+		stopAnimation();
 		if (!ctx.hasUI) return;
 
 		const elapsed = (Date.now() - messageStartTime) / 1000;
@@ -81,16 +97,14 @@ export default function (pi: ExtensionAPI) {
 			lastOutputTokens = outputTokens;
 		}
 
-		// Stop spinner
-		isStreaming = false;
-		if (spinnerInterval) {
-			clearInterval(spinnerInterval);
-			spinnerInterval = null;
+		if (outputTokens === 0) {
+			ctx.ui.setStatus("tps", "");
+			return;
 		}
-
-		setImmediate(() => {
-			const color = colorForTps(lastAvgTps);
-			ctx.ui.setStatus("tps", `${color}✓ ${lastAvgTps.toFixed(1)} t/s · ${formatTokens(lastOutputTokens)} tokens in ${elapsed.toFixed(1)}s${RESET}`);
-		});
+		const color = colorForTps(lastAvgTps);
+		ctx.ui.setStatus(
+			"tps",
+			`${color}✓ ${lastAvgTps.toFixed(1)} output t/s overall · ${formatTokens(lastOutputTokens)} tokens in ${elapsed.toFixed(1)}s${RESET}`,
+		);
 	});
 }

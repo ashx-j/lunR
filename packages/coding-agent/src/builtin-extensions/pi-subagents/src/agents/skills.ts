@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Skill resolution and caching for subagent extension
  */

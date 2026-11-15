@@ -111,6 +111,12 @@ export interface Provider<TApi extends Api = Api> {
 	 */
 	filterModels?(models: readonly Model<TApi>[], credential: Credential | undefined): readonly Model<TApi>[];
 
+	/**
+	 * Multi-protocol providers: whether this provider can stream a model on `api`, whatever its
+	 * catalog lists today. Undefined for single-protocol providers.
+	 */
+	supportsApi?(api: Api): boolean;
+
 	stream<T extends TApi>(
 		model: Model<T>,
 		context: Context,
@@ -372,9 +378,9 @@ class ModelsImpl implements MutableModels {
 	): Promise<AuthCheck | undefined> {
 		if (provider.id === "anthropic" && credential?.type === "oauth") return undefined;
 		if (provider.id === "anthropic" && credential?.type === "external_claude_code") {
-			return (await this.authContext.env("ANTHROPIC_API_KEY"))
-				? { source: "ANTHROPIC_API_KEY", type: "api_key" }
-				: { source: "Claude Code subscription", type: "oauth" };
+			if (await this.authContext.env("ANTHROPIC_API_KEY")) return { source: "ANTHROPIC_API_KEY", type: "api_key" };
+			// An older record is kept on disk but unusable until /login anthropic replaces it.
+			return credential.version === 3 ? { source: "Claude Code subscription", type: "oauth" } : undefined;
 		}
 		if (credential?.type === "oauth") {
 			return provider.auth.oauth ? { source: "OAuth", type: "oauth" } : undefined;
@@ -631,6 +637,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 				}
 			: undefined,
 		filterModels: input.filterModels,
+		supportsApi: byApi ? (api) => byApi[api] !== undefined : undefined,
 		stream: (model, context, options) => dispatch(model, (streams) => streams.stream(model, context, options)),
 		streamSimple: (model, context, options) =>
 			dispatch(model, (streams) => streams.streamSimple(model, context, options)),
@@ -651,7 +658,10 @@ export function hasApi<TApi extends Api>(model: Model<Api>, api: TApi): model is
 	return model.api === api;
 }
 
-export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
+export function calculateCost<TApi extends Api>(
+	model: Pick<Model<TApi>, "cost" | "catalog">,
+	usage: Usage,
+): Usage["cost"] {
 	const inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
 	let rates: ModelCostRates = model.cost;
 	let matchedThreshold = -1;
@@ -663,13 +673,16 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
 	}
 
 	// Anthropic charges 2x base input for 1h cache writes.
-	const longWrite = usage.cacheWrite1h ?? 0;
+	const longWrite = Math.min(usage.cacheWrite, Math.max(0, usage.cacheWrite1h ?? 0));
 	const shortWrite = usage.cacheWrite - longWrite;
 	usage.cost.input = (rates.input / 1000000) * usage.input;
 	usage.cost.output = (rates.output / 1000000) * usage.output;
 	usage.cost.cacheRead = (rates.cacheRead / 1000000) * usage.cacheRead;
 	usage.cost.cacheWrite = (rates.cacheWrite * shortWrite + rates.input * 2 * longWrite) / 1000000;
-	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+	usage.cost.total =
+		usage.reportedCost ?? usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+	usage.costSource =
+		usage.reportedCost !== undefined ? "reported" : model.catalog?.pricing === "unknown" ? "unknown" : "estimated";
 	return usage.cost;
 }
 

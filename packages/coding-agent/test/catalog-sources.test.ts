@@ -10,19 +10,64 @@ afterEach(() => {
 });
 
 describe("public catalog sources", () => {
-	it("quarantines a partial provider response even when its schema is valid", async () => {
+	it("keeps a shrunk provider's last-good copy while other providers update", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "lunr-source-test-"));
 		directories.push(directory);
-		const original = {
-			openai: { models: Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`model-${i}`, {}])) },
-		};
+		const models = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, i) => [`model-${i}`, {}]));
+		await new CatalogSources(
+			directory,
+			vi.fn(async () =>
+				Response.json({
+					google: { models: models(100) },
+					openai: { models: models(20) },
+					gone: { models: models(12) },
+				}),
+			),
+		).fetch("https://example.test/models");
+		const sources = new CatalogSources(
+			directory,
+			vi.fn(async () => Response.json({ google: { models: models(101) }, openai: { models: models(1) } })),
+		);
+		// openai shrank and keeps its old rows; `gone` vanished, which reads as a removal or rename.
+		expect(await (await sources.fetch("https://example.test/models")).json()).toEqual({
+			google: { models: models(101) },
+			openai: { models: models(20) },
+		});
+		expect(sources.statuses[0]).toMatchObject({ status: "fresh", quarantined: ["openai"] });
+
+		const offline = new CatalogSources(directory, vi.fn(), { offline: true });
+		await offline.fetch("https://example.test/models");
+		expect(offline.statuses[0]).toMatchObject({ status: "cached", quarantined: ["openai"] });
+	});
+
+	it("falls back as a whole when a keyed catalog loses a quarter of its models", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "lunr-source-test-"));
+		directories.push(directory);
+		const models = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, i) => [`model-${i}`, {}]));
+		const original = { google: { models: models(30) }, openai: { models: models(30) } };
 		await new CatalogSources(
 			directory,
 			vi.fn(async () => Response.json(original)),
 		).fetch("https://example.test/models");
 		const sources = new CatalogSources(
 			directory,
-			vi.fn(async () => Response.json({ openai: { models: { remaining: {} } } })),
+			vi.fn(async () => Response.json({ google: { models: models(30) } })),
+		);
+		expect(await (await sources.fetch("https://example.test/models")).json()).toEqual(original);
+		expect(sources.statuses[0]).toMatchObject({ status: "cached" });
+	});
+
+	it("falls back to the last-good copy when a flat model list shrinks", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "lunr-source-test-"));
+		directories.push(directory);
+		const original = { data: Array.from({ length: 20 }, (_, i) => ({ id: `model-${i}` })) };
+		await new CatalogSources(
+			directory,
+			vi.fn(async () => Response.json(original)),
+		).fetch("https://example.test/models");
+		const sources = new CatalogSources(
+			directory,
+			vi.fn(async () => Response.json({ data: [{ id: "model-0" }] })),
 		);
 		expect(await (await sources.fetch("https://example.test/models")).json()).toEqual(original);
 		expect(sources.statuses[0]).toMatchObject({

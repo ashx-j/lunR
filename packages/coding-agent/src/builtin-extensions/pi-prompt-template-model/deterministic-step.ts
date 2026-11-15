@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -140,7 +139,7 @@ function buildOutputPreambleSectionFromResult(
 	value: string,
 	meta: { totalChars: number; totalLines: number },
 	maxChars: number,
-): string[] {
+): Array<string | undefined> {
 	const preview = buildTextPreview(label, value, meta.totalChars, maxChars);
 	return [
 		`[${label}]`,

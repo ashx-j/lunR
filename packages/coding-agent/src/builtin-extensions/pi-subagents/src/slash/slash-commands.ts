@@ -1,4 +1,6 @@
 // @ts-nocheck
+import { getPromptTemplateChains } from "../../../../core/prompt-chain-bridge.ts";
+import { collectUsageRequests, totalRequestUsage, collectChildUsage } from "../../../../core/usage-accounting.ts";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -14,7 +16,7 @@ import { SUBAGENT_FANOUT_CHILD_ENV } from "../runs/shared/pi-args.ts";
 import { assertJsonSchemaObject } from "../runs/shared/structured-output.ts";
 import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
-import { registerPromptWorkflowCommands } from "./prompt-workflows.ts";
+import { chooseChainRoute, discoverPromptWorkflows, registerPromptWorkflowCommands, runWorkflowChain } from "./prompt-workflows.ts";
 import { openSubagentFleet } from "../tui/fleet.ts";
 import {
 	applySlashUpdate,
@@ -272,7 +274,7 @@ class SubagentsStopSelector implements Component {
 }
 
 function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, unknownRequests: 0, partialRequests: 0, unknownCosts: 0 };
 }
 
 function addUsage(target: Usage, source: Usage): void {
@@ -282,50 +284,9 @@ function addUsage(target: Usage, source: Usage): void {
 	target.cacheWrite += source.cacheWrite;
 	target.cost += source.cost;
 	target.turns += source.turns;
-}
-
-function usageHasValue(usage: Usage): boolean {
-	return usage.input !== 0 || usage.output !== 0 || usage.cacheRead !== 0 || usage.cacheWrite !== 0 || usage.cost !== 0 || usage.turns !== 0;
-}
-
-function assistantUsageFromMessage(message: unknown): Usage | undefined {
-	if (!message || typeof message !== "object") return undefined;
-	const msg = message as { role?: unknown; usage?: unknown };
-	if (msg.role !== "assistant" || !msg.usage || typeof msg.usage !== "object") return undefined;
-	const usage = msg.usage as {
-		input?: unknown;
-		output?: unknown;
-		cacheRead?: unknown;
-		cacheWrite?: unknown;
-		cost?: { total?: unknown };
-	};
-	return {
-		input: typeof usage.input === "number" ? usage.input : 0,
-		output: typeof usage.output === "number" ? usage.output : 0,
-		cacheRead: typeof usage.cacheRead === "number" ? usage.cacheRead : 0,
-		cacheWrite: typeof usage.cacheWrite === "number" ? usage.cacheWrite : 0,
-		cost: typeof usage.cost?.total === "number" ? usage.cost.total : 0,
-		turns: 1,
-	};
-}
-
-function isSubagentDetails(value: unknown): value is Details {
-	if (!value || typeof value !== "object") return false;
-	const details = value as { mode?: unknown; results?: unknown };
-	return typeof details.mode === "string" && Array.isArray(details.results);
-}
-
-function detailsFromSessionEntry(entry: unknown): Details | undefined {
-	if (!entry || typeof entry !== "object") return undefined;
-	const record = entry as { type?: unknown; customType?: unknown; details?: unknown; message?: unknown };
-	if (record.type === "custom_message" && record.customType === SLASH_RESULT_TYPE) {
-		const details = resolveSlashMessageDetails(record.details)?.result.details;
-		return isSubagentDetails(details) ? details : undefined;
-	}
-	if (record.type !== "message" || !record.message || typeof record.message !== "object") return undefined;
-	const message = record.message as { role?: unknown; toolName?: unknown; details?: unknown };
-	if (message.role !== "toolResult" || message.toolName !== "subagent") return undefined;
-	return isSubagentDetails(message.details) ? message.details : undefined;
+	target.unknownRequests += source.unknownRequests ?? 0;
+	target.partialRequests += source.partialRequests ?? 0;
+	target.unknownCosts += source.unknownCosts ?? 0;
 }
 
 function formatCostUsage(label: string, usage: Usage): string {
@@ -334,7 +295,7 @@ function formatCostUsage(label: string, usage: Usage): string {
 		usage.cacheWrite ? `cache write ${formatTokens(usage.cacheWrite)}` : "",
 		usage.turns ? `${usage.turns} turn${usage.turns === 1 ? "" : "s"}` : "",
 	].filter(Boolean);
-	return `${label}: ↑${formatTokens(usage.input)} ↓${formatTokens(usage.output)} $${usage.cost.toFixed(4)}${extras.length ? ` (${extras.join(", ")})` : ""}`;
+	return `${label}: ↑${formatTokens(usage.input + usage.cacheRead + usage.cacheWrite)} ↓${formatTokens(usage.output)} $${usage.cost.toFixed(4)}${extras.length ? ` (${extras.join(", ")})` : ""}`;
 }
 
 function buildSubagentCostReport(ctx: ExtensionContext): string {
@@ -342,22 +303,12 @@ function buildSubagentCostReport(ctx: ExtensionContext): string {
 	const childTotal = emptyUsage();
 	const total = emptyUsage();
 	const children: Array<{ label: string; usage: Usage; sessionFile?: string }> = [];
-	for (const entry of ctx.sessionManager.getBranch()) {
-		const message = entry.type === "message" ? (entry as { message?: unknown }).message : undefined;
-		const parentUsage = assistantUsageFromMessage(message);
-		if (parentUsage) addUsage(parent, parentUsage);
-		const details = detailsFromSessionEntry(entry);
-		if (!details) continue;
-		for (const result of details.results) {
-			if (!usageHasValue(result.usage)) continue;
-			const usage = { ...result.usage };
-			children.push({
-				label: `Child ${children.length + 1} (${result.agent})`,
-				usage,
-				...(result.sessionFile ? { sessionFile: result.sessionFile } : {}),
-			});
-			addUsage(childTotal, usage);
-		}
+	const entries = ctx.sessionManager.getEntries();
+	const parentTotals = totalRequestUsage(collectUsageRequests(entries));
+	Object.assign(parent, { ...parentTotals, turns: collectUsageRequests(entries).length });
+	for (const child of collectChildUsage(entries)) {
+		children.push({ label: `Child ${children.length + 1} (${child.label})`, usage: child, sessionFile: child.sessionFile });
+		addUsage(childTotal, child);
 	}
 	addUsage(total, parent);
 	addUsage(total, childTotal);
@@ -570,7 +521,10 @@ export interface ParsedGroup { kind: "group"; tasks: ParsedStep[]; config: Group
 export type ParsedGroupStep = ParsedStep | ParsedGroup;
 
 export const PARALLEL_GROUP_USAGE =
-	'Usage: /chain agent "task" -> (agent2 "task" | agent3 "task") -> agent4';
+	'Usage: /chain a[tier=standard] "task" -> (b[tier=light] "task" | c[tier=light] "task") -> d[tier=standard]';
+
+// lunr: /run needs a tier on the name, with no space before the bracket.
+const RUN_USAGE = "Usage: /run <name>[tier=light|standard|heavy] <task> [--foreground], for example /run review[tier=standard] check the diff";
 
 export class SlashParseError extends Error {}
 
@@ -747,7 +701,7 @@ const parseAgentArgs = (
 	ctx: ExtensionContext,
 ): { steps: ParsedStep[]; task: string } | null => {
 	const input = args.trim();
-	const usage = `Usage: /${command} description1 "task1" -> description2 "task2"`;
+	const usage = `Usage: /${command} name1[tier=standard] "task1" -> name2[tier=standard] "task2" (tier=light|standard|heavy or model=provider/id)`;
 	let steps: ParsedStep[];
 	let sharedTask: string;
 	let perStep = false;
@@ -786,7 +740,7 @@ const parseAgentArgs = (
 		return null;
 	}
 	if (command === "chain" && !steps[0]?.task && (perStep || !sharedTask)) {
-		ctx.ui.notify(`First step must have a task: /chain description "task" -> description2`, "error");
+		ctx.ui.notify(`First step must have a task: /chain name[tier=standard] "task" -> name2[tier=standard]`, "error");
 		return null;
 	}
 	if (command === "parallel" && !steps.some((s) => s.task) && !sharedTask) {
@@ -909,7 +863,7 @@ export function buildChainExpressionSteps(
 	// Every task inside a parallel group needs its own task; there is no shared-task fallback.
 	for (const step of expression.steps) {
 		if (step.kind === "group" && step.tasks.some((t) => !t.task)) {
-			notify('Each child in a parallel group needs a task: (description "a" | description2 "b")');
+			notify('Each child in a parallel group needs a task: (name[tier=light] "a" | name2[tier=light] "b")');
 			return null;
 		}
 	}
@@ -919,7 +873,7 @@ export function buildChainExpressionSteps(
 			? firstStep.tasks.some((t) => Boolean(t.task))
 			: Boolean(firstStep.task);
 	if (!firstHasTask) {
-		notify('First step must have a task: /chain description "task" -> description2');
+		notify('First step must have a task: /chain name[tier=standard] "task" -> name2[tier=standard]');
 		return null;
 	}
 	const sharedTask =
@@ -977,10 +931,10 @@ export function registerSlashCommands(
 			const { args: cleanedArgs, async } = extractExecutionFlags(args);
 			const input = cleanedArgs.trim();
 			const firstSpace = input.indexOf(" ");
-			if (!input) { ctx.ui.notify("Usage: /run <description> <task> [--foreground]", "error"); return; }
+			if (!input) { ctx.ui.notify(RUN_USAGE, "error"); return; }
 			const { name: description, config: inline } = parseAgentToken(firstSpace === -1 ? input : input.slice(0, firstSpace));
 			const task = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
-			if (!description || !task || !inline.tier) { ctx.ui.notify("Usage: /run <description>[tier=light|standard|heavy] <task> [--foreground]", "error"); return; }
+			if (!description || !task || !inline.tier) { ctx.ui.notify(RUN_USAGE, "error"); return; }
 
 			let finalTask = task;
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
@@ -996,8 +950,24 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("chain", {
-		description: "Run prompt-defined children as an async sequence; add --foreground to wait inline",
+		description: "Run children, prompt workflows or prompt templates in sequence; add --foreground to wait inline",
 		handler: async (args, ctx) => {
+			// lunr: /chain also runs workflow and template chains (formerly /chain-workflows and /chain-prompts).
+			let workflowNames: Set<string> | undefined;
+			const templateChains = getPromptTemplateChains(pi.events);
+			const route = chooseChainRoute(
+				args,
+				(name) => (workflowNames ??= new Set(discoverPromptWorkflows(ctx.cwd).map((workflow) => workflow.name))).has(name),
+				() => templateChains?.matches(args, ctx) ?? false,
+			);
+			if (route === "workflow") {
+				await runWorkflowChain(pi, (params, runCtx) => runSlashSubagent(pi, runCtx, params), args, ctx);
+				return;
+			}
+			if (route === "template" && templateChains) {
+				await templateChains.run(args, ctx);
+				return;
+			}
 			const { args: cleanedArgs, async } = extractExecutionFlags(args);
 			const built = buildChainExpressionSteps(state, cleanedArgs, ctx);
 			if (!built) return;

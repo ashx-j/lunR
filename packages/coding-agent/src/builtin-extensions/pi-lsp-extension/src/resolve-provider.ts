@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Resolve Provider — determines whether to use LSP or tree-sitter for a file.
  *

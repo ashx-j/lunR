@@ -2,9 +2,12 @@
  * lunR: parent-delegated children inherit an explicit permission level, not a
  * named agent role. The parent process resolves the requested level against
  * its own mode, then snapshots that resolved child permission into the child
- * environment. Full maps to child runtime Auto; read-only maps to Read-only.
+ * environment. Read-only maps to Read-only. Full follows the parent: a parent in
+ * auto passes its reviewer and the child runs in auto, otherwise the child runs in
+ * yolo. Every child also works autonomously (see AgentSession).
  */
 
+import { SUBAGENT_CHILD_AUTO_REVIEW_ENV } from "./auto-review.ts";
 import { getPermissionMode, type PermissionMode, resetPermissions } from "./permissions.ts";
 
 export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
@@ -38,8 +41,13 @@ export function resolveRequestedChildPermission(requested?: string): ChildPermis
 	return requested === "read-only" ? "read-only" : "full";
 }
 
-export function resolveChildRuntimePermissionMode(childPermission: string | undefined): PermissionMode {
-	return parseChildPermission(childPermission) === "read-only" ? "read-only" : "auto";
+/** `parentAutoReview` is SUBAGENT_CHILD_AUTO_REVIEW_ENV: non-empty when the parent was in auto. */
+export function resolveChildRuntimePermissionMode(
+	childPermission: string | undefined,
+	parentAutoReview?: string,
+): PermissionMode {
+	if (parseChildPermission(childPermission) === "read-only") return "read-only";
+	return parentAutoReview ? "auto" : "yolo";
 }
 
 export function snapshotParentPermissionMode(sessionId?: string): PermissionMode {
@@ -84,7 +92,10 @@ export function resolveChildPermissions(
  */
 export function applyInheritedSubagentPermissions(env: NodeJS.ProcessEnv = process.env): PermissionMode | undefined {
 	if (!isSubagentChildProcess(env)) return undefined;
-	const childMode = resolveChildRuntimePermissionMode(env[SUBAGENT_CHILD_PERMISSION_ENV]);
+	const childMode = resolveChildRuntimePermissionMode(
+		env[SUBAGENT_CHILD_PERMISSION_ENV],
+		env[SUBAGENT_CHILD_AUTO_REVIEW_ENV],
+	);
 	resetPermissions(childMode);
 	return childMode;
 }

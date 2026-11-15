@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { chmodSync, mkdirSync, readFileSync } from "fs";
 import { isAbsolute, join, resolve } from "path";
 import { homedir } from "os";

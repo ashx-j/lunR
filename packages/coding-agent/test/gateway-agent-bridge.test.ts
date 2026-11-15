@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setPermissionMode } from "../src/core/permissions.ts";
+import type { AgentSessionEvent } from "../src/core/agent-session.ts";
+import type { ExtensionUIContext } from "../src/core/extensions/types.ts";
+import {
+	createPermissionContext,
+	gateToolCall,
+	getPermissionMode,
+	registerApprovalHandler,
+	setPermissionMode,
+} from "../src/core/permissions.ts";
 import { requestSessionTransfer } from "../src/core/session-handoff.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { registerSubagentCancellation } from "../src/core/subagent-cancellation.ts";
@@ -14,14 +22,27 @@ beforeEach(() => {
 	vi.stubEnv("PI_CODING_AGENT_DIR", profile);
 });
 afterEach(() => {
+	stopGatewayPresenter();
+	resetButtonRegistry();
 	vi.restoreAllMocks();
+	registerApprovalHandler(undefined);
 	vi.unstubAllEnvs();
 	rmSync(profile, { recursive: true, force: true });
 });
 
 import type { BridgeSession } from "../src/gateway/agent-bridge.ts";
 import { AgentBridge, QUEUED } from "../src/gateway/agent-bridge.ts";
-import type { MessageEvent, SessionSource } from "../src/gateway/types.ts";
+import { handleCallback, resetButtonRegistry } from "../src/gateway/buttons.ts";
+import { defaultGatewayConfig, loadGatewayConfig, saveGatewayConfig } from "../src/gateway/config.ts";
+import { bindConversation } from "../src/gateway/conversations.ts";
+import { createPairingStore } from "../src/gateway/pairing.ts";
+import {
+	createGatewayUI,
+	flushGatewayOutbox,
+	startGatewayPresenter,
+	stopGatewayPresenter,
+} from "../src/gateway/presenter.ts";
+import type { MessageEvent, PlatformAdapter, SessionSource } from "../src/gateway/types.ts";
 
 function fakeSession(dispose = vi.fn(), onShutdown?: (event: unknown) => void): BridgeSession {
 	return {
@@ -69,6 +90,31 @@ function makeEvent(key: string): MessageEvent {
 describe("AgentBridge LRU eviction", () => {
 	beforeEach(() => {
 		vi.useRealTimers();
+	});
+
+	it("preserves factory-owned permission context and approval flags during gateway setup", async () => {
+		const manager = SessionManager.inMemory(profile);
+		manager.setPermissionMode("auto");
+		const session = { ...fakeSession(), sessionManager: manager };
+		const approval = vi.fn(async () => "once" as const);
+		registerApprovalHandler(approval);
+		const bridge = new AgentBridge({
+			sessionFactory: async () => {
+				createPermissionContext(manager.getSessionId(), "yolo", false);
+				return session;
+			},
+		});
+		try {
+			await bridge.runTurn("k1", makeEvent("k1"));
+			expect(getPermissionMode(manager.getSessionId())).toBe("yolo");
+			const tasks = ["one", "two", "three"].map((task) => ({ task, description: task }));
+			expect(await gateToolCall("subagent", { tasks }, profile, manager.getSessionId())).toMatchObject({
+				block: true,
+			});
+			expect(approval).not.toHaveBeenCalled();
+		} finally {
+			await bridge.shutdown();
+		}
 	});
 
 	it("evicts the oldest idle session after emitting session_shutdown", async () => {
@@ -170,6 +216,35 @@ describe("AgentBridge LRU eviction", () => {
 		}
 
 		for (const release of releases) release();
+	});
+
+	it("streams each assistant message from its start, separated by a blank line", async () => {
+		let listener: ((event: AgentSessionEvent) => void) | undefined;
+		const start = () => ({ type: "message_start", message: { role: "assistant", content: [] } });
+		const delta = (text: string) => ({
+			type: "message_update",
+			message: { role: "assistant" },
+			assistantMessageEvent: { type: "text_delta", partial: { content: [{ type: "text", text }] } },
+		});
+		const session: BridgeSession = {
+			...fakeSession(),
+			subscribe: (next) => {
+				listener = next;
+				return () => {};
+			},
+			prompt: async () => {
+				for (const event of [start(), delta("Ok"), start(), delta("Let me"), delta("Let me check")])
+					listener?.(event as unknown as AgentSessionEvent);
+			},
+		};
+		const bridge = new AgentBridge({ sessionFactory: async () => session });
+		const deltas: string[] = [];
+		try {
+			await bridge.runTurn("k1", makeEvent("k1"), { onDelta: (text) => deltas.push(text) });
+			expect(deltas.join("")).toBe("Ok\n\nLet me check");
+		} finally {
+			await bridge.shutdown();
+		}
 	});
 
 	it("queues messages for a busy session instead of creating a new one", async () => {
@@ -469,5 +544,123 @@ describe("headless factory wiring", () => {
 		const dir = join(dirname(fileURLToPath(import.meta.url)), "../src/gateway");
 		expect(readFileSync(join(dir, "agent-bridge.ts"), "utf8")).toContain("bindRuntimeBridges({ session, services })");
 		expect(readFileSync(join(dir, "cron.ts"), "utf8")).toContain("bindRuntimeBridges({ session, services })");
+	});
+});
+
+describe("AgentBridge session UI lifetime", () => {
+	function fixture() {
+		const key = "ui-lifetime";
+		const source = makeEvent(key).source;
+		const cfg = defaultGatewayConfig();
+		cfg.telegram.allowedUsers = [source.userId];
+		saveGatewayConfig(cfg);
+		bindConversation(key, source, { owner: source.userId, cwd: profile });
+		const transport: PlatformAdapter = {
+			platform: "telegram",
+			maxMessageLength: 4096,
+			connect: async () => true,
+			disconnect: async () => {},
+			send: vi.fn(async () => ({ success: true, messageId: "notice" })),
+			sendButtons: vi.fn(async () => ({ success: true, messageId: "picker" })),
+			editMessage: vi.fn(async () => ({ success: true })),
+			sendTyping: async () => {},
+			onMessage: () => {},
+			onCallback: () => {},
+			answerCallback: vi.fn(async () => {}),
+		};
+		startGatewayPresenter(new Map([["telegram", transport]]));
+		const uis: ExtensionUIContext[] = [];
+		const listeners: Array<(event: AgentSessionEvent) => void> = [];
+		let fail = false;
+		const active = new AgentBridge({
+			sessionFactory: async () => {
+				if (fail) throw new Error("Could not open session");
+				uis.push(createGatewayUI(key));
+				return {
+					...fakeSession(),
+					subscribe: (listener) => {
+						listeners.push(listener);
+						return () => {};
+					},
+				};
+			},
+		});
+		const approve = async () => {
+			await Promise.resolve();
+			const rows = vi.mocked(transport.sendButtons).mock.calls.at(-1)![2];
+			await handleCallback(
+				{ id: "approve", chatId: source.chatId, messageId: "picker", userId: source.userId, data: rows[0][0].data },
+				{
+					adapter: transport,
+					adapters: new Map([["telegram", transport]]),
+					cfg: loadGatewayConfig(),
+					pairing: createPairingStore(),
+					bridge: active,
+				},
+			);
+		};
+		return {
+			key,
+			active,
+			uis,
+			listeners,
+			transport,
+			approve,
+			failNext: () => {
+				fail = true;
+			},
+		};
+	}
+
+	it("cancels old dialogs on stop while keeping new extension dialogs and notices usable", async () => {
+		const { key, active, uis, listeners, transport, approve } = fixture();
+		await active.getSession(key, true);
+		const oldDialog = uis[0].confirm("Old plan", "Proceed?");
+		await active.abort(key);
+		expect(await oldDialog).toBe(false);
+		const newDialog = uis[0].confirm("New plan", "Proceed?");
+		await approve();
+		expect(await newDialog).toBe(true);
+		uis[0].notify("Fresh UI notice");
+		listeners[0]({
+			type: "message_end",
+			message: { role: "custom", customType: "notice", display: true, content: "Fresh event notice", timestamp: 0 },
+		});
+		await flushGatewayOutbox();
+		expect(vi.mocked(transport.send).mock.calls.map((call) => call[1])).toContain("Fresh UI notice");
+		expect(vi.mocked(transport.send).mock.calls.map((call) => call[1])).toContain("Fresh event notice");
+		await active.shutdown();
+	});
+
+	it("binds replacement UI to its new generation and suppresses the retired session", async () => {
+		const { key, active, uis, listeners, transport, approve } = fixture();
+		await active.getSession(key, true);
+		const oldDialog = uis[0].confirm("Old plan", "Proceed?");
+		await active.switchSession(key, "replacement.jsonl");
+		expect(await oldDialog).toBe(false);
+		expect(await uis[0].confirm("Retired plan", "Proceed?")).toBe(false);
+		uis[0].notify("Retired notice");
+		listeners[0]({
+			type: "message_end",
+			message: { role: "custom", customType: "notice", display: true, content: "Retired event", timestamp: 0 },
+		});
+		const newDialog = uis[1].confirm("Replacement plan", "Proceed?");
+		await approve();
+		expect(await newDialog).toBe(true);
+		uis[1].notify("Replacement notice");
+		await flushGatewayOutbox();
+		expect(vi.mocked(transport.send).mock.calls.map((call) => call[1])).toEqual(["Replacement notice"]);
+		await active.shutdown();
+	});
+
+	it("keeps the surviving session UI usable when opening a replacement fails", async () => {
+		const { key, active, uis, approve, failNext } = fixture();
+		await active.getSession(key, true);
+		failNext();
+		await expect(active.switchSession(key, "missing.jsonl")).rejects.toThrow("Could not open session");
+		const dialog = uis[0].confirm("Surviving plan", "Proceed?");
+		await approve();
+		expect(await dialog).toBe(true);
+		await active.shutdown();
 	});
 });

@@ -7,6 +7,7 @@ import {
 	type AssistantMessage,
 	type Context,
 	EventStream,
+	getContextFingerprint,
 	streamSimple,
 	type ToolResultMessage,
 	validateToolArguments,
@@ -35,22 +36,7 @@ export function agentLoop(
 	signal?: AbortSignal,
 	streamFn?: StreamFn,
 ): EventStream<AgentEvent, AgentMessage[]> {
-	const stream = createAgentStream();
-
-	void runAgentLoop(
-		prompts,
-		context,
-		config,
-		async (event) => {
-			stream.push(event);
-		},
-		signal,
-		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
-
-	return stream;
+	return streamAgentRun(config, signal, (emit) => runAgentLoop(prompts, context, config, emit, signal, streamFn));
 }
 
 /**
@@ -75,21 +61,7 @@ export function agentLoopContinue(
 		throw new Error("Cannot continue from message role: assistant");
 	}
 
-	const stream = createAgentStream();
-
-	void runAgentLoopContinue(
-		context,
-		config,
-		async (event) => {
-			stream.push(event);
-		},
-		signal,
-		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
-
-	return stream;
+	return streamAgentRun(config, signal, (emit) => runAgentLoopContinue(context, config, emit, signal, streamFn));
 }
 
 export async function runAgentLoop(
@@ -142,11 +114,50 @@ export async function runAgentLoopContinue(
 	return newMessages;
 }
 
-function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
-	return new EventStream<AgentEvent, AgentMessage[]>(
-		(event: AgentEvent) => event.type === "agent_end",
-		(event: AgentEvent) => (event.type === "agent_end" ? event.messages : []),
+/** Adapt low-level rejection to the same terminal events as an assistant error response. */
+function streamAgentRun(
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+	run: (emit: AgentEventSink) => Promise<AgentMessage[]>,
+): EventStream<AgentEvent, AgentMessage[]> {
+	const stream = new EventStream<AgentEvent, AgentMessage[]>(
+		(event) => event.type === "agent_end",
+		(event) => (event.type === "agent_end" ? event.messages : []),
 	);
+	const completedMessages: AgentMessage[] = [];
+	const emit: AgentEventSink = (event) => {
+		if (event.type === "message_end") completedMessages.push(event.message);
+		stream.push(event);
+	};
+	void run(emit).then(
+		(messages) => stream.end(messages),
+		(error: unknown) => {
+			const failureMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "" }],
+				api: config.model.api,
+				provider: config.model.provider,
+				model: config.model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: signal?.aborted ? "aborted" : "error",
+				errorMessage: error instanceof Error ? error.message : String(error),
+				timestamp: Date.now(),
+			};
+			emit({ type: "message_start", message: failureMessage });
+			emit({ type: "message_end", message: failureMessage });
+			emit({ type: "turn_end", message: failureMessage, toolResults: [] });
+			emit({ type: "agent_end", messages: completedMessages });
+			stream.end(completedMessages);
+		},
+	);
+	return stream;
 }
 
 /**
@@ -223,6 +234,14 @@ async function runLoop(
 
 			await emit({ type: "turn_end", message, toolResults });
 
+			// An abort during tool preparation or execution ends the run here, as an abort
+			// during streaming does; another provider request would only start a turn the
+			// user cancelled. Queued steering and follow-up messages stay queued.
+			if (toolCalls.length > 0 && signal?.aborted) {
+				await emit({ type: "agent_end", messages: newMessages });
+				return;
+			}
+
 			const nextTurnContext = {
 				message,
 				toolResults,
@@ -292,6 +311,7 @@ async function streamAssistantResponse(
 		systemPrompt: context.systemPrompt,
 		messages: llmMessages,
 		tools: context.tools,
+		deferredTools: context.deferredTools,
 	};
 
 	const streamFunction = streamFn || streamSimple;
@@ -341,6 +361,7 @@ async function streamAssistantResponse(
 			case "done":
 			case "error": {
 				const finalMessage = await response.result();
+				finalMessage.usage.contextFingerprint = getContextFingerprint(llmContext);
 				if (addedPartial) {
 					context.messages[context.messages.length - 1] = finalMessage;
 				} else {
@@ -355,7 +376,15 @@ async function streamAssistantResponse(
 		}
 	}
 
-	const finalMessage = await response.result();
+	// The stream ended without a done or error event. `end(result)` has already settled
+	// result(); otherwise it never will (a proxy connection that closed early, a faulty
+	// extension provider), so finish with an error message instead of waiting forever.
+	const endedResult = await Promise.race([
+		response.result(),
+		new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 0)),
+	]);
+	const finalMessage = endedResult ?? createMissingFinalEventMessage(partialMessage, config, signal);
+	finalMessage.usage.contextFingerprint = getContextFingerprint(llmContext);
 	if (addedPartial) {
 		context.messages[context.messages.length - 1] = finalMessage;
 	} else {
@@ -364,6 +393,37 @@ async function streamAssistantResponse(
 	}
 	await emit({ type: "message_end", message: finalMessage });
 	return finalMessage;
+}
+
+/** Assistant message for a provider stream that ended without a done or error event. */
+function createMissingFinalEventMessage(
+	partialMessage: AssistantMessage | null,
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+): AssistantMessage {
+	const base: AssistantMessage = partialMessage ?? {
+		role: "assistant",
+		content: [],
+		api: config.model.api,
+		provider: config.model.provider,
+		model: config.model.id,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "error",
+		timestamp: Date.now(),
+	};
+	return {
+		...base,
+		usage: { ...base.usage },
+		stopReason: signal?.aborted ? "aborted" : "error",
+		errorMessage: "Provider stream ended without a final event",
+	};
 }
 
 /**
@@ -425,6 +485,21 @@ type ExecutedToolCallBatch = {
 	terminate: boolean;
 };
 
+/**
+ * lunr: makes declared tools a result just loaded callable by the rest of the same message. The run's
+ * `tools` snapshot otherwise only refreshes at the next turn, so `[load_tools(cron), cron(...)]` failed.
+ * Sequential execution only, which a loader opts into. Parallel execution may prepare a call before an
+ * earlier call in the same message has run.
+ */
+function addLoadedDeferredTools(currentContext: AgentContext, addedToolNames: string[] | undefined): void {
+	if (!addedToolNames?.length || !currentContext.deferredTools) return;
+	const tools = currentContext.tools ?? [];
+	const loaded = currentContext.deferredTools.filter(
+		(tool) => addedToolNames.includes(tool.name) && !tools.some((t) => t.name === tool.name),
+	);
+	if (loaded.length) currentContext.tools = [...tools, ...loaded];
+}
+
 async function executeToolCallsSequential(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -469,9 +544,27 @@ async function executeToolCallsSequential(
 		await emitToolResultMessage(toolResultMessage, emit);
 		finalizedCalls.push(finalized);
 		messages.push(toolResultMessage);
+		addLoadedDeferredTools(currentContext, finalized.result.addedToolNames);
 
 		if (signal?.aborted) {
 			break;
+		}
+	}
+
+	if (signal?.aborted) {
+		for (const toolCall of toolCalls.slice(finalizedCalls.length)) {
+			await emit({
+				type: "tool_execution_start",
+				toolCallId: toolCall.id,
+				toolName: toolCall.name,
+				args: toolCall.arguments,
+			});
+			const finalized = createAbortedToolCallOutcome(toolCall);
+			await emitToolExecutionEnd(finalized, emit);
+			const toolResultMessage = createToolResultMessage(finalized);
+			await emitToolResultMessage(toolResultMessage, emit);
+			finalizedCalls.push(finalized);
+			messages.push(toolResultMessage);
 		}
 	}
 
@@ -481,6 +574,11 @@ async function executeToolCallsSequential(
 	};
 }
 
+/**
+ * Preflights calls in source order and runs them concurrently, except calls that
+ * `config.toolCallMutates` flags: those wait for every earlier call to settle and
+ * finish before any later call starts.
+ */
 async function executeToolCallsParallel(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -489,7 +587,16 @@ async function executeToolCallsParallel(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
-	const finalizedCalls: FinalizedToolCallEntry[] = [];
+	const settled: FinalizedToolCallOutcome[] = [];
+	// Calls since the last mutating call, in source order; they run together.
+	let queued: FinalizedToolCallEntry[] = [];
+	const settleQueued = async () => {
+		const outcomes = await Promise.all(
+			queued.map((entry) => (typeof entry === "function" ? entry() : Promise.resolve(entry))),
+		);
+		settled.push(...outcomes);
+		queued = [];
+	};
 
 	for (const toolCall of toolCalls) {
 		await emit({
@@ -507,14 +614,14 @@ async function executeToolCallsParallel(
 				isError: preparation.isError,
 			} satisfies FinalizedToolCallOutcome;
 			await emitToolExecutionEnd(finalized, emit);
-			finalizedCalls.push(finalized);
+			queued.push(finalized);
 			if (signal?.aborted) {
 				break;
 			}
 			continue;
 		}
 
-		finalizedCalls.push(async () => {
+		const run = async () => {
 			const executed = await executePreparedToolCall(preparation, signal, emit);
 			const finalized = await finalizeExecutedToolCall(
 				currentContext,
@@ -526,17 +633,46 @@ async function executeToolCallsParallel(
 			);
 			await emitToolExecutionEnd(finalized, emit);
 			return finalized;
-		});
+		};
+		if (config.toolCallMutates?.(preparation.toolCall, preparation.args)) {
+			await settleQueued();
+			queued.push(run);
+			// An abort while earlier calls ran leaves this call unstarted; the abort pass below fails it.
+			if (!signal?.aborted) await settleQueued();
+		} else {
+			queued.push(run);
+		}
 		if (signal?.aborted) {
 			break;
 		}
 	}
 
-	const orderedFinalizedCalls = await Promise.all(
-		finalizedCalls.map((entry) => (typeof entry === "function" ? entry() : Promise.resolve(entry))),
-	);
+	// After an abort, nothing queued may start: queued calls and calls never reached
+	// both become "Operation aborted" results, so every call still gets a result.
+	if (signal?.aborted) {
+		for (const [index, entry] of queued.entries()) {
+			const toolCall = toolCalls[settled.length + index];
+			if (typeof entry !== "function" || !toolCall) continue;
+			const finalized = createAbortedToolCallOutcome(toolCall);
+			await emitToolExecutionEnd(finalized, emit);
+			queued[index] = finalized;
+		}
+		for (const toolCall of toolCalls.slice(settled.length + queued.length)) {
+			await emit({
+				type: "tool_execution_start",
+				toolCallId: toolCall.id,
+				toolName: toolCall.name,
+				args: toolCall.arguments,
+			});
+			const finalized = createAbortedToolCallOutcome(toolCall);
+			await emitToolExecutionEnd(finalized, emit);
+			queued.push(finalized);
+		}
+	}
+
+	await settleQueued();
 	const messages: ToolResultMessage[] = [];
-	for (const finalized of orderedFinalizedCalls) {
+	for (const finalized of settled) {
 		const toolResultMessage = createToolResultMessage(finalized);
 		await emitToolResultMessage(toolResultMessage, emit);
 		messages.push(toolResultMessage);
@@ -544,7 +680,7 @@ async function executeToolCallsParallel(
 
 	return {
 		messages,
-		terminate: shouldTerminateToolBatch(orderedFinalizedCalls),
+		terminate: shouldTerminateToolBatch(settled),
 	};
 }
 
@@ -601,9 +737,16 @@ async function prepareToolCall(
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
 	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
 	if (!tool) {
+		// lunr: a declared but unloaded tool tells the model to load it. The loop cannot know which tool
+		// loads it (an extension may declare its own), and that loader's description already says so.
+		const deferred = currentContext.deferredTools?.some((t) => t.name === toolCall.name);
 		return {
 			kind: "immediate",
-			result: createErrorToolResult(`Tool ${toolCall.name} not found`),
+			result: createErrorToolResult(
+				deferred
+					? `Tool ${toolCall.name} is not loaded. Load it first, then call it again.`
+					: `Tool ${toolCall.name} not found`,
+			),
 			isError: true,
 		};
 	}
@@ -745,6 +888,11 @@ async function finalizeExecutedToolCall(
 		result,
 		isError,
 	};
+}
+
+/** Result for a tool call that an abort stopped before it ran. */
+function createAbortedToolCallOutcome(toolCall: AgentToolCall): FinalizedToolCallOutcome {
+	return { toolCall, result: createErrorToolResult("Operation aborted"), isError: true };
 }
 
 function createErrorToolResult(message: string): AgentToolResult<any> {

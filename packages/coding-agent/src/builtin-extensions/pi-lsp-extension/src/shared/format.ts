@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Shared formatting utilities for LSP tool results.
  */

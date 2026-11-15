@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { parseSessionRequests, parseSessionUsage, sessionUsageDelta } from "../../shared/session-tokens.ts";
 /**
  * Core execution logic for running subagents
  */
@@ -42,7 +43,6 @@ import {
 } from "../shared/subagent-control.ts";
 import {
 	getFinalOutput,
-	findLatestSessionFile,
 	detectSubagentError,
 	extractToolArgsPreview,
 	extractTextFromContent,
@@ -53,7 +53,7 @@ import { normalizeSkillInput } from "../../agents/skills.ts";
 import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
-import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
+import { attachPostExitStdioGuard } from "../../shared/post-exit-stdio-guard.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
 import { READ_ONLY_WRITE_SPAWN_ERROR, resolveChildPermissions, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { readStructuredOutput } from "../shared/structured-output.ts";
@@ -80,6 +80,7 @@ import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudget
 import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
 import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
 import { createBoundedByteTail, createBoundedLineReader, formatProtocolOutputLimit, MAX_CHILD_STDERR_BYTES, projectChildLifecycle, type ChildLifecycleAction, type ProtocolOutputLimit } from "../shared/child-protocol.ts";
+import { createChildEventDecoder } from "../../../../../core/subagent-event-transport.ts";
 import {
 	acceptChildWatchdogEvent,
 	childWatchdogIsActive,
@@ -92,7 +93,7 @@ const artifactOutputByResult = new WeakMap<SingleResult, string>();
 const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
 
 function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, unknownRequests: 0, partialRequests: 0, unknownCosts: 0 };
 }
 
 function sumUsage(target: Usage, source: Usage): void {
@@ -102,6 +103,9 @@ function sumUsage(target: Usage, source: Usage): void {
 	target.cacheWrite += source.cacheWrite;
 	target.cost += source.cost;
 	target.turns += source.turns;
+	target.unknownRequests += source.unknownRequests ?? 0;
+	target.partialRequests += source.partialRequests ?? 0;
+	target.unknownCosts += source.unknownCosts ?? 0;
 }
 
 function formatTimeoutMessage(timeoutMs: number): string {
@@ -212,6 +216,7 @@ async function runSingleAttempt(
 		originalTask?: string;
 	},
 ): Promise<SingleResult> {
+	const usageBeforeAttempt = parseSessionUsage(options.sessionFile ?? options.sessionDir);
 	const effectiveThinking = options.thinkingOverride;
 	const modelArg = applyThinkingSuffix(model, effectiveThinking, options.thinkingOverride !== undefined);
 	const watchdogConfig = resolveWatchdogConfig(options.cwd ?? runtimeCwd);
@@ -353,6 +358,8 @@ async function runSingleAttempt(
 			windowsHide: true,
 		});
 		const jsonlWriter = createJsonlWriter(shared.jsonlPath, proc.stdout);
+		let spawned = typeof proc.pid === "number" && proc.pid > 0;
+		proc.once("spawn", () => { spawned = true; });
 		let processClosed = false;
 		let settled = false;
 		let detached = false;
@@ -368,6 +375,64 @@ async function runSingleAttempt(
 		let turnBudgetTerminationTimer: NodeJS.Timeout | undefined;
 		let turnBudgetHardKillTimer: NodeJS.Timeout | undefined;
 		let protocolHardKillTimer: NodeJS.Timeout | undefined;
+		let cancellationHardKillTimer: NodeJS.Timeout | undefined;
+		let interruptTerminationTimer: NodeJS.Timeout | undefined;
+		let terminationCheckTimer: NodeJS.Timeout | undefined;
+		let terminationUnconfirmedReported = false;
+		const clearCancellationTimers = () => {
+			if (terminationCheckTimer) clearTimeout(terminationCheckTimer);
+			terminationCheckTimer = undefined;
+			if (cancellationHardKillTimer) clearTimeout(cancellationHardKillTimer);
+			if (interruptTerminationTimer) clearTimeout(interruptTerminationTimer);
+			cancellationHardKillTimer = undefined;
+			interruptTerminationTimer = undefined;
+		};
+		const recordProcessError = (error: unknown) => {
+			if (!result.error) result.error = error instanceof Error ? error.message : String(error);
+			progress.error = result.error;
+			if (!childExited && !processClosed && !settled && !detached) {
+				progress.status = "running";
+				fireUpdate();
+			}
+		};
+		// A delivered signal is not an exit acknowledgement. Keep this attempt owned
+		// until close, including when the OS refuses every termination signal.
+		const signalChild = (signal: NodeJS.Signals): boolean => {
+			if (childExited || processClosed || settled || detached) return false;
+			let sent = false;
+			try {
+				sent = proc.kill(signal);
+			} catch (error) {
+				recordProcessError(error);
+			}
+			if (!sent && !childExited && !processClosed && !settled && !detached) {
+				recordProcessError(`Subagent ${signal} could not be delivered; child exit is not confirmed.`);
+			}
+			if (signal === "SIGKILL" && !childExited && !processClosed && !settled && !detached && !terminationCheckTimer && !terminationUnconfirmedReported) {
+				terminationCheckTimer = setTimeout(() => {
+					terminationCheckTimer = undefined;
+					if (childExited || processClosed || settled || detached) return;
+					terminationUnconfirmedReported = true;
+					const message = `Subagent termination unconfirmed after SIGKILL${proc.pid ? ` (diagnostic PID ${proc.pid})` : ""}. This foreground call still owns the child and waits for its exit. Verify the child process before starting replacement work.`;
+					progress.status = "running";
+					progress.error = message;
+					progress.activityState = "needs_attention";
+					progress.durationMs = Date.now() - startTime;
+					appendRecentOutput(progress, [message]);
+					emitUpdateSnapshot(message);
+				}, 2000);
+				terminationCheckTimer.unref?.();
+			}
+			return sent;
+		};
+		const scheduleCancellationHardKill = (delayMs: number) => {
+			if (cancellationHardKillTimer || childExited || processClosed || settled || detached) return;
+			cancellationHardKillTimer = setTimeout(() => {
+				cancellationHardKillTimer = undefined;
+				if (!childExited && !processClosed && !settled && !detached) signalChild("SIGKILL");
+			}, delayMs);
+			cancellationHardKillTimer.unref?.();
+		};
 		const clearTurnBudgetTimers = () => {
 			if (turnBudgetTerminationTimer) {
 				clearTimeout(turnBudgetTerminationTimer);
@@ -449,15 +514,14 @@ async function runSingleAttempt(
 			if (childExited || finalDrainTimer || settled || processClosed || detached) return;
 			finalDrainTimer = setTimeout(() => {
 				if (settled || processClosed || detached) return;
-				const termSent = trySignalChild(proc, "SIGTERM");
-				if (!termSent) return;
-				forcedTerminationSignal = true;
+				const termSent = signalChild("SIGTERM");
+				forcedTerminationSignal = termSent || forcedTerminationSignal;
 				if (!cleanTerminalAssistantStopReceived && !agentSettledReceived && !assistantError) {
 					result.error = result.error ?? `Subagent process did not exit within ${FINAL_STOP_GRACE_MS}ms after its terminal event. Forcing termination.`;
 				}
 				finalHardKillTimer = setTimeout(() => {
 					if (settled || processClosed || detached) return;
-					forcedTerminationSignal = trySignalChild(proc, "SIGKILL") || forcedTerminationSignal;
+					forcedTerminationSignal = signalChild("SIGKILL") || forcedTerminationSignal;
 				}, HARD_KILL_MS);
 				finalHardKillTimer.unref?.();
 			}, FINAL_STOP_GRACE_MS);
@@ -508,6 +572,7 @@ async function runSingleAttempt(
 		const finish = (code: number) => {
 			if (settled) return;
 			settled = true;
+			clearCancellationTimers();
 			clearFinalDrainTimers();
 			clearWatchdogTailTimer();
 			clearStdioGuard();
@@ -603,15 +668,15 @@ async function runSingleAttempt(
 			progress.error = message;
 			progress.durationMs = Date.now() - startTime;
 			fireUpdate();
-			trySignalChild(proc, "SIGINT");
+			signalChild("SIGINT");
 			turnBudgetTerminationTimer = setTimeout(() => {
 				if (processClosed || settled || detached || result.timedOut) return;
-				trySignalChild(proc, "SIGTERM");
+				signalChild("SIGTERM");
 			}, 1000);
 			turnBudgetTerminationTimer.unref?.();
 			turnBudgetHardKillTimer = setTimeout(() => {
 				if (processClosed || settled || detached || result.timedOut) return;
-				trySignalChild(proc, "SIGKILL");
+				signalChild("SIGKILL");
 			}, 4000);
 			turnBudgetHardKillTimer.unref?.();
 		};
@@ -678,10 +743,21 @@ async function runSingleAttempt(
 			emitUpdateSnapshot(output || "(running...)");
 		};
 
+		const decodeChildEvent = createChildEventDecoder();
 		const processLine = (line: string) => {
 			if (!line.trim()) return;
-			jsonlWriter.writeLine(line);
 			let evt: { type?: string; message?: Message; toolName?: string; args?: unknown; willRetry?: unknown };
+			let assembled: string | undefined;
+			try {
+				assembled = decodeChildEvent(line);
+			} catch {
+				jsonlWriter.writeLine(line);
+				shared.transcriptWriter?.writeStdoutLine(line);
+				return;
+			}
+			if (assembled === undefined) return;
+			line = assembled;
+			jsonlWriter.writeLine(line);
 			try {
 				evt = JSON.parse(line) as { type?: string; message?: Message; toolName?: string; args?: unknown; willRetry?: unknown };
 			} catch {
@@ -785,7 +861,10 @@ async function runSingleAttempt(
 						result.usage.cacheRead += u.cacheRead || 0;
 						result.usage.cacheWrite += u.cacheWrite || 0;
 						result.usage.cost += u.cost?.total || 0;
-						progress.tokens = result.usage.input + result.usage.output;
+						result.usage.unknownRequests += Number(u.measurement === "unknown");
+						result.usage.partialRequests += Number(u.measurement === "partial");
+						result.usage.unknownCosts += Number(u.costSource === "unknown");
+						progress.tokens = result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite;
 					}
 					if (!result.model && evt.message.model) {
 						result.model = evt.message.model;
@@ -864,15 +943,15 @@ async function runSingleAttempt(
 				progress.error = attemptTimeout.message;
 				progress.durationMs = Date.now() - startTime;
 				fireUpdate();
-				trySignalChild(proc, "SIGINT");
+				signalChild("SIGINT");
 				timeoutTerminationTimer = setTimeout(() => {
 					if (processClosed || settled || detached) return;
-					trySignalChild(proc, "SIGTERM");
+					signalChild("SIGTERM");
 				}, 1000);
 				timeoutTerminationTimer.unref?.();
 				timeoutHardKillTimer = setTimeout(() => {
 					if (processClosed || settled || detached) return;
-					trySignalChild(proc, "SIGKILL");
+					signalChild("SIGKILL");
 				}, 4000);
 				timeoutHardKillTimer.unref?.();
 			}, attemptTimeout.remainingMs);
@@ -889,9 +968,9 @@ async function runSingleAttempt(
 			progress.durationMs = Date.now() - startTime;
 			fireUpdate();
 			if (!childExited) {
-				trySignalChild(proc, "SIGTERM");
+				signalChild("SIGTERM");
 				protocolHardKillTimer = setTimeout(() => {
-					if (!childExited) trySignalChild(proc, "SIGKILL");
+					if (!childExited) signalChild("SIGKILL");
 				}, 3000);
 				protocolHardKillTimer.unref?.();
 			}
@@ -910,11 +989,18 @@ async function runSingleAttempt(
 			stderrTail.push(chunk);
 			stderrReader.push(chunk);
 		});
-		proc.on("exit", () => {
+		const confirmChildExit = () => {
 			childExited = true;
+			if (terminationUnconfirmedReported) {
+				progress.error = result.error;
+				progress.activityState = undefined;
+			}
+			clearCancellationTimers();
 			clearFinalDrainTimers();
-		});
+		};
+		proc.on("exit", confirmChildExit);
 		proc.on("close", (code, signal) => {
+			confirmChildExit();
 			clearFinalDrainTimers();
 			clearStdioGuard();
 			void jsonlWriter.close().catch(() => {
@@ -924,6 +1010,12 @@ async function runSingleAttempt(
 			cleanupTempDir(tempDir);
 			stdoutReader.end();
 			stderrReader.end();
+			const persistedUsage = parseSessionUsage(options.sessionFile ?? options.sessionDir ?? result.sessionFile);
+			if (persistedUsage) {
+				result.usageRequests = parseSessionRequests(options.sessionFile ?? options.sessionDir ?? result.sessionFile);
+				result.usage = options.sessionFile ? persistedUsage : sessionUsageDelta(persistedUsage, usageBeforeAttempt);
+				progress.tokens = result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite;
+			}
 			const stderr = stderrTail.text();
 			let closeError = result.error ?? toolDiagnosticError ?? assistantError;
 			const forcedDrainAfterFinalSuccess = forcedTerminationSignal && (cleanTerminalAssistantStopReceived || agentSettledReceived) && !closeError;
@@ -985,6 +1077,11 @@ async function runSingleAttempt(
 			finish(finalCode);
 		});
 		proc.on("error", (error) => {
+			// kill/send errors after spawn do not prove exit and must not discard escalation.
+			if (spawned) {
+				recordProcessError(error);
+				return;
+			}
 			clearFinalDrainTimers();
 			clearStdioGuard();
 			void jsonlWriter.close().catch(() => {
@@ -1001,9 +1098,9 @@ async function runSingleAttempt(
 
 		if (options.signal) {
 			const kill = () => {
-				if (processClosed || detached) return;
-				proc.kill("SIGTERM");
-				setTimeout(() => !proc.killed && proc.kill("SIGKILL"), 3000);
+				if (childExited || processClosed || settled || detached) return;
+				signalChild("SIGTERM");
+				scheduleCancellationHardKill(3000);
 			};
 			if (options.signal.aborted) kill();
 			else {
@@ -1024,11 +1121,13 @@ async function runSingleAttempt(
 				result.finalOutput = "Interrupted. Waiting for explicit next action.";
 				progress.activityState = undefined;
 				fireUpdate();
-				trySignalChild(proc, "SIGINT");
-				setTimeout(() => {
-					if (settled || processClosed || detached) return;
-					trySignalChild(proc, "SIGTERM");
-				}, 1000).unref?.();
+				signalChild("SIGINT");
+				interruptTerminationTimer = setTimeout(() => {
+					if (childExited || settled || processClosed || detached) return;
+					signalChild("SIGTERM");
+				}, 1000);
+				interruptTerminationTimer.unref?.();
+				scheduleCancellationHardKill(4000);
 			};
 			if (options.interruptSignal.aborted) interrupt();
 			else {
@@ -1228,7 +1327,6 @@ export async function runSync(
 		};
 	}
 
-	const shareEnabled = options.share === true;
 	const effectiveAcceptance = resolveEffectiveAcceptance({
 		explicit: options.acceptance ?? spec.acceptance,
 		permissions: spec.effectivePermissions,
@@ -1240,7 +1338,7 @@ export async function runSync(
 	});
 	const acceptancePrompt = formatAcceptancePrompt(effectiveAcceptance);
 	const taskWithAcceptance = acceptancePrompt ? `${task}\n${acceptancePrompt}` : task;
-	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
+	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir);
 	const skillNames = options.skills ?? (spec.skill === false ? [] : (normalizeSkillInput(spec.skill) || []));
 	const skillCwd = options.cwd ?? spec.cwd ?? runtimeCwd;
 	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(
@@ -1373,11 +1471,13 @@ export async function runSync(
 		}
 		: options;
 
+	const priorRequestIds = new Set(parseSessionRequests(options.sessionFile ?? options.sessionDir).map((request) => request.id));
 	let lastResult: SingleResult | undefined;
 	const modelsToTry = candidates.length > 0 ? candidates : [undefined];
 	for (let i = 0; i < modelsToTry.length; i++) {
 		const candidate = modelsToTry[i];
 		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
+		const usageBeforeAttempt = parseSessionUsage(options.sessionFile ?? options.sessionDir);
 		const result = await runSingleAttempt(runtimeCwd, spec, taskWithAcceptance, candidate, detachedAwareOptions, {
 			sessionEnabled,
 			systemPrompt,
@@ -1390,6 +1490,8 @@ export async function runSync(
 			outputSnapshot,
 			originalTask: task,
 		});
+		const persistedUsage = parseSessionUsage(options.sessionFile ?? options.sessionDir ?? result.sessionFile);
+		if (persistedUsage) result.usage = sessionUsageDelta(persistedUsage, usageBeforeAttempt);
 		lastResult = result;
 		if (result.model) attemptedModels.push(result.model);
 		else if (candidate) attemptedModels.push(candidate);
@@ -1429,12 +1531,16 @@ export async function runSync(
 		error: "Subagent did not produce a result.",
 	} satisfies SingleResult;
 
-	result.usage = aggregateUsage;
+	const cumulativeResumeUsage = options.sessionFile ? parseSessionUsage(options.sessionFile) : null;
+	result.usage = cumulativeResumeUsage ?? aggregateUsage;
+	result.usageRequests = parseSessionRequests(options.sessionFile ?? options.sessionDir ?? result.sessionFile)
+		.filter((request) => Boolean(options.sessionFile) || !priorRequestIds.has(request.id));
+	if (result.usageRequests.length === 0) result.usageRequests = undefined;
 	result.attemptedModels = attemptedModels.length > 0 ? attemptedModels : undefined;
 	result.modelAttempts = modelAttempts.length > 0 ? modelAttempts : undefined;
 	result.progressSummary = {
 		toolCount: totalToolCount,
-		tokens: aggregateUsage.input + aggregateUsage.output,
+		tokens: result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite,
 		durationMs: totalDurationMs,
 	};
 	if (attemptNotes.length > 0 && result.progress) {
@@ -1465,9 +1571,6 @@ export async function runSync(
 
 	if (options.sessionFile && (existsSync(options.sessionFile) || result.messages?.length)) {
 		result.sessionFile = options.sessionFile;
-	} else if (shareEnabled && options.sessionDir) {
-		const sessionFile = findLatestSessionFile(options.sessionDir);
-		if (sessionFile) result.sessionFile = sessionFile;
 	}
 
 	const childWrittenOutput = options.outputPath

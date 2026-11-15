@@ -47,10 +47,12 @@ describe("subagent permission inherit", () => {
 		expect(resolveRequestedChildPermission("read-only")).toBe("read-only");
 	});
 
-	it("maps full to child auto and read-only to child read-only", () => {
-		expect(resolveChildRuntimePermissionMode("full")).toBe("auto");
-		expect(resolveChildRuntimePermissionMode("read-only")).toBe("read-only");
-		expect(resolveChildRuntimePermissionMode(undefined)).toBe("auto");
+	it("maps full to the parent's mode and read-only to child read-only", () => {
+		expect(resolveChildRuntimePermissionMode("full")).toBe("yolo");
+		expect(resolveChildRuntimePermissionMode("full", "anthropic/claude-sonnet-5")).toBe("auto");
+		expect(resolveChildRuntimePermissionMode("full", "-")).toBe("auto");
+		expect(resolveChildRuntimePermissionMode("read-only", "anthropic/claude-sonnet-5")).toBe("read-only");
+		expect(resolveChildRuntimePermissionMode(undefined)).toBe("yolo");
 	});
 
 	it("lets yolo/auto parents launch full and read-only children", () => {
@@ -106,9 +108,9 @@ describe("subagent permission inherit", () => {
 		expect(getPermissionMode()).toBe("yolo");
 	});
 
-	it("applies auto to a full child when the permission env is missing", () => {
-		expect(applyInheritedSubagentPermissions({ [SUBAGENT_CHILD_ENV]: "1" })).toBe("auto");
-		expect(getPermissionMode()).toBe("auto");
+	it("applies yolo to a full child when the permission env is missing", () => {
+		expect(applyInheritedSubagentPermissions({ [SUBAGENT_CHILD_ENV]: "1" })).toBe("yolo");
+		expect(getPermissionMode()).toBe("yolo");
 	});
 
 	it("applies read-only to a read-only child", () => {

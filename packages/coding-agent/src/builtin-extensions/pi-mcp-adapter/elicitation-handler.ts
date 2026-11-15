@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {

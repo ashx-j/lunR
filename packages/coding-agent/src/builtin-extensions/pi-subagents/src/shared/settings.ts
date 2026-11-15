@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Chain behavior, template resolution, and directory management
  */

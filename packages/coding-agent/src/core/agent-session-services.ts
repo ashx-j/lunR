@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
@@ -52,12 +52,13 @@ export interface CreateAgentSessionServicesOptions {
  * have been resolved against those services.
  */
 export interface CreateAgentSessionFromServicesOptions {
+	permissionMode?: CreateAgentSessionOptions["permissionMode"];
 	services: AgentSessionServices;
 	sessionManager: SessionManager;
 	sessionStartEvent?: SessionStartEvent;
-	model?: Model<any>;
+	model?: Model<Api>;
 	thinkingLevel?: ThinkingLevel;
-	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	scopedModels?: Array<{ model: Model<Api>; thinkingLevel?: ThinkingLevel }>;
 	tools?: string[];
 	excludeTools?: CreateAgentSessionOptions["excludeTools"];
 	noTools?: CreateAgentSessionOptions["noTools"];
@@ -209,5 +210,6 @@ export async function createAgentSessionFromServices(
 		noTools: options.noTools,
 		customTools: options.customTools,
 		sessionStartEvent: options.sessionStartEvent,
+		permissionMode: options.permissionMode,
 	});
 }

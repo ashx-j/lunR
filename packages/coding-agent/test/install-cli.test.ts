@@ -5,10 +5,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleInstallCli } from "../src/cli/install-cli.ts";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import { installBrowser } from "../src/core/browser/setup.ts";
+import { configureStartup, teardownGatewayService } from "../src/gateway/service.ts";
+import { setupGateway } from "../src/gateway/setup.ts";
+
+vi.mock("../src/gateway/setup.ts", () => ({ setupGateway: vi.fn(async () => {}) }));
+vi.mock("../src/cli/read-secret.ts", () => ({ readSecret: vi.fn(async () => "fixture-token") }));
+vi.mock("../src/gateway/service.ts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/gateway/service.ts")>()),
+	configureStartup: vi.fn(async () => {}),
+	stopGatewayService: vi.fn(async () => "Gateway stopped."),
+	teardownGatewayService: vi.fn(async () => {}),
+}));
 
 vi.mock("../src/core/browser/setup.ts", () => ({ installBrowser: vi.fn(async () => {}) }));
 
-import { isFeatureEnabled, loadInstallFeatures } from "../src/core/install-features.ts";
+import { isFeatureEnabled, loadInstallFeatures, saveInstallFeatures } from "../src/core/install-features.ts";
 import { saveInstallLayout } from "../src/core/install-layout.ts";
 import { loadGatewayConfig } from "../src/gateway/config.ts";
 import { runGateway } from "../src/gateway/index.ts";
@@ -16,10 +27,15 @@ import { handlePackageCommand } from "../src/package-manager-cli.ts";
 
 let dir: string;
 let prevAgentDir: string | undefined;
+let ttyDescriptor: PropertyDescriptor | undefined;
 let prevExitCode: typeof process.exitCode;
 
 beforeEach(() => {
 	vi.mocked(installBrowser).mockClear();
+	vi.mocked(teardownGatewayService).mockReset().mockResolvedValue(undefined);
+	vi.mocked(configureStartup).mockClear();
+	vi.mocked(setupGateway).mockReset().mockResolvedValue(undefined);
+	ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 	dir = mkdtempSync(join(tmpdir(), "lunr-install-cli-"));
 	prevAgentDir = process.env[ENV_AGENT_DIR];
 	prevExitCode = process.exitCode;
@@ -28,6 +44,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	if (ttyDescriptor) Object.defineProperty(process.stdin, "isTTY", ttyDescriptor);
+	else Reflect.deleteProperty(process.stdin, "isTTY");
 	if (prevAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
 	else process.env[ENV_AGENT_DIR] = prevAgentDir;
 	process.exitCode = prevExitCode;
@@ -61,6 +79,70 @@ describe("handleInstallCli dispatch", () => {
 		const text = log.mock.calls.flat().join("\n");
 		log.mockRestore();
 		expect(text).toContain("npm rm -g @ashx-j/lunr");
+	});
+
+	it("interactive setup installs the browser and keeps gateway wizard feature choices", async () => {
+		Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+		vi.mocked(setupGateway).mockImplementationOnce(async () => {
+			const features = loadInstallFeatures();
+			features.features["chat-platforms"] = { enabled: true, options: { autostart: true } };
+			saveInstallFeatures(features);
+		});
+		await handleInstallCli(["setup"]);
+		expect(installBrowser).toHaveBeenCalledWith(false);
+		expect(setupGateway).toHaveBeenCalledOnce();
+		expect(isFeatureEnabled("chat-platforms")).toBe(true);
+		expect(loadInstallFeatures().features["chat-platforms"].options.autostart).toBe(true);
+	});
+
+	it("interactive explicit feature and set flags apply without overwriting choices in a wizard", async () => {
+		Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+		await handleInstallCli(["setup", "--feature", "chat-platforms", "--set", "chat-platforms.autostart=true"]);
+		expect(installBrowser).toHaveBeenCalledWith(false);
+		expect(setupGateway).not.toHaveBeenCalled();
+		expect(configureStartup).toHaveBeenCalledWith("login");
+		expect(loadInstallFeatures().features["chat-platforms"].options.autostart).toBe(true);
+		await handleInstallCli(["setup", "--no-feature", "chat-platforms"]);
+		expect(isFeatureEnabled("chat-platforms")).toBe(false);
+	});
+
+	it("interactive invalid flags fail before browser or gateway work", async () => {
+		Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+		await handleInstallCli(["setup", "--feature", "unknown"]);
+		expect(process.exitCode).toBe(2);
+		expect(installBrowser).not.toHaveBeenCalled();
+		expect(setupGateway).not.toHaveBeenCalled();
+	});
+
+	it("npm purge preserves profile on teardown failure, then removes it after confirmed teardown", async () => {
+		writeFileSync(join(dir, "auth.json"), "fixture");
+		vi.mocked(teardownGatewayService).mockRejectedValueOnce(new Error("shutdown unconfirmed"));
+		await expect(handleInstallCli(["uninstall", "--purge", "--yes"])).rejects.toThrow("shutdown unconfirmed");
+		expect(existsSync(join(dir, "auth.json"))).toBe(true);
+		vi.mocked(teardownGatewayService).mockImplementationOnce(async () => {
+			expect(existsSync(join(dir, "auth.json"))).toBe(true);
+		});
+		await handleInstallCli(["uninstall", "--purge", "--yes"]);
+		expect(existsSync(dir)).toBe(false);
+	});
+
+	it("standalone uninstall preserves binaries and profile when teardown fails", async () => {
+		const prefix = join(dir, "prefix");
+		mkdirSync(join(prefix, "bin"), { recursive: true });
+		writeFileSync(join(prefix, "bin/lunr"), "inert");
+		saveInstallLayout({
+			schemaVersion: 1,
+			prefix,
+			method: "binary",
+			argv0: join(prefix, "bin/lunr"),
+			version: "0.1.0",
+		});
+		vi.mocked(teardownGatewayService).mockRejectedValueOnce(new Error("registration removal unconfirmed"));
+		await expect(handleInstallCli(["uninstall", "--purge", "--yes"])).rejects.toThrow(
+			"registration removal unconfirmed",
+		);
+		expect(existsSync(join(prefix, "bin/lunr"))).toBe(true);
+		expect(existsSync(dir)).toBe(true);
 	});
 
 	it("setup --yes defaults chat-platforms off", async () => {
@@ -107,6 +189,24 @@ describe("handleInstallCli dispatch", () => {
 		expect(isFeatureEnabled("chat-platforms")).toBe(true);
 		expect(await handleInstallCli(["features", "disable", "chat-platforms"])).toBe(true);
 		expect(isFeatureEnabled("chat-platforms")).toBe(false);
+	});
+
+	it("standalone purge keeps unrelated files in a custom prefix", async () => {
+		const prefix = join(dir, "prefix");
+		const profile = join(dir, "agent");
+		mkdirSync(join(prefix, "bin"), { recursive: true });
+		writeFileSync(join(prefix, "keep.txt"), "unrelated");
+		process.env[ENV_AGENT_DIR] = profile;
+		saveInstallLayout({
+			schemaVersion: 1,
+			prefix,
+			method: "binary",
+			argv0: join(prefix, "bin/lunr"),
+			version: "0.1.0",
+		});
+		await handleInstallCli(["uninstall", "--purge", "--yes"]);
+		expect(existsSync(join(prefix, "keep.txt"))).toBe(true);
+		expect(existsSync(profile)).toBe(false);
 	});
 
 	it("product uninstall --purge --yes deletes prefix versions/bin and agent dir", async () => {

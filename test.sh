@@ -1,81 +1,38 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-AUTH_FILE="$HOME/.pi/agent/auth.json"
-AUTH_BACKUP="$HOME/.pi/agent/auth.json.bak"
-
-# Restore auth.json on exit (success or failure)
+# Keep every test process away from the caller's saved profiles and credentials.
+test_profile=$(mktemp -d "${TMPDIR:-/tmp}/lunr-tests.XXXXXXXX")
 cleanup() {
-    if [[ -f "$AUTH_BACKUP" ]]; then
-        mv "$AUTH_BACKUP" "$AUTH_FILE"
-        echo "Restored auth.json"
-    fi
+    rm -rf -- "$test_profile"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-# Move auth.json out of the way
-if [[ -f "$AUTH_FILE" ]]; then
-    mv "$AUTH_FILE" "$AUTH_BACKUP"
-    echo "Moved auth.json to backup"
-fi
+mkdir -p "$test_profile"/{home,agent,tmp,config,cache,data,appdata,localappdata}
 
-# Skip local LLM tests (ollama, lmstudio)
-export PI_NO_LOCAL_LLM=1
+test_env=(
+    "HOME=$test_profile/home"
+    "USERPROFILE=$test_profile/home"
+    "PI_CODING_AGENT_DIR=$test_profile/agent"
+    "TMPDIR=$test_profile/tmp"
+    "TMP=$test_profile/tmp"
+    "TEMP=$test_profile/tmp"
+    "XDG_CONFIG_HOME=$test_profile/config"
+    "XDG_CACHE_HOME=$test_profile/cache"
+    "XDG_DATA_HOME=$test_profile/data"
+    "APPDATA=$test_profile/appdata"
+    "LOCALAPPDATA=$test_profile/localappdata"
+    "PI_NO_LOCAL_LLM=1"
+    "npm_config_update_notifier=false"
+)
+# Only OS/tool lookup and test presentation settings may cross this boundary.
+for name in PATH SystemRoot SYSTEMROOT WINDIR COMSPEC PATHEXT TERM LANG LC_ALL LC_CTYPE TZ CI GITHUB_ACTIONS NO_COLOR FORCE_COLOR; do
+    if [[ ${!name+x} ]]; then
+        test_env+=("$name=${!name}")
+    fi
+done
 
-# Unset API keys (see packages/ai/src/stream.ts getEnvApiKey)
-unset ANTHROPIC_API_KEY
-unset ANTHROPIC_OAUTH_TOKEN
-unset ANT_LING_API_KEY
-unset NVIDIA_API_KEY
-unset OPENAI_API_KEY
-unset AZURE_OPENAI_API_KEY
-unset DEEPSEEK_API_KEY
-unset GEMINI_API_KEY
-unset GOOGLE_CLOUD_API_KEY
-unset GROQ_API_KEY
-unset CEREBRAS_API_KEY
-unset XAI_API_KEY
-unset OPENROUTER_API_KEY
-unset ZAI_API_KEY
-unset ZAI_CODING_CN_API_KEY
-unset MISTRAL_API_KEY
-unset MINIMAX_API_KEY
-unset MINIMAX_CN_API_KEY
-unset MOONSHOT_API_KEY
-unset KIMI_API_KEY
-unset HF_TOKEN
-unset FIREWORKS_API_KEY
-unset TOGETHER_API_KEY
-unset AI_GATEWAY_API_KEY
-unset OPENCODE_API_KEY
-unset CLOUDFLARE_API_KEY
-unset CLOUDFLARE_ACCOUNT_ID
-unset CLOUDFLARE_GATEWAY_ID
-unset XIAOMI_API_KEY
-unset XIAOMI_TOKEN_PLAN_CN_API_KEY
-unset XIAOMI_TOKEN_PLAN_AMS_API_KEY
-unset XIAOMI_TOKEN_PLAN_SGP_API_KEY
-unset RADIUS_API_KEY
-unset PI_GATEWAY
-unset PI_EXPERIMENTAL
-unset COPILOT_GITHUB_TOKEN
-unset GH_TOKEN
-unset GITHUB_TOKEN
-unset GOOGLE_APPLICATION_CREDENTIALS
-unset GOOGLE_CLOUD_PROJECT
-unset GCLOUD_PROJECT
-unset GOOGLE_CLOUD_LOCATION
-unset AWS_PROFILE
-unset AWS_ACCESS_KEY_ID
-unset AWS_SECRET_ACCESS_KEY
-unset AWS_SESSION_TOKEN
-unset AWS_REGION
-unset AWS_DEFAULT_REGION
-unset AWS_BEARER_TOKEN_BEDROCK
-unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
-unset AWS_CONTAINER_CREDENTIALS_FULL_URI
-unset AWS_WEB_IDENTITY_TOKEN_FILE
-unset BEDROCK_EXTENSIVE_MODEL_TEST
-
-echo "Running tests without API keys..."
-npm test
+echo "Running tests with a disposable profile and no inherited credentials..."
+env -i "${test_env[@]}" npm test "$@"

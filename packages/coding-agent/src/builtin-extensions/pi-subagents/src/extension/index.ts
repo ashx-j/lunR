@@ -14,6 +14,8 @@
 
 import { randomUUID } from "node:crypto";
 import { createSubagentCancellation, registerSubagentCancellation } from "../../../../core/subagent-cancellation.ts";
+import { ACP_SCHEDULING_DISABLED } from "../../../../modes/acp/policy.ts";
+import { readAcpWorkerConfig } from "../../../../modes/acp/worker-config.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -32,7 +34,7 @@ import {
 	SUBAGENT_PAINT_INTERVAL_MS,
 	subagentAnimSink,
 } from "../tui/render.ts";
-import { SubagentParams } from "./schemas.ts";
+import { AcpSubagentParams, SubagentParams } from "./schemas.ts";
 import { validateChainInput } from "./chain-validation.ts";
 import type { createSubagentExecutor, SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { resolveSubagentRequestParams } from "../runs/foreground/request-params.ts";
@@ -54,7 +56,8 @@ import { registerWaitTool } from "../runs/background/wait-tool.ts";
 import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
 import registerSubagentNotify, { parseSubagentNotifyContent, type SubagentNotifyDetails } from "../runs/background/notify.ts";
 import { formatSteeringNotice, handleSubagentSteeringNotice, SUBAGENT_STEERING_MESSAGE_TYPE, type SubagentSteeringMessageDetails } from "./steering-notices.ts";
-import { SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/pi-args.ts";
+import { controlNotificationKey } from "../runs/shared/subagent-control.ts";
+import { SUBAGENT_CHILD_ENV } from "../runs/shared/pi-args.ts";
 
 import { loadConfig } from "./config.ts";
 import { buildSubagentToolDescription } from "./tool-description.ts";
@@ -334,22 +337,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	if (process.env[SUBAGENT_CHILD_ENV] === "1") {
 		return;
 	}
-	const globalStore = globalThis as Record<string, unknown>;
-	const runtimeCleanupStoreKey = "__piSubagentRuntimeCleanup";
-	const previousRuntimeCleanup = globalStore[runtimeCleanupStoreKey];
-	if (typeof previousRuntimeCleanup === "function") {
-		try {
-			previousRuntimeCleanup();
-		} catch {
-			// Best effort cleanup for stale timers from an older reload.
-		}
-	}
 
 	ensureAccessibleDir(RESULTS_DIR);
 	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
 
 	const config = normalizeAsyncLaunchConfig(loadConfig());
+	const acpWorker = Boolean(readAcpWorkerConfig());
+	if (acpWorker) config.scheduledRuns = { ...config.scheduledRuns, enabled: false };
+	const descriptionOptions = { schedulingDisabled: acpWorker };
 	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
@@ -386,34 +382,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		RESULTS_DIR,
 		10 * 60 * 1000,
 	);
-	startResultWatcher();
-	primeExistingResults();
 
 	let generation = 0;
 	let executorPromise: Promise<ReturnType<typeof createSubagentExecutor>> | undefined;
 	const pendingLaunches = new Set<Promise<void>>();
 	const pendingAsyncLaunches = new Set<Promise<void>>();
 	let unregisterCancellation: (() => void) | undefined;
-	const runtimeCleanup = () => {
-		generation++;
-		supervisorChannel.cancelOwnedQuestions("parent runtime replaced");
-		state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
-		executorPromise = undefined;
-		pendingLaunches.clear();
-		pendingAsyncLaunches.clear();
-		unregisterCancellation?.();
-		mainWatchdog.dispose();
-		stopResultWatcher();
-		scheduledRunManager.stop();
-		supervisorChannel.dispose();
-		clearPendingForegroundControlNotices(state);
-		disposeSubagentWidget();
-		if (state.poller) {
-			clearInterval(state.poller);
-			state.poller = null;
-		}
-	};
-	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
+	const undeliveredRuns = new Set<string>();
+	const cancelledDeliveries = new Set<string>();
+	let cancellingOwnedWork = 0;
 
 	const { ensurePoller, refreshWidget, handleStarted, handleComplete: trackComplete, resetJobs, restoreActiveJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR, {
 		widgetEnabled: config.asyncWidget !== false,
@@ -429,6 +406,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	let executorExecute: ((id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((r: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
 	const scheduledRunManager = createScheduledRunManager({
 		config,
+		disabledReason: acpWorker ? ACP_SCHEDULING_DISABLED : undefined,
 		launch: (params, ctx, signal) => {
 			if (!executorExecute) {
 				return Promise.resolve({
@@ -556,11 +534,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		execute: (id, params, signal, onUpdate, ctx) => executor.execute(id, params, signal, onUpdate, ctx),
 	});
 
-	const tool: ToolDefinition<typeof SubagentParams, Details> = {
+	const tool: ToolDefinition<typeof SubagentParams | typeof AcpSubagentParams, Details> = {
 		name: "subagent",
 		label: "Subagent",
-		description: buildSubagentToolDescription(config),
-		parameters: SubagentParams,
+		description: buildSubagentToolDescription(config, descriptionOptions),
+		parameters: acpWorker ? AcpSubagentParams : SubagentParams,
 		// lunr: same-turn SINGLE calls overlap; sequential work uses chain.
 		executionMode: "parallel",
 
@@ -610,7 +588,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		| { registerToolDescriptionRefresher?: (refresher: () => void) => void }
 		| undefined;
 	modelTierBridge?.registerToolDescriptionRefresher?.(() => {
-		tool.description = buildSubagentToolDescription(config);
+		tool.description = buildSubagentToolDescription(config, descriptionOptions);
 		// pi.runtime is not on ExtensionAPI; registerTool refreshes the live registry.
 		pi.registerTool(tool);
 	});
@@ -628,24 +606,16 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	registerSlashCommands(pi, state);
 
-	const eventUnsubscribeStoreKey = "__piSubagentEventUnsubscribes";
-	const controlNoticeSeenStoreKey = "__piSubagentVisibleControlNotices";
-	const previousEventUnsubscribes = globalStore[eventUnsubscribeStoreKey];
-	if (Array.isArray(previousEventUnsubscribes)) {
-		for (const unsubscribe of previousEventUnsubscribes) {
-			if (typeof unsubscribe !== "function") continue;
-			try {
-				unsubscribe();
-			} catch {
-				// Best effort cleanup for stale handlers from an older reload.
-			}
-		}
-	}
-	registerSubagentNotify(pi, state, { batchConfig: config.completionBatch });
-
-	const existingVisibleControlNotices = globalStore[controlNoticeSeenStoreKey];
-	const visibleControlNotices = existingVisibleControlNotices instanceof Set ? existingVisibleControlNotices as Set<string> : new Set<string>();
-	globalStore[controlNoticeSeenStoreKey] = visibleControlNotices;
+	const notifyOptions = {
+		batchConfig: config.completionBatch,
+		onDelivered: (runId: string) => {
+			undeliveredRuns.delete(runId);
+			cancelledDeliveries.delete(runId);
+		},
+		canTriggerTurn: (runId: string) => cancellingOwnedWork === 0 && !cancelledDeliveries.has(runId),
+	};
+	let disposeNotify = registerSubagentNotify(pi, state, notifyOptions);
+	const visibleControlNotices = new Set<string>();
 	const controlEventHandler = (payload: unknown) => {
 		handleSubagentControlNotice({
 			pi,
@@ -658,13 +628,20 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		handleSubagentSteeringNotice({ pi, state, details: payload as SubagentSteeringMessageDetails });
 	};
 	const eventUnsubscribes = [
-		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
+		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, (data: unknown) => {
+			handleStarted(data);
+			if (!data || typeof data !== "object" || !("id" in data) || typeof data.id !== "string") return;
+			const job = state.asyncJobs.get(data.id);
+			if (job?.sessionId !== state.currentSessionId) return;
+			undeliveredRuns.add(data.id);
+			if (cancellingOwnedWork > 0) cancelledDeliveries.add(data.id);
+			else cancelledDeliveries.delete(data.id);
+		}),
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
 		pi.events.on(SUBAGENT_STEERING_NOTICE_EVENT, steeringNoticeHandler),
 		rpcBridge.dispose,
 	];
-	globalStore[eventUnsubscribeStoreKey] = eventUnsubscribes;
 
 	pi.on("tool_result", (event, ctx) => {
 		if (event.toolName !== "subagent") return;
@@ -689,46 +666,86 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const resetSessionState = (ctx: ExtensionContext) => {
 		generation++;
-		supervisorChannel.cancelOwnedQuestions("parent session replaced");
+		disposeNotify();
+		disposeNotify = registerSubagentNotify(pi, state, notifyOptions);
+		stopResultWatcher();
+		supervisorChannel.dispose();
 		state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
 		executorPromise = undefined;
 		pendingLaunches.clear();
 		pendingAsyncLaunches.clear();
+		undeliveredRuns.clear();
+		cancelledDeliveries.clear();
+		cancellingOwnedWork = 0;
 		unregisterCancellation?.();
 		state.baseCwd = ctx.cwd;
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		state.subagentSpawns = { sessionId: state.currentSessionId, count: 0 };
-		// Set PI_SUBAGENT_PARENT_SESSION for permission-system forwarding.
-		// Only set in the root session (the interactive UI session), not in
-		// child subagent processes — children inherit the parent's value
-		// through the process environment at spawn time and must not overwrite
-		// it with their own session identity.
-		if (!process.env[SUBAGENT_CHILD_ENV]) {
-			const sessionId = ctx.sessionManager.getSessionId();
-			if (sessionId) {
-				process.env[SUBAGENT_PARENT_SESSION_ENV] = sessionId;
-			}
-		}
+		// Child spawn paths pass the owning session explicitly. Shared process
+		// environment cannot represent several simultaneous gateway parents.
 		state.lastUiContext = ctx;
 		cleanupSessionArtifacts(ctx);
 		clearPendingForegroundControlNotices(state);
+		visibleControlNotices.clear();
+		for (const entry of ctx.sessionManager.getEntries()) {
+			if ((entry.type !== "custom_message" && entry.type !== "custom") || entry.customType !== SUBAGENT_CONTROL_MESSAGE_TYPE) continue;
+			const data = entry.type === "custom_message" ? entry.details : entry.data;
+			if (!data || typeof data !== "object" || !("event" in data)) continue;
+			const details = data as SubagentControlMessageDetails;
+			if (typeof details.event?.runId !== "string" || typeof details.event.type !== "string") continue;
+			visibleControlNotices.add(controlNotificationKey(details.event, details.childIntercomTarget));
+		}
 		resetJobs(ctx);
 		restoreActiveJobs(ctx);
+		for (const job of state.asyncJobs.values()) {
+			if (job.sessionId === state.currentSessionId && (job.status === "queued" || job.status === "running")) undeliveredRuns.add(job.asyncId);
+		}
 		const sessionId = state.currentSessionId;
 		const sessionGeneration = generation;
-		if (sessionId) unregisterCancellation = registerSubagentCancellation(sessionId, createSubagentCancellation({
-			pendingLaunches: pendingAsyncLaunches,
-			isCurrent: () => generation === sessionGeneration && state.currentSessionId === sessionId,
-			getActiveRunIds: () => [...state.asyncJobs.values()]
-				.filter((job) => job.sessionId === sessionId && (job.status === "queued" || job.status === "running"))
-				.map((job) => job.asyncId),
-			async stopRun(id) {
-				const result = await executor.execute(randomUUID(), { action: "stop", id }, new AbortController().signal, undefined, ctx);
-				return !result.isError;
-			},
-		}));
+		if (sessionId) {
+			const cancellation = createSubagentCancellation({
+				pendingLaunches: pendingAsyncLaunches,
+				isCurrent: () => generation === sessionGeneration && state.currentSessionId === sessionId,
+				getActiveRunIds: () => [...state.asyncJobs.values()]
+					.filter((job) => job.sessionId === sessionId && (job.status === "queued" || job.status === "running"))
+					.map((job) => job.asyncId),
+				async stopRun(id) {
+					const result = await executor.execute(randomUUID(), { action: "stop", id }, new AbortController().signal, undefined, ctx);
+					return !result.isError;
+				},
+			});
+			// Results use the session file identity; gateway controls use its UUID.
+			const ownedCancellation = {
+				...cancellation,
+				hasPendingWork: () => generation === sessionGeneration && state.currentSessionId === sessionId &&
+					(pendingAsyncLaunches.size > 0 || undeliveredRuns.size > 0 || disposeNotify.hasPendingCompletions()),
+				async stop() {
+					if (!readAcpWorkerConfig() || generation !== sessionGeneration) return cancellation.stop();
+					cancellingOwnedWork++;
+					for (const id of undeliveredRuns) cancelledDeliveries.add(id);
+					disposeNotify.discardPending();
+					try {
+						const result = await cancellation.stop();
+						if (!result.failed && generation === sessionGeneration) {
+							undeliveredRuns.clear();
+							disposeNotify.discardPending();
+						}
+						return result;
+					} finally {
+						if (generation === sessionGeneration) cancellingOwnedWork--;
+					}
+				},
+			};
+			const identities = new Set([sessionId, ctx.sessionManager.getSessionId()]);
+			const unregisters = [...identities].filter((id): id is string => Boolean(id))
+				.map((id) => registerSubagentCancellation(id, ownedCancellation));
+			unregisterCancellation = () => {
+				for (const unregister of unregisters) unregister();
+			};
+		}
 		scheduledRunManager.bindSession(ctx);
 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
+		startResultWatcher();
 		primeExistingResults();
 	};
 
@@ -746,16 +763,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		pendingLaunches.clear();
 		pendingAsyncLaunches.clear();
 		unregisterCancellation?.();
-		delete process.env[SUBAGENT_PARENT_SESSION_ENV];
+		disposeNotify();
+		mainWatchdog.dispose();
 		for (const unsubscribe of eventUnsubscribes) {
 			try {
 				unsubscribe();
 			} catch {
 				// Best effort cleanup during shutdown.
 			}
-		}
-		if (globalStore[eventUnsubscribeStoreKey] === eventUnsubscribes) {
-			delete globalStore[eventUnsubscribeStoreKey];
 		}
 		stopResultWatcher();
 		scheduledRunManager.stop();
@@ -773,10 +788,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		promptTemplateBridge.cancelAll();
 		promptTemplateBridge.dispose();
 		supervisorChannel.dispose();
-		if (globalStore[runtimeCleanupStoreKey] === runtimeCleanup) {
-			delete globalStore[runtimeCleanupStoreKey];
-		}
-		disposeSubagentWidget();
+		if (state.lastUiContext) disposeSubagentWidget(state.lastUiContext);
 		try {
 			if (state.lastUiContext?.hasUI) {
 				state.lastUiContext.ui.setWidget(WIDGET_KEY, undefined);

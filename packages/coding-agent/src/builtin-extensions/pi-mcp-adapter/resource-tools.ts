@@ -1,4 +1,3 @@
-// @ts-nocheck
 // resource-tools.ts - MCP resource name utilities
 
 export function resourceNameToToolName(name: string): string {

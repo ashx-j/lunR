@@ -1,6 +1,5 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Transport } from "@earendil-works/pi-ai";
-import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -8,8 +7,10 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { browserEnabledDefault, notifyBrowserEnabledChange } from "./browser/settings.ts";
 import { computerSettingsChanged } from "./computer-use/policy.ts";
+import { globalBridge } from "./global-bridge.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
+import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "./pr-watch/types.ts";
 import {
 	DEFAULT_SUBAGENT_SPINNER,
 	isSubagentSpinnerName,
@@ -20,6 +21,7 @@ export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
+	ceilingTokens?: number; // default: unset (off)
 }
 
 export interface BranchSummarySettings {
@@ -45,7 +47,11 @@ export interface TerminalSettings {
 	imageWidthCells?: number; // default: 60 (preferred inline image width in terminal cells)
 	clearOnShrink?: boolean; // default: false (clear empty rows when content shrinks)
 	showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
+	attentionNotification?: AttentionNotification; // default: "off"
 }
+
+/** How lunR asks for attention when a run finishes or waits for the user while the terminal is unfocused. */
+export type AttentionNotification = "off" | "bell" | "desktop";
 
 export interface ImageSettings {
 	autoResize?: boolean; // default: true (resize images to 2000x2000 max for better model compatibility)
@@ -85,12 +91,12 @@ export type DefaultProjectTrust = "ask" | "always" | "never";
 export type DefaultPermissionMode = "yolo" | "auto" | "read-only";
 export type SkillTagCharacter = "+" | "~" | "$";
 export const SKILL_TAG_CHARACTERS: readonly SkillTagCharacter[] = ["+", "~", "$"];
-export const DEFAULT_SKILL_TAG_CHARACTER: SkillTagCharacter = "+";
+export const DEFAULT_SKILL_TAG_CHARACTER: SkillTagCharacter = "$";
 
 export function parseSkillTagCharacter(value: unknown): SkillTagCharacter {
-	return value === "~" || value === "$" ? value : DEFAULT_SKILL_TAG_CHARACTER;
+	return value === "+" || value === "~" || value === "$" ? value : DEFAULT_SKILL_TAG_CHARACTER;
 }
-export type RollbackCapture = "copies" | "shadow-git" | "hybrid";
+export type RollbackCapture = "copies" | "hybrid";
 export type RollbackScope = "tools" | "tree";
 
 export type TransportSetting = Transport;
@@ -114,23 +120,23 @@ export type PackageSource =
 
 export type ReasoningDisplay = "auto" | "one-line" | "four-lines";
 
-const SUBAGENT_COMMUNICATION_BRIDGE = Symbol.for("@lunr/subagent-communication");
+const subagentCommunicationSlot = globalBridge<SettingsManager>(Symbol.for("@lunr/subagent-communication"));
 
 export function bindSubagentCommunicationSetting(manager: SettingsManager | undefined): void {
-	if (manager) (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE] = manager;
-	else delete (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE];
+	subagentCommunicationSlot.set(manager);
 }
 
 export function subagentCommunicationEnabled(cwd: string, agentDir = getAgentDir()): boolean {
 	const inherited = process.env.PI_SUBAGENT_COMMUNICATION_ENABLED;
 	if (process.env.PI_SUBAGENT_CHILD === "1" && (inherited === "0" || inherited === "1")) return inherited === "1";
-	const active = (globalThis as Record<symbol, unknown>)[SUBAGENT_COMMUNICATION_BRIDGE];
+	const active = subagentCommunicationSlot.get();
 	if (
 		agentDir === getAgentDir() &&
 		active &&
-		typeof (active as SettingsManager).getSubagentCommunicationEnabled === "function"
+		// Another module copy may have stored the manager; check the method rather than the class.
+		typeof active.getSubagentCommunicationEnabled === "function"
 	) {
-		return (active as SettingsManager).getSubagentCommunicationEnabled();
+		return active.getSubagentCommunicationEnabled();
 	}
 	if (inherited === "0" || inherited === "1") return inherited === "1";
 	return SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getSubagentCommunicationEnabled();
@@ -153,6 +159,7 @@ export interface Settings {
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
 	reasoningDisplay?: ReasoningDisplay;
+	prWatchDurationMs?: number;
 	thinkingCollapse?: boolean; // default: true - collapse completed thinking blocks to "Thought for Xs" + first sentence
 	showCacheMissNotices?: boolean; // default: false - show transcript notices for significant prompt-cache misses
 	cacheRetention?: "none" | "short" | "long"; // default: unset - falls back to PI_CACHE_RETENTION env, then "short" (packages/ai)
@@ -163,19 +170,19 @@ export interface Settings {
 	subagentSpinner?: SubagentSpinnerName; // default: "braille" - running child indicator
 	defaultProjectTrust?: DefaultProjectTrust; // default: "ask"; global setting only
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
+	bashTimeoutSeconds?: number; // default: 120 - bash tool timeout when the call passes none; 0 turns it off
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
-	enableAnalytics?: boolean; // default: false - opt-in analytics data sharing
-	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
 	skills?: string[]; // Array of local skill file paths or directories
 	prompts?: string[]; // Array of local prompt template paths or directories
 	themes?: string[]; // Array of local theme file paths or directories
 	enableSkillCommands?: boolean; // default: true - register skills as /skill:name commands
-	skillTagCharacter?: SkillTagCharacter; // default: "+" - mid-message skill tag trigger
+	skillTagCharacter?: SkillTagCharacter; // default: "$" - mid-message skill tag trigger
 	terminal?: TerminalSettings;
 	images?: ImageSettings;
 	enabledModels?: string[]; // Model patterns for cycling (same format as --models CLI flag)
+	clientScopedModelsOnly?: boolean; // default false - apps such as T3 (ACP/RPC) list only the enabledModels scope
 	doubleEscapeAction?: "fork" | "tree" | "none"; // Action for double-escape with empty editor (default: "tree")
 	treeFilterMode?: "default" | "no-tools" | "user-only" | "labeled-only" | "all"; // Default filter when opening /tree
 	thinkingBudgets?: ThinkingBudgetsSettings; // Custom token budgets for thinking levels
@@ -194,27 +201,29 @@ export interface Settings {
 	memoryEnabled?: boolean; // default: true - inject durable facts and expose memory tools
 	memoryCharCap?: number; // default: 5000 - simple-pi-memory character cap (1..30000)
 	todosEnabled?: boolean; // default: true - expose the todo tool and its prompt guidance
+	deferredToolsEnabled?: boolean; // default: true - new sessions start rarely used tools unloaded (load_tools)
 	// lunr: footer element toggles (ashxj-tui stats line)
 	footerMcp?: boolean; // default: true - show the pi-mcp-adapter mcp/mcp-auth status segments
 	footerLsp?: boolean; // default: false - show the pi-lsp-extension lsp status segment
 	footerContext?: boolean; // default: true - show the context-usage pct/window segment
-	footerTokens?: boolean; // default: true - show the ↑in ↓out token totals segment
+	footerTokens?: boolean; // default: false - show the ↑in ↓out token totals segment
 	footerCacheHitRate?: boolean; // default: true - show the latest prompt cache-hit rate
-	footerTps?: boolean; // default: true - show the pi-tps t/s segment
+	footerTps?: boolean; // default: false - show the pi-tps t/s segment
 	footerStatuses?: boolean; // default: true - show the plan/goal status segments
-	footerGit?: boolean; // default: true - show git branch + added/removed in the footer
+	footerGit?: boolean; // default: false - show git branch + added/removed in the footer
 	footerPlan?: boolean; // default: true - show the subscription usage segment
-	footerPlanBar?: boolean; // default: true - show the █░ bar; off keeps the percent only
+	footerPlanBar?: boolean; // default: false - show the █░ bar; off keeps the percent only
 	planUsageWindow?: "5h" | "weekly"; // preferred plan window for the footer bar
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
 	defaultPermissionMode?: DefaultPermissionMode; // default "yolo"
+	autoReviewModel?: string; // "provider/model" that reviews auto-mode actions; unset = the provider's own reviewer
 	// lunr: rollback settings
 	rollbackEnabled?: boolean; // default false
 	rollbackTurns?: number; // default 2 — how many user-turns of snapshots to retain
 	rollbackCapture?: RollbackCapture; // default "copies"
 	rollbackScope?: RollbackScope; // default "tools"
 	autoManageSubscriptions?: boolean; // lunr: when true, subscription key switching is fully automatic (no manual picker)
-	confirmLargeSubagentLaunches?: boolean; // default true - ask before launching 3+ children outside Auto mode
+	confirmLargeSubagentLaunches?: boolean; // default false - ask before launching 3+ children outside Auto mode
 	subagentCommunicationEnabled?: boolean;
 	automaticSubagentDelegation?: boolean;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
@@ -254,6 +263,10 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 	return result;
 }
 
+function isValidCompactionCeiling(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
 function parseTimeoutSetting(value: unknown, settingName: string): number | undefined {
 	const timeoutMs = parseHttpIdleTimeoutMs(value);
 	if (timeoutMs !== undefined) {
@@ -269,6 +282,10 @@ export type SettingsScope = "global" | "project";
 
 export interface SettingsManagerCreateOptions {
 	projectTrusted?: boolean;
+	/** load existing scopes, then retain changes only for this manager's lifetime. */
+	sessionOnly?: boolean;
+	/** session policy applied after saved settings and temporary overrides. */
+	runtimeOverrides?: Partial<Settings>;
 }
 
 export interface SettingsStorage {
@@ -366,12 +383,35 @@ export class InMemorySettingsStorage implements SettingsStorage {
 	}
 }
 
+// copy a scope on its first trusted read so later writes and reloads stay in memory.
+class SessionOnlySettingsStorage extends InMemorySettingsStorage {
+	private readonly copiedScopes = new Set<SettingsScope>();
+	private readonly source: SettingsStorage;
+
+	constructor(source: SettingsStorage) {
+		super();
+		this.source = source;
+	}
+
+	override withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
+		if (!this.copiedScopes.has(scope)) {
+			this.source.withLock(scope, (current) => {
+				super.withLock(scope, () => current);
+				return undefined;
+			});
+			this.copiedScopes.add(scope);
+		}
+		super.withLock(scope, fn);
+	}
+}
+
 export class SettingsManager {
 	private storage: SettingsStorage;
 	private globalSettings: Settings;
 	private projectSettings: Settings;
 	private settings: Settings;
 	private projectTrusted: boolean;
+	private readonly runtimeOverrides: Partial<Settings>;
 	private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
 	private modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
 	private modifiedProjectFields = new Set<keyof Settings>(); // Track project fields modified during session
@@ -389,15 +429,41 @@ export class SettingsManager {
 		projectLoadError: Error | null = null,
 		initialErrors: SettingsError[] = [],
 		projectTrusted = true,
+		runtimeOverrides: Partial<Settings> = {},
 	) {
 		this.storage = storage;
 		this.globalSettings = initialGlobal;
 		this.projectSettings = initialProject;
 		this.projectTrusted = projectTrusted;
+		this.runtimeOverrides = structuredClone(runtimeOverrides);
 		this.globalSettingsLoadError = globalLoadError;
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.mergeSettings();
+		this.reportInvalidCompactionCeiling();
+	}
+
+	/** Records a settings error, which startup prints as a warning, for a ceiling lunR has to ignore. */
+	private reportInvalidCompactionCeiling(): void {
+		for (const [scope, settings] of [
+			["global", this.globalSettings],
+			["project", this.projectSettings],
+		] as const) {
+			const compaction: unknown = settings.compaction;
+			if (!compaction || typeof compaction !== "object" || !("ceilingTokens" in compaction)) continue;
+			const value = compaction.ceilingTokens;
+			if (value === undefined || isValidCompactionCeiling(value)) continue;
+			this.recordError(
+				scope,
+				new Error(
+					`compaction.ceilingTokens must be a positive whole number of tokens, got ${JSON.stringify(value)}. The compaction ceiling is off.`,
+				),
+			);
+		}
+	}
+
+	private mergeSettings(): Settings {
+		return deepMergeSettings(deepMergeSettings(this.globalSettings, this.projectSettings), this.runtimeOverrides);
 	}
 
 	/** Create a SettingsManager that loads from files */
@@ -412,6 +478,7 @@ export class SettingsManager {
 
 	/** Create a SettingsManager from an arbitrary storage backend */
 	static fromStorage(storage: SettingsStorage, options: SettingsManagerCreateOptions = {}): SettingsManager {
+		if (options.sessionOnly) storage = new SessionOnlySettingsStorage(storage);
 		const projectTrusted = options.projectTrusted ?? true;
 		const globalLoad = SettingsManager.tryLoadFromStorage(storage, "global");
 		const projectLoad = SettingsManager.tryLoadFromStorage(storage, "project", projectTrusted);
@@ -431,6 +498,7 @@ export class SettingsManager {
 			projectLoad.error,
 			initialErrors,
 			projectTrusted,
+			options.runtimeOverrides,
 		);
 	}
 
@@ -558,7 +626,7 @@ export class SettingsManager {
 		if (!trusted) {
 			this.projectSettings = {};
 			this.projectSettingsLoadError = null;
-			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+			this.settings = this.mergeSettings();
 			return;
 		}
 
@@ -568,7 +636,7 @@ export class SettingsManager {
 		if (projectLoad.error) {
 			this.recordError("project", projectLoad.error);
 		}
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.mergeSettings();
 	}
 
 	async reload(): Promise<void> {
@@ -596,12 +664,12 @@ export class SettingsManager {
 			this.recordError("project", projectLoad.error);
 		}
 
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.mergeSettings();
 	}
 
 	/** Apply additional overrides on top of current settings */
 	applyOverrides(overrides: Partial<Settings>): void {
-		this.settings = deepMergeSettings(this.settings, overrides);
+		this.settings = deepMergeSettings(deepMergeSettings(this.settings, overrides), this.runtimeOverrides);
 	}
 
 	/** Mark a global field as modified during this session */
@@ -702,7 +770,7 @@ export class SettingsManager {
 	}
 
 	private save(): void {
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.mergeSettings();
 
 		if (this.globalSettingsLoadError) {
 			return;
@@ -720,7 +788,7 @@ export class SettingsManager {
 	private saveProjectSettings(settings: Settings): void {
 		this.assertProjectTrustedForWrite();
 		this.projectSettings = structuredClone(settings);
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.mergeSettings();
 
 		if (this.projectSettingsLoadError) {
 			return;
@@ -888,11 +956,33 @@ export class SettingsManager {
 		return this.settings.compaction?.keepRecentTokens ?? 20000;
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	/** The ceiling when it is a positive whole number; anything else is off (and warned about at load). */
+	getCompactionCeilingTokens(): number | undefined {
+		const ceiling: unknown = this.settings.compaction?.ceilingTokens;
+		return isValidCompactionCeiling(ceiling) ? ceiling : undefined;
+	}
+
+	/** `undefined` turns the ceiling off. */
+	setCompactionCeilingTokens(ceilingTokens: number | undefined): void {
+		if (!this.globalSettings.compaction) {
+			this.globalSettings.compaction = {};
+		}
+		this.globalSettings.compaction.ceilingTokens = ceilingTokens;
+		this.markModified("compaction", "ceilingTokens");
+		this.save();
+	}
+
+	getCompactionSettings(): {
+		enabled: boolean;
+		reserveTokens: number;
+		keepRecentTokens: number;
+		ceilingTokens?: number;
+	} {
 		return {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+			ceilingTokens: this.getCompactionCeilingTokens(),
 		};
 	}
 
@@ -1094,14 +1184,27 @@ export class SettingsManager {
 	}
 
 	getBrowserEnabled(): boolean {
-		return this.globalSettings.browserEnabled ?? browserEnabledDefault();
+		return this.runtimeOverrides.browserEnabled ?? this.globalSettings.browserEnabled ?? browserEnabledDefault();
+	}
+
+	getPrWatchDurationMs(): number {
+		return validPrWatchDuration(this.globalSettings.prWatchDurationMs)
+			? this.globalSettings.prWatchDurationMs
+			: PR_WATCH_DEFAULT_DURATION_MS;
+	}
+
+	setPrWatchDurationMs(duration: number): void {
+		if (!validPrWatchDuration(duration)) throw new Error("PR watch duration must be positive and finite.");
+		this.globalSettings.prWatchDurationMs = duration;
+		this.markModified("prWatchDurationMs");
+		this.save();
 	}
 
 	setBrowserEnabled(enabled: boolean): void {
 		this.globalSettings.browserEnabled = enabled;
 		this.markModified("browserEnabled");
 		this.save();
-		notifyBrowserEnabledChange(enabled);
+		notifyBrowserEnabledChange(this.getBrowserEnabled());
 	}
 
 	getMemoryEnabled(): boolean {
@@ -1121,6 +1224,17 @@ export class SettingsManager {
 	setTodosEnabled(enabled: boolean): void {
 		this.globalSettings.todosEnabled = enabled;
 		this.markModified("todosEnabled");
+		this.save();
+	}
+
+	getDeferredToolsEnabled(): boolean {
+		return this.globalSettings.deferredToolsEnabled ?? true;
+	}
+
+	/** Applies to sessions started afterwards; a running session keeps its tool list. */
+	setDeferredToolsEnabled(enabled: boolean): void {
+		this.globalSettings.deferredToolsEnabled = enabled;
+		this.markModified("deferredToolsEnabled");
 		this.save();
 	}
 
@@ -1162,7 +1276,7 @@ export class SettingsManager {
 	}
 
 	getFooterTokens(): boolean {
-		return this.settings.footerTokens ?? true;
+		return this.settings.footerTokens ?? false;
 	}
 
 	setFooterTokens(enabled: boolean): void {
@@ -1182,7 +1296,7 @@ export class SettingsManager {
 	}
 
 	getFooterTps(): boolean {
-		return this.settings.footerTps ?? true;
+		return this.settings.footerTps ?? false;
 	}
 
 	setFooterTps(enabled: boolean): void {
@@ -1202,7 +1316,7 @@ export class SettingsManager {
 	}
 
 	getFooterGit(): boolean {
-		return this.settings.footerGit ?? true;
+		return this.settings.footerGit ?? false;
 	}
 
 	setFooterGit(enabled: boolean): void {
@@ -1222,7 +1336,7 @@ export class SettingsManager {
 	}
 
 	getFooterPlanBar(): boolean {
-		return this.settings.footerPlanBar ?? true;
+		return this.settings.footerPlanBar ?? false;
 	}
 
 	setFooterPlanBar(enabled: boolean): void {
@@ -1249,6 +1363,21 @@ export class SettingsManager {
 	setDefaultProjectTrust(defaultProjectTrust: DefaultProjectTrust): void {
 		this.globalSettings.defaultProjectTrust = defaultProjectTrust;
 		this.markModified("defaultProjectTrust");
+		this.save();
+	}
+
+	/**
+	 * The user's chosen auto-mode review model, or undefined to use the provider's own reviewer.
+	 * Global only, so a repository's .lunr/settings.json can't pick its own reviewer.
+	 */
+	getAutoReviewModel(): string | undefined {
+		const value = this.globalSettings.autoReviewModel;
+		return typeof value === "string" && value.includes("/") ? value : undefined;
+	}
+
+	setAutoReviewModel(ref: string | undefined): void {
+		this.globalSettings.autoReviewModel = ref;
+		this.markModified("autoReviewModel");
 		this.save();
 	}
 
@@ -1292,7 +1421,8 @@ export class SettingsManager {
 
 	getRollbackCapture(): RollbackCapture {
 		const value = this.settings.rollbackCapture;
-		return value === "copies" || value === "shadow-git" || value === "hybrid" ? value : "copies";
+		// Unknown values, including the removed "shadow-git" placeholder, read as copies.
+		return value === "copies" || value === "hybrid" ? value : "copies";
 	}
 
 	setRollbackCapture(mode: RollbackCapture): void {
@@ -1327,6 +1457,15 @@ export class SettingsManager {
 		return this.settings.shellCommandPrefix;
 	}
 
+	/**
+	 * The bash tool's default timeout in seconds, or 0 for none. Undefined for a missing or
+	 * invalid value (negative, not a number), so the tool falls back to its own 120 s default.
+	 */
+	getBashTimeoutSeconds(): number | undefined {
+		const value = this.settings.bashTimeoutSeconds;
+		return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+	}
+
 	setShellCommandPrefix(prefix: string | undefined): void {
 		this.globalSettings.shellCommandPrefix = prefix;
 		this.markModified("shellCommandPrefix");
@@ -1340,25 +1479,6 @@ export class SettingsManager {
 	setNpmCommand(command: string[] | undefined): void {
 		this.globalSettings.npmCommand = command ? [...command] : undefined;
 		this.markModified("npmCommand");
-		this.save();
-	}
-
-	getEnableAnalytics(): boolean {
-		return this.settings.enableAnalytics ?? false;
-	}
-
-	getTrackingId(): string | undefined {
-		return this.settings.trackingId;
-	}
-
-	/** Set the analytics opt-in preference; generates a tracking identifier on first opt-in */
-	setEnableAnalytics(enabled: boolean): void {
-		this.globalSettings.enableAnalytics = enabled;
-		this.markModified("enableAnalytics");
-		if (enabled && !this.globalSettings.trackingId) {
-			this.globalSettings.trackingId = randomUUID();
-			this.markModified("trackingId");
-		}
 		this.save();
 	}
 
@@ -1526,6 +1646,20 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getAttentionNotification(): AttentionNotification {
+		const value = this.settings.terminal?.attentionNotification;
+		return value === "bell" || value === "desktop" ? value : "off";
+	}
+
+	setAttentionNotification(mode: AttentionNotification): void {
+		if (!this.globalSettings.terminal) {
+			this.globalSettings.terminal = {};
+		}
+		this.globalSettings.terminal.attentionNotification = mode;
+		this.markModified("terminal", "attentionNotification");
+		this.save();
+	}
+
 	getImageAutoResize(): boolean {
 		return this.settings.images?.autoResize ?? true;
 	}
@@ -1559,6 +1693,24 @@ export class SettingsManager {
 	setEnabledModels(patterns: string[] | undefined): void {
 		this.globalSettings.enabledModels = patterns;
 		this.markModified("enabledModels");
+		this.save();
+	}
+
+	/** Drops these patterns from the global `enabledModels`. Removing the last one clears the scope. */
+	removeEnabledModels(patterns: readonly string[]): void {
+		const current = this.globalSettings.enabledModels;
+		if (!current) return;
+		const kept = current.filter((pattern) => !patterns.includes(pattern));
+		if (kept.length !== current.length) this.setEnabledModels(kept.length > 0 ? kept : undefined);
+	}
+
+	getClientScopedModelsOnly(): boolean {
+		return this.settings.clientScopedModelsOnly ?? false;
+	}
+
+	setClientScopedModelsOnly(enabled: boolean): void {
+		this.globalSettings.clientScopedModelsOnly = enabled;
+		this.markModified("clientScopedModelsOnly");
 		this.save();
 	}
 
@@ -1682,7 +1834,7 @@ export class SettingsManager {
 	}
 
 	getConfirmLargeSubagentLaunches(): boolean {
-		return this.settings.confirmLargeSubagentLaunches ?? true;
+		return this.settings.confirmLargeSubagentLaunches ?? false;
 	}
 
 	setConfirmLargeSubagentLaunches(enabled: boolean): void {

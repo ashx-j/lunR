@@ -230,12 +230,12 @@ describe("renderContextBox", () => {
 
 		expect(text).toContain("Context");
 		expect(text).toContain("anthropic/claude-sonnet-4-5");
-		expect(text).toContain("Estimated (chars/4), current session only");
+		expect(text).toContain("Estimated visible context, current session only");
 		expect(text).toContain("System prompt");
 		expect(text).toContain("Tool definitions");
 		expect(text).toContain("User messages (1)");
 		expect(text).toContain("Assistant text (1)");
-		expect(text).toContain("Thinking (1)");
+		expect(text).toContain("Visible thinking (1)");
 		expect(text).toContain("Estimated total");
 		expect(text).toContain("░");
 		// Bordered box chrome
@@ -251,7 +251,7 @@ describe("renderContextBox", () => {
 			contextWindow: 200_000,
 		});
 		const text = renderContextBox({ breakdown }, 80).join("\n");
-		expect(text).not.toContain("Thinking");
+		expect(text).not.toContain("Visible thinking");
 		expect(text).not.toContain("Tool results");
 		expect(text).not.toContain("Summaries");
 	});
@@ -317,5 +317,28 @@ describe("splitSystemPromptSections", () => {
 			expect.objectContaining({ label: "AGENTS.md", tokens: expect.any(Number) }),
 		]);
 		expect(breakdown.skills).toBeGreaterThan(0);
+	});
+});
+
+describe("renderContextBox compaction ceiling", () => {
+	it("says why the ceiling is raised and when it comes back down", () => {
+		const breakdown = computeContextBreakdown({
+			systemPrompt: "x",
+			tools: TOOLS,
+			messages: [],
+			contextWindow: 1_000_000,
+		});
+		const kept = renderContextBox(
+			{ breakdown, compactionCeiling: { configured: 150_000, effective: 236_000, keptTokens: 118_000 } },
+			200,
+		).join("\n");
+		expect(kept).toContain(
+			"Compacts at 236k: the last compaction kept 118k, so lunR waits for twice that. Back to 150k after one that keeps less.",
+		);
+		const estimate = renderContextBox(
+			{ breakdown, compactionCeiling: { configured: 10_000, effective: 111_000 } },
+			200,
+		).join("\n");
+		expect(estimate).toContain("Compacts at 111k (ceiling 10k, raised to twice a compacted context)");
 	});
 });

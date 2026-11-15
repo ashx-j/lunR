@@ -5,6 +5,7 @@
 
 // Internal import for JSON parsing utility
 import {
+	type Api,
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	type Context,
@@ -113,7 +114,7 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
 	};
 }
 
-export function streamProxy(model: Model<any>, context: Context, options: ProxyStreamOptions): ProxyMessageEventStream {
+export function streamProxy(model: Model<Api>, context: Context, options: ProxyStreamOptions): ProxyMessageEventStream {
 	const stream = new ProxyMessageEventStream();
 
 	(async () => {

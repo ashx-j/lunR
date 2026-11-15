@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
 import type { McpExtensionState } from "./state.ts";
 import type { ToolMetadata, McpTool, McpResource, ServerEntry } from "./types.ts";

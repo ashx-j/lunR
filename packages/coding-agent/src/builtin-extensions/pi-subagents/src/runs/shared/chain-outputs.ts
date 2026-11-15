@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { isDynamicParallelStep, isParallelStep, type ChainStep, type SequentialStep } from "../../shared/settings.ts";
 import type { ChainOutputMap, ChainOutputMapEntry, SingleResult } from "../../shared/types.ts";
 import { getSingleResultOutput } from "../../shared/utils.ts";
@@ -81,6 +80,12 @@ export function validateChainOutputBindingsWithContext(
 			available.add(name);
 		}
 	}
+}
+
+export function withChainHandoff(task: string, hasNextStep: boolean): string {
+	return hasNextStep
+		? `${task}\n\nYour final output will be handed to the next agent. Briefly summarize results, relevant references, verification, and remaining work.`
+		: task;
 }
 
 export function resolveOutputReferences(template: string, outputs: ChainOutputMap): string {

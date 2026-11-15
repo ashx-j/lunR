@@ -35,6 +35,34 @@ describe("SelectList", () => {
 		assert.ok(rendered[0].includes("Line one Line two Line three"));
 	});
 
+	it("cuts a long description after a whole word and adds an ellipsis", () => {
+		const items = [
+			{ value: "a", label: "a", description: "Reload keybindings, extensions, skills, prompts and themes" },
+		];
+		const rendered = new SelectList(items, 5, testTheme).render(60);
+
+		assert.ok(rendered[0].trimEnd().endsWith("…"), rendered[0]);
+		assert.match(rendered[0].trimEnd(), /\b(?:keybindings|extensions|skills|prompts)…$/);
+		assert.ok(visibleWidth(rendered[0]) <= 60);
+	});
+
+	it("keeps the longest whole-word prefix that fits at every width", () => {
+		const description = "abc defghij klmnop qrs tuvw xyz abcdefgh ijk lmnopq rstu";
+		const items = [{ value: "a", label: "a", description }];
+		for (let width = 24; width <= 70; width++) {
+			const line = new SelectList(items, 5, testTheme).render(width)[0].trimEnd();
+			if (!line.endsWith("…")) continue;
+			const start = visibleIndexOf(line, "abc");
+			const shown = line.slice(line.indexOf("abc"), -1);
+			// Ends on a word boundary of the original text.
+			assert.equal(description.charAt(shown.length), " ", `width ${width}: ${line}`);
+			// The next whole word would not have fit before the ellipsis (the list keeps 2 columns free).
+			const nextEnd = description.indexOf(" ", shown.length + 1);
+			const next = description.slice(0, nextEnd === -1 ? undefined : nextEnd);
+			assert.ok(start + next.length + 1 > width - 2, `width ${width}: ${line}`);
+		}
+	});
+
 	it("keeps descriptions aligned when the primary text is truncated", () => {
 		const items = [
 			{ value: "short", label: "short", description: "short description" },

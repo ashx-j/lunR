@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -81,6 +81,16 @@ describe("pruneOldSessions", () => {
 
 		expect(deleted).toEqual([]);
 		expect(existsSync(oldFile)).toBe(true);
+	});
+	it("excludes the active file through an alternate directory spelling", async () => {
+		const projectDir = join(root, "--proj--");
+		mkdirSync(projectDir);
+		const alias = join(root, "alias");
+		symlinkSync(projectDir, alias, process.platform === "win32" ? "junction" : "dir");
+		const activeFile = writeSessionFile(projectDir, "active.jsonl", 365, now);
+		const result = await pruneOldSessions(projectDir, 30, { now, excludeFile: join(alias, "active.jsonl") });
+		expect(result.deleted).toEqual([]);
+		expect(existsSync(activeFile)).toBe(true);
 	});
 
 	it("missing sessions root does not throw", async () => {

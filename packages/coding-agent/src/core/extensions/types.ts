@@ -94,6 +94,8 @@ export interface ExtensionUIDialogOptions {
 	signal?: AbortSignal;
 	/** Timeout in milliseconds. Dialog auto-dismisses with live countdown display. */
 	timeout?: number;
+	/** `select` only: option index the cursor starts on. Hosts without a cursor ignore it. */
+	initialIndex?: number;
 }
 
 /** Placement for extension widgets. */
@@ -282,7 +284,9 @@ export interface ExtensionUIContext {
 // ============================================================================
 
 export interface ContextUsage {
-	/** Estimated context tokens, or null if unknown (e.g. right after compaction, before next LLM response). */
+	/** Includes locally estimated tokens rather than only a provider measurement. */
+	estimated?: boolean;
+	/** Estimated context tokens, or null when the request cannot be estimated. */
 	tokens: number | null;
 	contextWindow: number;
 	/** Context usage as percentage of context window, or null if tokens is unknown. */
@@ -314,9 +318,23 @@ export interface ExtensionContext {
 	/** Model registry for API key resolution */
 	modelRegistry: ModelRegistry;
 	/** Current model (may be undefined) */
-	model: Model<any> | undefined;
+	model: Model<Api> | undefined;
 	/** Whether the agent is idle (not streaming) */
 	isIdle(): boolean;
+	/** Admit one idle request and await only its messages and cancellation settlement. */
+	promptWithCompletion?: (
+		text: string,
+		options?: { source?: "extension"; signal?: AbortSignal },
+	) => Promise<{ messages: AgentMessage[] }>;
+	/** Send through this session's guarded admission and propagate asynchronous rejection. */
+	sendMessage?<T = unknown>(
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
+		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+	): Promise<void>;
+	/** Match an owned queued custom message by customType and the original details object. */
+	hasQueuedMessage?(message: Pick<CustomMessage, "customType" | "details">): boolean;
+	/** Atomically remove that queued message; false means it was not in a queue. */
+	removeQueuedMessage?(message: Pick<CustomMessage, "customType" | "details">): boolean;
 	/** Whether project-local trust is active for this context. */
 	isProjectTrusted(): boolean;
 	/** The current abort signal, or undefined when the agent is not streaming. */
@@ -793,8 +811,8 @@ export type ModelSelectSource = "set" | "cycle" | "restore";
 /** Fired when a new model is selected */
 export interface ModelSelectEvent {
 	type: "model_select";
-	model: Model<any>;
-	previousModel: Model<any> | undefined;
+	model: Model<Api>;
+	previousModel: Model<Api> | undefined;
 	source: ModelSelectSource;
 }
 
@@ -1157,6 +1175,8 @@ export interface RegisteredCommand {
 	name: string;
 	sourceInfo: SourceInfo;
 	description?: string;
+	/** Runs when typed but stays out of autocomplete and command listings (aliases kept for compatibility). */
+	hidden?: boolean;
 	getArgumentCompletions?: (argumentPrefix: string) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 }
@@ -1319,7 +1339,15 @@ export interface ExtensionAPI {
 	/** Set the active tools by name. */
 	setActiveTools(toolNames: string[]): void;
 
-	/** Get available slash commands in the current session. */
+	/**
+	 * Start these registered tools unloaded. They leave the active set and stay advertised to providers
+	 * with native deferred loading. Load one by adding it back with `setActiveTools` from a tool's
+	 * `execute`. Returns the accepted names: none when the session has an explicit tool allowlist or the
+	 * user turned off loading tools on demand.
+	 */
+	setDeferredTools(toolNames: string[]): string[];
+
+	/** Get available slash commands in the current session. Hidden extension commands are left out. */
 	getCommands(): SlashCommandInfo[];
 
 	// =========================================================================
@@ -1327,7 +1355,7 @@ export interface ExtensionAPI {
 	// =========================================================================
 
 	/** Set the current model. Returns false if no API key available. */
-	setModel(model: Model<any>): Promise<boolean>;
+	setModel(model: Model<Api>): Promise<boolean>;
 
 	/** Get current thinking level. */
 	getThinkingLevel(): ThinkingLevel;
@@ -1550,9 +1578,11 @@ export type GetCommandsHandler = () => SlashCommandInfo[];
 
 export type SetActiveToolsHandler = (toolNames: string[]) => void;
 
+export type SetDeferredToolsHandler = (toolNames: string[]) => string[];
+
 export type RefreshToolsHandler = () => void;
 
-export type SetModelHandler = (model: Model<any>) => Promise<boolean>;
+export type SetModelHandler = (model: Model<Api>) => Promise<boolean>;
 
 export type GetThinkingLevelHandler = () => ThinkingLevel;
 
@@ -1596,6 +1626,7 @@ export interface ExtensionActions {
 	getActiveTools: GetActiveToolsHandler;
 	getAllTools: GetAllToolsHandler;
 	setActiveTools: SetActiveToolsHandler;
+	setDeferredTools: SetDeferredToolsHandler;
 	refreshTools: RefreshToolsHandler;
 	getCommands: GetCommandsHandler;
 	setModel: SetModelHandler;
@@ -1608,7 +1639,11 @@ export interface ExtensionActions {
  * Required by all modes.
  */
 export interface ExtensionContextActions {
-	getModel: () => Model<any> | undefined;
+	promptWithCompletion?: ExtensionContext["promptWithCompletion"];
+	sendMessage?: ExtensionContext["sendMessage"];
+	hasQueuedMessage?: ExtensionContext["hasQueuedMessage"];
+	removeQueuedMessage?: ExtensionContext["removeQueuedMessage"];
+	getModel: () => Model<Api> | undefined;
 	isIdle: () => boolean;
 	isProjectTrusted: () => boolean;
 	getSignal: () => AbortSignal | undefined;

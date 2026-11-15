@@ -65,3 +65,17 @@ const result = await build({
 });
 mkdirSync(artifactDir, { recursive: true });
 writeFileSync(join(artifactDir, "metafile.json"), `${JSON.stringify(result.metafile, null, 2)}\n`);
+
+// The MCP Apps host page imports AppBridge in the browser from /app-bridge.bundle.js, which
+// pi-mcp-adapter/ui-server.ts serves from beside its compiled module.
+await build({
+	absWorkingDir: join(root, "packages/coding-agent"),
+	entryPoints: ["@modelcontextprotocol/ext-apps/app-bridge"],
+	outfile: join(dist, "builtin-extensions/pi-mcp-adapter/app-bridge.bundle.js"),
+	bundle: true,
+	format: "esm",
+	platform: "browser",
+	target: "es2022",
+	minify: true,
+	logLevel: "warning",
+});

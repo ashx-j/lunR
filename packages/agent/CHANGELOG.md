@@ -1,5 +1,67 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.2.40] - 2026-10-25
+
+### Removed
+
+- The agent harness (`AgentHarness`, sessions and repos, compaction, skills, prompt templates, system prompt, message and truncation helpers) and `NodeExecutionEnv`. lunR never used it. `uuidv7` stays exported, and `./node` now exports the same API as the main entry.
+
+## [0.2.38] - 2026-10-18
+
+- Align the package version with the lunR 0.2.38 release.
+
+## [0.2.37] - 2026-10-17
+
+- Align the package version with the lunR 0.2.37 release.
+
+## [0.2.36] - 2026-10-17
+
+- Align the package version with the lunR 0.2.36 release.
+
+## [0.2.35] - 2026-10-17
+
+- Align the package version with the lunR 0.2.35 release.
+
+## [0.2.34] - 2026-10-17
+
+- Align the package version with the lunR 0.2.34 release.
+
+## [0.2.33] - 2026-10-17
+
+- Align the package version with the lunR 0.2.33 release.
+
+## [0.2.32] - 2026-10-16
+
+- Align the package version with the lunR 0.2.32 release.
+
+## [0.2.31] - 2026-10-16
+
+- Align the package version with the lunR 0.2.31 release.
+
+## [0.2.30] - 2026-10-16
+
+- Align the package version with the lunR 0.2.30 release.
+
+## [0.2.29] - 2026-10-11
+
+- Queued PR-watch notifications can transfer to a waiting tool without duplicate delivery or losing other queued messages.
+
+## [0.2.28] - 2026-10-04
+
+### Fixed
+
+- Compaction uses the shared request-aware context estimate and records the prompt identity for each response.
+
+## [0.2.27] - 2026-10-04
+
+### Fixed
+
+- Agent loop preparation failures settle their event streams and return the terminal error result.
+
+## [0.2.26] - 2026-09-27
+
 ## [0.2.25] - 2026-09-26
 
 ## [0.2.24] - 2026-09-24

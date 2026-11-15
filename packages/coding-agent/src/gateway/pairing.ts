@@ -12,9 +12,10 @@
  */
 
 import { randomInt } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "../config.ts";
+import { writeJsonFileAtomic } from "../utils/json.ts";
 
 /** Unambiguous alphabet: no 0/O/1/I/L. */
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -127,16 +128,7 @@ export function createPairingStore(options: PairingOptions = {}): PairingStore {
 	}
 
 	function write(data: PairingData): void {
-		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-		const path = storeFile();
-		const tmp = `${path}.tmp-${process.pid}`;
-		writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
-		renameSync(tmp, path);
-		try {
-			chmodSync(path, 0o600);
-		} catch {
-			// best-effort
-		}
+		writeJsonFileAtomic(storeFile(), data, 0o600);
 	}
 
 	function isLockedOut(platform: string): boolean {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { spawn } from "child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from "fs";

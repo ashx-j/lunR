@@ -245,9 +245,11 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 				return { sequences, remainder: remaining };
 			}
 		} else {
-			// Not an escape sequence - take a single character
-			sequences.push(remaining[0]!);
-			pos++;
+			// Not an escape sequence - take a single code point, so an emoji's
+			// surrogate pair is never split into two sequences.
+			const char = String.fromCodePoint(remaining.codePointAt(0)!);
+			sequences.push(char);
+			pos += char.length;
 		}
 	}
 
@@ -256,10 +258,15 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 
 export type StdinBufferOptions = {
 	/**
-	 * Maximum time to wait for sequence completion (default: 10ms)
-	 * After this time, the buffer is flushed even if incomplete
+	 * Maximum time to wait after a lone ESC before emitting it as the Escape key (default: 10ms).
 	 */
 	timeout?: number;
+	/**
+	 * Maximum time to wait for the rest of a started sequence such as `ESC [` or a
+	 * mouse report before flushing it as-is (default: `timeout`). A longer wait keeps
+	 * slow links from splitting one sequence into Escape plus typed text.
+	 */
+	partialSequenceTimeout?: number;
 };
 
 export type StdinBufferEventMap = {
@@ -275,6 +282,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	private buffer: string = "";
 	private timeout: ReturnType<typeof setTimeout> | null = null;
 	private readonly timeoutMs: number;
+	private readonly partialSequenceTimeoutMs: number;
 	private pasteMode: boolean = false;
 	private pasteBuffer: string = "";
 	private pendingKittyPrintableCodepoint: number | undefined;
@@ -282,6 +290,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	constructor(options: StdinBufferOptions = {}) {
 		super();
 		this.timeoutMs = options.timeout ?? 10;
+		this.partialSequenceTimeoutMs = options.partialSequenceTimeout ?? this.timeoutMs;
 	}
 
 	public process(data: string | Buffer): void {
@@ -376,18 +385,21 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		}
 
 		if (this.buffer.length > 0) {
+			const delay = this.buffer === ESC ? this.timeoutMs : this.partialSequenceTimeoutMs;
 			this.timeout = setTimeout(() => {
 				const flushed = this.flush();
 
 				for (const sequence of flushed) {
 					this.emitDataSequence(sequence);
 				}
-			}, this.timeoutMs);
+			}, delay);
 		}
 	}
 
 	private emitDataSequence(sequence: string): void {
-		const rawCodepoint = sequence.length === 1 ? sequence.codePointAt(0) : undefined;
+		const firstCodepoint = sequence.codePointAt(0);
+		const rawCodepoint =
+			firstCodepoint !== undefined && String.fromCodePoint(firstCodepoint) === sequence ? firstCodepoint : undefined;
 		if (rawCodepoint !== undefined && rawCodepoint === this.pendingKittyPrintableCodepoint) {
 			this.pendingKittyPrintableCodepoint = undefined;
 			return;

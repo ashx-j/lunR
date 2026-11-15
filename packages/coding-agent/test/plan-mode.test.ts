@@ -49,6 +49,7 @@ describe("readOnlyModeBlockReason", () => {
 	it("exposes a read-only system-prompt addendum", () => {
 		expect(READ_ONLY_MODE_ADDENDUM).toContain("read-only mode");
 		expect(READ_ONLY_MODE_ADDENDUM).toContain("present_plan");
+		expect(READ_ONLY_MODE_ADDENDUM).toMatchSnapshot();
 	});
 });
 
@@ -74,7 +75,7 @@ describe("isMutatingBashCommand", () => {
 			"git tag",
 			"git tag -l",
 			"git remote -v",
-			"npm test",
+			"npm --version",
 			"node --version",
 			"node -v",
 			"python --version",
@@ -113,6 +114,63 @@ describe("isMutatingBashCommand", () => {
 		]) {
 			expect(isMutatingBashCommand(command), command).toBe(true);
 		}
+	});
+
+	it.each([
+		"sed 's/a/b/w x' f",
+		"sed -n 'w y' f",
+		"sed '1e touch x' f",
+		"sed -e p -e 'W out' f",
+		"sed 's/a/touch x/e' f",
+		"sed --expression='$w out' f",
+		"sed 's/[/]/x/;w out' f",
+		"sed '/a/{p;w out\n}' f",
+		"sed f -i",
+		"sed -ni p f",
+		"sed -f script.sed f",
+		"sed --file=script.sed f",
+		"sed --exp='s/a/b/' f",
+		"sed -n 'p;k' f",
+		"sed 's/a/b' f",
+		"sed -n x* f",
+		"date -s 2020-01-01",
+		"date --set=2020-01-01",
+		"date 010100002020",
+		"sed -l 's/a/b/w x' f",
+		"sed -l5x p f",
+		"sed --line-length=p f",
+		"sed --line-length 'w x' f",
+		"date -us 2020-01-01",
+		"date -v-1d +%F",
+		"date -j -f %s 0 +%F",
+	])("blocks %s, which writes, runs code, hides its script or can't be parsed", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	it.each([
+		"sed -n '10,20p' src/a.ts",
+		"sed -n 10,20p src/a.ts",
+		"sed 's/foo/bar/g' a.ts",
+		"sed -E 's#(a|b)/w#x#2g' a.ts",
+		"sed -n -e '/^[a-z]*w/p' -e '$=' a.ts",
+		"sed -n '/start/,/end/{/skip/!p}' a.ts",
+		"sed '1i\\\nheader' a.ts",
+		"sed -n '1~2p;$!N;r other.txt' a.ts",
+		"sed 'y/abc/xyz/;q 3' a.ts",
+		"sed -es/i/x/ a.ts",
+		"date",
+		"date +%Y-%m-%d",
+		"date -u -d 'last sunday' +%s",
+		"date -Iseconds",
+		"date -ud @0",
+		"date -uR",
+		"date -uIseconds",
+		"date -ud @0 +%F",
+		"sed -l 80 -n l a.ts",
+		"sed -l80 -n l a.ts",
+		"sed --line-length=80 -n l a.ts",
+	])("allows %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
 	});
 
 	it("blocks output redirects outside quotes", () => {
@@ -172,7 +230,7 @@ describe("isMutatingBashCommand", () => {
 		]) {
 			expect(isMutatingBashCommand(command), command).toBe(true);
 		}
-		for (const command of ["git --no-pager status", "git -C /tmp status", "git --git-dir=.git log"]) {
+		for (const command of ["git --no-pager status", "git --namespace=x log"]) {
 			expect(isMutatingBashCommand(command), command).toBe(false);
 		}
 	});
@@ -202,5 +260,203 @@ describe("isMutatingBashCommand", () => {
 		expect(isMutatingBashCommand("cat ok.txt ; rm bad.txt")).toBe(true);
 		expect(isMutatingBashCommand("ls | xargs rm")).toBe(true);
 		expect(isMutatingBashCommand("ls || rm -rf dist")).toBe(true);
+	});
+});
+
+describe("read-only execution spellings", () => {
+	it.each([
+		"sort \\\n-ooutput.txt input.txt",
+		"node --eval=0",
+		'node "--eval=0"',
+		'sort "-ooutput.txt" input.txt',
+		"sort --out=output.txt input.txt",
+		"python -v",
+		"bash -v",
+		"sh -v",
+		"node --print=0",
+		"node -e0",
+		"node -p0",
+		"node --require=./hook.js",
+		"node --import=./hook.js",
+		"node --test",
+		"node --check=script.js",
+		"node",
+		"python3 -c0",
+		"python -mhttp.server",
+		"bash -c:tool",
+		"bash --init-file=hook.sh",
+		"npm test",
+		"npm run build",
+		"npm exec -- echo ok",
+		"pnpm run build",
+		"pnpm dlx tool",
+		"yarn run build",
+		"yarn build",
+		"bun run build",
+		"npm",
+		"yarn",
+		"env node --eval=0",
+		"env FOO=bar npm test",
+		"env -S 'node --eval=0'",
+		"sort -ooutput.txt input.txt",
+		"sort --output=output.txt input.txt",
+		"git update-ref refs/heads/x HEAD",
+		"git custom-alias",
+		"git remote --add",
+		"git tag --delete=tag",
+		"git branch --delete",
+		'echo "$(printf probe)"',
+		'echo "`printf probe`"',
+	])("blocks %s without executing it", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	it.each([
+		"pnpm --version",
+		"bun --version",
+		"npm ls",
+		"npm view typescript version",
+		"env",
+		"env --help",
+		"sort input.txt",
+		"git ls-files",
+		"git remote --verbose",
+		"echo '$(printf probe)'",
+		'echo "\\$(printf probe)"',
+		"rg --type ts foo",
+		"uniq sorted.txt",
+		"NO_COLOR=1 ls",
+		"LC_ALL=C sort input.txt",
+		"less README.md",
+		"less -SR README.md",
+		"less --line-numbers README.md",
+	])("keeps informational form %s usable", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
+	});
+
+	it.each([
+		"rg --pre sh x payload.sh",
+		"rg --pre=./run.sh x",
+		"git grep -Ovim foo",
+		"git grep --open-files-in-pager=vim foo",
+		"find . -fprint ~/.profile",
+		"find . -fls out.txt",
+		"uniq input.txt output.txt",
+		"GIT_EXTERNAL_DIFF=./x.sh git diff",
+		"PAGER=./x.sh git log",
+		"LD_PRELOAD=./evil.so ls",
+		"file -C -m magic",
+		"file --compile -m magic",
+		"file --comp -m magic",
+		"file -zC -m magic",
+		// a lesskey file's #env section can set LESSOPEN, which runs a command
+		"less -k keys.bin README.md",
+		"less -Sk keys.bin README.md",
+		"less --lesskey-src=keys.txt README.md",
+		"less --lesskey-s=keys.txt README.md",
+		"less --lesskey-file keys.bin README.md",
+		"more -k keys.bin README.md",
+		"less -o out.log README.md",
+		"less -Oout.log README.md",
+		"less --log-file=out.log README.md",
+		"less --LOG-FILE=out.log README.md",
+		// a repo yarnPath runs repo JavaScript for any yarn command
+		"yarn --version",
+		"yarn info react",
+		"yarn why react",
+	])("treats %s as able to run code or write files", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	// a repo file named like an option (`-i.ts`, `--pre=sh`) would become one after glob expansion
+	it.each([
+		"sed s/a/b/ *.ts",
+		"sed -n 1p ?.ts",
+		"sort [-]o.txt input.txt",
+		"file *",
+		"find . -name *",
+		"rg foo *",
+		"git diff *",
+		"uniq src/*.txt",
+		"find . -*",
+		"rg foo --*",
+		"git diff --*",
+		"sed -n p -*",
+		"sort x -*",
+		"file -*",
+		'find . ""*',
+		"find . \\-*",
+		'find . "-"*',
+	])("blocks %s because the glob can expand to an option", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	it.each([
+		"ls *.ts",
+		"grep x *.ts",
+		"cat *.md",
+		"wc -l src/*.ts",
+		"sed -n 1p src/*.ts",
+		"sed 's/a*/b/' file.ts",
+		"rg foo 'src/*.ts'",
+		"git log -- '*.ts'",
+		"file src/*.ts",
+		"file -b package.json",
+	])("keeps glob form %s usable", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
+	});
+});
+
+describe("shell expansion and redirection tricks", () => {
+	it.each([
+		"find . -name '*.tmp' {-delete,}",
+		"find . -name '*.tmp' {'-delete',}",
+		"find . -name x -{dele,}te",
+		"echo {a..c}",
+		"find . $'-delete'",
+		"sed $'-i' s/a/b/ f",
+		'find . $"-delete"',
+		"F=-delete; find . $F",
+		"O=--output=/x; git log $O",
+		'git log "$O"',
+		`find . \${F}`,
+		"git log $1",
+		"HOME=. git diff",
+		"XDG_CONFIG_HOME=. git diff",
+		"true\nHOME=. git diff",
+		"PATH=.; ls",
+		"RIPGREP_CONFIG_PATH=notes.txt rg foo",
+		"GH_CONFIG_DIR=. gh pr view",
+		"git --git-dir=evil.git --work-tree=. status",
+		"git --git-dir evil.git log",
+		"git -C fixture.git log",
+		"git --bare log -p",
+		"./scripts/ls",
+		"scripts/cat x",
+		"/tmp/ls",
+		"/usr/bin/../../tmp/ls",
+		"cat a | ./grep b",
+	])("blocks %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	it.each([
+		"ls -la",
+		"git log --oneline",
+		"rg foo src/",
+		"cat a | grep b",
+		"find . -name '*.ts'",
+		'find . -name "*.ts"',
+		"grep -n 'foo$' src/a.ts",
+		'grep -n "^foo$" src/a.ts',
+		"rg 'a{1,3}' src",
+		"echo '$HOME'",
+		"git show HEAD@{1}",
+		"git log @{u}..HEAD",
+		"/usr/bin/ls -la",
+		"/bin/cat a.txt",
+		"LC_ALL=C sort input.txt",
+	])("allows %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
 	});
 });

@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import lspExtension from "../src/builtin-extensions/pi-lsp-extension/src/index.ts";
 import {
@@ -155,6 +157,7 @@ function createExtensionHarness(factory: (pi: never) => void = lspExtension) {
 
 	const ctx = {
 		cwd: process.cwd(),
+		isProjectTrusted: () => true,
 		ui,
 	};
 
@@ -409,6 +412,35 @@ describe("pi-lsp-extension startup readiness", () => {
 		}
 	});
 
+	it("leaves host exception listeners unchanged across factory construction and shutdown", async () => {
+		const baseline = process.listeners("uncaughtException");
+		for (let index = 0; index < 3; index++) {
+			const harness = createExtensionHarness();
+			expect(process.listeners("uncaughtException")).toEqual(baseline);
+			await harness.emit("session_shutdown", {}, harness.ctx);
+			expect(process.listeners("uncaughtException")).toEqual(baseline);
+		}
+	});
+
+	it("preserves fatal exit for unrelated uncaught exceptions in an isolated host", async () => {
+		const script = `
+			import { createJiti } from "jiti";
+			import { resolve } from "node:path";
+			const jiti = createJiti(resolve("lsp-exception-test.mjs"), {
+				moduleCache: false, fsCache: false,
+				alias: { "@earendil-works/pi-tui": resolve("../tui/src/index.ts") },
+			});
+			const { default: extension } = await jiti.import(resolve("src/builtin-extensions/pi-lsp-extension/src/index.ts"));
+			extension({ registerTool() {}, registerCommand() {}, on() {}, events: { on() {} } });
+			setImmediate(() => { throw new Error("LSP_UNRELATED_FATAL_SENTINEL"); });
+		`;
+		await expect(
+			promisify(execFile)(process.execPath, ["--input-type=module", "-e", script], {
+				timeout: 15000,
+			}),
+		).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("LSP_UNRELATED_FATAL_SENTINEL") });
+	});
+
 	it("registers exact tool schemas and commands before any heavy runtime load", async () => {
 		const harness = createExtensionHarness();
 
@@ -601,7 +633,7 @@ describe("pi-lsp-extension startup readiness", () => {
 		expect(replacement.manager.getLanguageId).not.toHaveBeenCalled();
 	});
 
-	it("autoStart from .pi-lsp.json still ensures runtime and starts languages", async () => {
+	it.each([true, false])("project LSP autoStart applies only with trust=%s", async (trusted) => {
 		const cwd = mkdtempSync(join(tmpdir(), "lsp-ext-autostart-"));
 		dirs.push(cwd);
 		writeFileSync(
@@ -614,6 +646,7 @@ describe("pi-lsp-extension startup readiness", () => {
 		);
 
 		const startEagerly = vi.fn();
+		const configureServer = vi.fn();
 		const constructed: string[] = [];
 
 		vi.resetModules();
@@ -623,7 +656,7 @@ describe("pi-lsp-extension startup readiness", () => {
 					constructed.push(rootDir);
 				}
 				setWorkspaceProvider() {}
-				setServerConfig() {}
+				setServerConfig = configureServer;
 				setLombokJar() {}
 				getLombokJar() {
 					return null;
@@ -673,8 +706,20 @@ describe("pi-lsp-extension startup readiness", () => {
 		const { default: freshExtension } = await import("../src/builtin-extensions/pi-lsp-extension/src/index.ts");
 		const harness = createExtensionHarness(freshExtension);
 		harness.setCwd(cwd);
+		harness.ctx.isProjectTrusted = () => trusted;
 		await harness.emit("session_start", { type: "session_start" }, harness.ctx);
 
+		if (!trusted) {
+			expect(startEagerly).not.toHaveBeenCalled();
+			expect(constructed).toEqual([]);
+			// Await explicit lazy initialization so any wrongly queued eager start must settle too.
+			await harness.tools
+				.find((tool) => tool.name === "lsp_hover")!
+				.execute("probe", { path: "missing.ts" }, undefined, undefined, harness.ctx);
+			expect(startEagerly).not.toHaveBeenCalled();
+			expect(configureServer).not.toHaveBeenCalled();
+			return;
+		}
 		await vi.waitFor(() => expect(startEagerly).toHaveBeenCalledWith(["typescript"]));
 		expect(constructed).toEqual([cwd]);
 		expect(harness.statuses.some((status) => status.includes("auto-starting typescript"))).toBe(true);

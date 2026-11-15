@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * lsp_references — Find all references to a symbol.
  */

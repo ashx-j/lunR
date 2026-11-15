@@ -4,7 +4,7 @@ import {
 	stream as streamOpenAIResponses,
 	streamSimple as streamSimpleOpenAIResponses,
 } from "../src/api/openai-responses.ts";
-import { getModel } from "../src/compat.ts";
+import { getModel, getModels } from "../src/compat.ts";
 import type { Model } from "../src/types.ts";
 
 type CapturedHeaders = Headers | string[][] | Record<string, string | readonly string[]> | undefined;
@@ -75,7 +75,10 @@ describe("openai-responses provider defaults", () => {
 	});
 
 	it("omits reasoning when no reasoning is requested", async () => {
-		const model = getModel("github-copilot", "gpt-5-mini");
+		// Any Copilot model on the Responses API.
+		const model = getModels("github-copilot").find(
+			(candidate) => candidate.api === "openai-responses",
+		) as Model<"openai-responses">;
 		let capturedPayload: unknown;
 
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(

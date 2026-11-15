@@ -367,11 +367,20 @@ export interface ToolCall {
 }
 
 export interface Usage {
+	/** Stable local request identity, retained when a session is forked. */
+	requestId?: string;
+	/** System prompt/tool identity for deciding whether prior usage describes this request. */
+	contextFingerprint?: string;
+	/** Missing provider usage is unknown, never a measured zero. */
+	measurement?: "reported" | "partial" | "estimated" | "unknown";
+	/** Provider account charge, when supplied. Category costs remain catalog estimates. */
+	reportedCost?: number;
+	costSource?: "reported" | "estimated" | "unknown";
 	input: number;
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
-	/** Subset of `cacheWrite` written with 1h retention. Only Anthropic reports this split. */
+	/** Subset of `cacheWrite` written with 1h retention. Reported by Anthropic and Bedrock. */
 	cacheWrite1h?: number;
 	/**
 	 * Reasoning/thinking tokens, when the provider reports them. This is a subset of
@@ -405,13 +414,6 @@ export interface AssistantMessage {
 	model: string;
 	responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
-	claudeCodeCarrier?: {
-		version: 1;
-		messages: unknown[];
-		projection: { content: string; tool_calls: unknown[] };
-		contentHash?: string;
-		accountFingerprint?: string;
-	};
 	diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
 	usage: Usage;
 	stopReason: StopReason;
@@ -470,6 +472,12 @@ export interface Context {
 	systemPrompt?: string;
 	messages: Message[];
 	tools?: Tool[];
+	/**
+	 * Tools the session starts unloaded, in a fixed order, whether or not they have loaded since.
+	 * Providers with native deferred loading advertise them (Anthropic: `defer_loading`) so a later
+	 * load leaves the request prefix unchanged. Every other provider ignores the field.
+	 */
+	deferredTools?: Tool[];
 }
 
 /**

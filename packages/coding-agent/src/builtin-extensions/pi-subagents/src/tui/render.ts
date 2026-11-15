@@ -276,7 +276,7 @@ function usageTokenTotal(usage?: { input?: number; output?: number; cacheRead?: 
 
 function compactResultTokens(result: Details["results"][number]): number {
 	const progress = result.progress || result.progressSummary;
-	if (progress && progress.tokens > 0) return progress.tokens;
+	if (progress && progress.tokens > 0) return Math.max(progress.tokens, usageTokenTotal(result.usage));
 	const fromUsage = usageTokenTotal(result.usage);
 	if (fromUsage > 0) return fromUsage;
 	return progress?.tokens ?? 0;
@@ -391,9 +391,10 @@ export function formatCompactSubagentRow(
 		durationMs: number;
 		prefix?: string;
 		terminalStatus?: string;
+		waiting?: boolean;
 	},
 ): string {
-	const stats = formatCompactRowStats(parts.tokens, parts.durationMs);
+	const stats = parts.waiting ? "waiting" : formatCompactRowStats(parts.tokens, parts.durationMs);
 	const body = [
 		`${parts.prefix ?? ""}${parts.glyph} ${themeBold(theme, parts.description)}`,
 		parts.modelBadge ? theme.fg("dim", parts.modelBadge) : "",
@@ -1046,14 +1047,15 @@ function compactTerminalStatus(
 
 function compactJobProgress(job: AsyncJobState, step?: NonNullable<AsyncJobState["steps"]>[number], now = Date.now()): { tokens: number; durationMs: number } {
 	const running = (step?.status ?? job.status) === "running";
-	const tokens = step?.tokens?.total ?? job.totalTokens?.total ?? 0;
+	const wholeJob = !step || (!job.steps?.length && job.agents?.length === 1);
+	const tokens = step?.tokens?.total ?? (wholeJob ? job.totalTokens?.total : undefined) ?? 0;
 	if (step?.durationMs !== undefined) {
 		return {
 			tokens,
 			durationMs: liveDurationMs({ durationMs: step.durationMs, lastActivityAt: step.lastActivityAt }, running, now),
 		};
 	}
-	const startedAt = step?.startedAt ?? job.startedAt;
+	const startedAt = step?.startedAt ?? (wholeJob ? job.startedAt : undefined);
 	if (startedAt === undefined) return { tokens, durationMs: 0 };
 	const endedAt = running ? now : step?.endedAt ?? step?.lastActivityAt ?? job.updatedAt ?? now;
 	return { tokens, durationMs: Math.max(0, endedAt - startedAt) };
@@ -1081,6 +1083,7 @@ function compactJobLines(job: AsyncJobState, step: NonNullable<AsyncJobState["st
 		tokens: progress.tokens,
 		durationMs: progress.durationMs,
 		terminalStatus: compactTerminalStatus(step?.status ?? job.status),
+		waiting: step?.status === "pending" || (step?.status ?? job.status) === "queued",
 	})];
 }
 
@@ -1221,7 +1224,7 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	return lines;
 }
 
-let activeWidget: SubagentAsyncWidget | undefined;
+const activeWidgets = new Map<ExtensionContext["ui"], SubagentAsyncWidget>();
 
 export class SubagentAsyncWidget {
 	private jobs: AsyncJobState[];
@@ -1306,7 +1309,9 @@ export class SubagentAsyncWidget {
 	dispose(): void {
 		this.disposed = true;
 		this.stopTimer();
-		if (activeWidget === this) activeWidget = undefined;
+		for (const [owner, widget] of activeWidgets) {
+			if (widget === this) activeWidgets.delete(owner);
+		}
 	}
 
 	render(width: number): string[] {
@@ -1340,9 +1345,14 @@ export function createSubagentWidgetComponent(
 	return new SubagentAsyncWidget(jobs, theme, options);
 }
 
-export function disposeSubagentWidget(): void {
-	activeWidget?.dispose();
-	activeWidget = undefined;
+export function disposeSubagentWidget(ctx?: ExtensionContext): void {
+	if (ctx) {
+		activeWidgets.get(ctx.ui)?.dispose();
+		activeWidgets.delete(ctx.ui);
+		return;
+	}
+	for (const widget of activeWidgets.values()) widget.dispose();
+	activeWidgets.clear();
 }
 
 export function clearWidgetPaintTimer(): void {
@@ -1355,13 +1365,14 @@ export function clearWidgetPaintTimer(): void {
 export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void {
 	if (jobs.length === 0) {
 		resetWidgetLayoutSession();
-		disposeSubagentWidget();
+		disposeSubagentWidget(ctx);
 		if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
 		return;
 	}
 	if (!ctx.hasUI) return;
 	const expanded = ctx.ui.getToolsExpanded?.() ?? false;
 	const requestRender = () => ctx.ui.requestRender?.();
+	const activeWidget = activeWidgets.get(ctx.ui);
 	if (activeWidget) {
 		activeWidget.setJobs(jobs);
 		activeWidget.setExpanded(expanded);
@@ -1370,7 +1381,7 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 		return;
 	}
 	const widget = new SubagentAsyncWidget(jobs, undefined, { expanded, requestRender });
-	activeWidget = widget;
+	activeWidgets.set(ctx.ui, widget);
 	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
 		widget.setTheme(theme);
 		return widget;

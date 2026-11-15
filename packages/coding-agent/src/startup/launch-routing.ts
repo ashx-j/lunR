@@ -2,6 +2,7 @@ export type PreloadLaunchMode = "interactive" | "deferred";
 
 const DEFERRED_COMMANDS = new Set([
 	"config",
+	"doctor",
 	"features",
 	"gateway",
 	"install",
@@ -31,6 +32,7 @@ export function resolvePreloadLaunchMode(
 		parsed.export ||
 		parsed.listModels !== undefined ||
 		parsed.mode === "rpc" ||
+		parsed.mode === "acp" ||
 		parsed.mode === "json"
 	)
 		return "deferred";

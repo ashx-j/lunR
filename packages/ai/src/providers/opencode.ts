@@ -9,7 +9,7 @@ import { OPENCODE_MODELS } from "./opencode.models.ts";
 export function opencodeProvider(): Provider<
 	"anthropic-messages" | "google-generative-ai" | "openai-completions" | "openai-responses"
 > {
-	return createProvider({
+	return createProvider<"anthropic-messages" | "google-generative-ai" | "openai-completions" | "openai-responses">({
 		id: "opencode",
 		name: "OpenCode Zen",
 		auth: { apiKey: envApiKeyAuth("OpenCode API key", ["OPENCODE_API_KEY"]) },

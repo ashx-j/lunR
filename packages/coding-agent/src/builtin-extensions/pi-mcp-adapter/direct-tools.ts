@@ -1,11 +1,17 @@
-// @ts-nocheck
 import type { DirectToolSpec, McpConfig } from "./types.ts";
 import type { MetadataCache } from "./metadata-cache.ts";
 import { isServerCacheValid } from "./metadata-cache.ts";
 import { formatToolName, isToolExcluded } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
+import { REVIEW_FREE_TOOLS } from "../../core/auto-review.ts";
+import { READ_ONLY_TOOLS } from "../../core/permissions.ts";
 
 const BUILTIN_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "mcp"]);
+
+// lunr: names the permission and auto-review gates trust by name (read-only tools, review-free
+// bookkeeping tools, and tools that readOnlyModeBlock classifies by their input). A direct MCP
+// tool under one of these names would inherit that trust, so it is skipped instead.
+const GATE_TRUSTED_NAMES = new Set([...READ_ONLY_TOOLS, ...REVIEW_FREE_TOOLS, "browser", "code_rewrite", "subagent"]);
 
 export function resolveDirectTools(
   config: McpConfig,
@@ -69,6 +75,10 @@ export function resolveDirectTools(
         console.warn(`MCP: skipping direct tool "${prefixedName}" (collides with builtin)`);
         continue;
       }
+      if (GATE_TRUSTED_NAMES.has(prefixedName)) {
+        console.warn(`MCP: skipping direct tool "${prefixedName}" (collides with a lunR tool the permission gate trusts)`);
+        continue;
+      }
       if (seenNames.has(prefixedName)) {
         console.warn(`MCP: skipping duplicate direct tool "${prefixedName}" from "${serverName}"`);
         continue;
@@ -93,6 +103,10 @@ export function resolveDirectTools(
         const prefixedName = formatToolName(baseName, serverName, prefix);
         if (BUILTIN_NAMES.has(prefixedName)) {
           console.warn(`MCP: skipping direct resource tool "${prefixedName}" (collides with builtin)`);
+          continue;
+        }
+        if (GATE_TRUSTED_NAMES.has(prefixedName)) {
+          console.warn(`MCP: skipping direct resource tool "${prefixedName}" (collides with a lunR tool the permission gate trusts)`);
           continue;
         }
         if (seenNames.has(prefixedName)) {
@@ -143,7 +157,7 @@ export function buildProxyDescription(
   directSpecs: DirectToolSpec[],
 ): string {
   const prefix = config.settings?.toolPrefix ?? "server";
-  let desc = `MCP gateway - connect to MCP servers and call their tools. Non-MCP Pi tools should be called directly, not through mcp.\n`;
+  let desc = `MCP gateway - connect to MCP servers and call their tools. Non-MCP lunR tools should be called directly, not through mcp.\n`;
 
   const directByServer = new Map<string, number>();
   for (const spec of directSpecs) {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { complete, type Api, type AssistantMessage, type Message, type Model, type TextContent } from "@earendil-works/pi-ai/compat";
 import { truncateAtWord } from "./utils.ts";
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
@@ -158,7 +157,7 @@ async function resolveSamplingModel(
   if (errors.length > 0) {
     throw new Error(`No configured auth for MCP sampling model. ${errors.join("; ")}`);
   }
-  throw new Error("No Pi model is available for MCP sampling");
+  throw new Error("No lunR model is available for MCP sampling");
 }
 
 function addSamplingCandidate(candidates: Model<Api>[], model: Model<Api>): void {

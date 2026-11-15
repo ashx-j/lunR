@@ -1,0 +1,80 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`registers local-session guidance with the existing action contract 1`] = `
+{
+  "description": "Send a message to another lunR session running on this machine.
+Use this to communicate findings, request help, or coordinate work with other sessions.
+
+Usage:
+  intercom({ action: "list" })                    → List active sessions
+  intercom({ action: "send", to: "session-name", message: "..." })  → Send message
+  intercom({ action: "ask", to: "session-name", message: "..." })   → Ask and wait for reply
+  intercom({ action: "reply", message: "..." })                      → Reply to the active/single pending ask
+  intercom({ action: "pending" })                                      → List unresolved inbound asks
+  intercom({ action: "status" })                  → Show connection status",
+  "name": "intercom",
+  "parameters": {
+    "properties": {
+      "action": {
+        "description": "Action: 'list', 'send', 'ask', 'reply', 'pending', or 'status'",
+        "enum": [
+          "list",
+          "send",
+          "ask",
+          "reply",
+          "pending",
+          "status",
+        ],
+        "type": "string",
+      },
+      "attachments": {
+        "items": {
+          "properties": {
+            "content": {
+              "type": "string",
+            },
+            "language": {
+              "type": "string",
+            },
+            "name": {
+              "type": "string",
+            },
+            "type": {
+              "enum": [
+                "file",
+                "snippet",
+                "context",
+              ],
+              "type": "string",
+            },
+          },
+          "required": [
+            "type",
+            "name",
+            "content",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "message": {
+        "description": "Message to send (for 'send', 'ask', or 'reply' action)",
+        "type": "string",
+      },
+      "replyTo": {
+        "description": "Message ID to reply to (for threading or responding to an 'ask')",
+        "type": "string",
+      },
+      "to": {
+        "description": "Target session name or ID (for 'send', 'ask', or disambiguating 'reply')",
+        "type": "string",
+      },
+    },
+    "required": [
+      "action",
+    ],
+    "type": "object",
+  },
+  "promptSnippet": "Use to coordinate with other local lunR sessions: list peers, send updates, ask for help, or check intercom connectivity.",
+}
+`;
