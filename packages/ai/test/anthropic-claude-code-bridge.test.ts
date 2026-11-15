@@ -355,6 +355,8 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			name: "Opus 9",
 			contextWindow: 1_000_000,
 			reasoning: true,
+			// A family's models differ in price, so the row borrows none.
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			catalog: { pricing: "unknown" },
 		});
 		// No family row to borrow from: lunR sends no thinking setting.

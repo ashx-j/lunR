@@ -47,9 +47,10 @@ export function anthropicProvider(): Provider<"anthropic-messages"> {
 /**
  * A model the subscription offers before lunR's catalog has it. The picker's facts win: the id, the `[1m]`
  * route's window and the name from Claude Code's description ("Opus 5.5 · Best for ..."). Thinking, output
- * limit, price and the default window come from the catalog row of the same family (`claude-fable`) that
+ * limit and the default window come from the catalog row of the same family (`claude-fable`) that
  * shares the most leading id segments, newest first, so `claude-fable-5-2` borrows from `claude-fable-5-1`.
- * The borrowed price is marked unknown. With no row of the family, the model gets the defaults
+ * The price is not borrowed: a family's models differ in price, so the row has none and is marked unknown,
+ * like every other model lunR has no price for. With no row of the family, the model gets the defaults
  * `discoveredModel` gives a model nothing is known about: 128k context, 8k output and no thinking controls,
  * so lunR sends no thinking setting and Claude Code keeps its own.
  */
@@ -75,11 +76,13 @@ function offeredModel(
 	if (name !== offered.id) supplied.push("name");
 	if (offered.contextWindow) supplied.push("contextWindow");
 	const catalog = { source: "provider", supplied, pricing: "unknown" } as const;
+	const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	if (template) {
 		return {
 			...template,
 			id: offered.id,
 			name,
+			cost,
 			contextWindow: offered.contextWindow ?? template.contextWindow,
 			catalog,
 		};
@@ -92,7 +95,7 @@ function offeredModel(
 		baseUrl: "https://api.anthropic.com",
 		reasoning: false,
 		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		cost,
 		contextWindow: offered.contextWindow ?? 128_000,
 		maxTokens: 8192,
 		catalog,
