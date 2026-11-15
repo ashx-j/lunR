@@ -100,6 +100,44 @@ function getNonVisionImageNote(model: Model<Api> | undefined): string | undefine
 	return "[Current model does not support images. The image will be omitted from this request.]";
 }
 
+/** Bytes read from the start of a file to decide whether it is binary. */
+const BINARY_SAMPLE_BYTES = 8192;
+/** Control characters that occur in ordinary text: backspace, tab, newline, vertical tab, form feed, carriage return, escape. */
+const TEXT_CONTROL_CODES = new Set([8, 9, 10, 11, 12, 13, 27]);
+
+function utf16Encoding(buffer: Buffer): "utf-16le" | "utf-16be" | undefined {
+	if (buffer[0] === 0xff && buffer[1] === 0xfe) return "utf-16le";
+	if (buffer[0] === 0xfe && buffer[1] === 0xff) return "utf-16be";
+	return undefined;
+}
+
+/**
+ * Binary when the first 8 KB has a NUL byte (git's rule), more than 10% other control
+ * characters, or more than half invalid UTF-8. Text in a legacy encoding such as Latin-1
+ * stays under the last limit. Files with a UTF-16 BOM are text.
+ */
+function looksBinary(buffer: Buffer): boolean {
+	if (utf16Encoding(buffer)) return false;
+	const sample = buffer.subarray(0, BINARY_SAMPLE_BYTES);
+	if (sample.includes(0)) return true;
+	let total = 0;
+	let controls = 0;
+	let invalid = 0;
+	for (const char of sample.toString("utf-8")) {
+		const code = char.charCodeAt(0);
+		total++;
+		if (code === 0xfffd) invalid++;
+		else if (code === 0x7f || (code < 0x20 && !TEXT_CONTROL_CODES.has(code))) controls++;
+	}
+	return controls > total * 0.1 || invalid > total * 0.5;
+}
+
+/** Decodes UTF-16 files marked with a BOM (PowerShell redirects write these), everything else as UTF-8. */
+function decodeText(buffer: Buffer): string {
+	const encoding = utf16Encoding(buffer);
+	return encoding ? new TextDecoder(encoding).decode(buffer) : buffer.toString("utf-8");
+}
+
 function toPosixPath(filePath: string): string {
 	return filePath.split(sep).join("/");
 }
@@ -229,9 +267,9 @@ export function createReadToolDefinition(
 							let content: (TextContent | ImageContent)[];
 							let details: ReadToolDetails | undefined;
 							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+							const buffer = await ops.readFile(absolutePath);
 							if (mimeType) {
 								// Read image as binary.
-								const buffer = await ops.readFile(absolutePath);
 								const processed = await processImage(buffer, mimeType, { autoResizeImages });
 								if (!processed.ok) {
 									let textNote = `Read image file [${mimeType}]\n${processed.message}`;
@@ -246,10 +284,12 @@ export function createReadToolDefinition(
 										{ type: "image", data: processed.data, mimeType: processed.mimeType },
 									];
 								}
+							} else if (looksBinary(buffer)) {
+								const text = `[${path} is a binary file (${formatSize(buffer.length)}). Its bytes are not shown. Inspect it with bash, for example file or xxd | head.]`;
+								content = [{ type: "text", text }];
 							} else {
 								// Read text content.
-								const buffer = await ops.readFile(absolutePath);
-								const textContent = buffer.toString("utf-8");
+								const textContent = decodeText(buffer);
 								const allLines = textContent.split("\n");
 								const totalFileLines = allLines.length;
 								// Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
@@ -305,7 +345,12 @@ export function createReadToolDefinition(
 							resolve({ content, details });
 						} catch (error: any) {
 							signal?.removeEventListener("abort", onAbort);
-							if (!aborted) reject(error);
+							if (aborted) return;
+							reject(
+								error?.code === "EISDIR"
+									? new Error(`${path} is a directory. Use ls to list its contents.`)
+									: error,
+							);
 						}
 					})();
 				},
