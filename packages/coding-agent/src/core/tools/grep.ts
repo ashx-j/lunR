@@ -8,7 +8,7 @@ import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
-import { CREDENTIAL_SHARE_HINT, credentialReadReason } from "../credential-files.ts";
+import { CREDENTIAL_SKIP_NOTE, credentialWalkFilter } from "../credential-files.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import {
@@ -282,20 +282,10 @@ export function createGrepToolDefinition(
 						};
 
 						// Collect matches during streaming, then format them after rg exits.
-						// A search over the profile dir or home must not print lunR's saved logins.
-						const credentialChecks = new Map<string, boolean>();
-						const isCredentialFile = (filePath: string): boolean => {
-							let skip = credentialChecks.get(filePath);
-							if (skip === undefined) {
-								skip = credentialReadReason(filePath, searchPath) !== undefined;
-								credentialChecks.set(filePath, skip);
-							}
-							return skip;
-						};
-						const skippedNotice = () =>
-							[...credentialChecks.values()].some(Boolean)
-								? `\n\n[Skipped matches in lunR's saved logins (auth.json, subscriptions.json, mcp-oauth/). ${CREDENTIAL_SHARE_HINT}]`
-								: "";
+						// A search over the profile dir or a parent of it must not print lunR's saved logins.
+						const isCredential = credentialWalkFilter(searchPath);
+						let skippedCredentials = false;
+						const skippedNotice = () => (skippedCredentials ? `\n\n${CREDENTIAL_SKIP_NOTE}` : "");
 						const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
 						rl.on("line", (line) => {
 							if (!line.trim() || matchCount >= effectiveLimit) return;
@@ -307,7 +297,10 @@ export function createGrepToolDefinition(
 							}
 							if (event.type === "match") {
 								const filePath = event.data?.path?.text;
-								if (filePath && isCredentialFile(filePath)) return;
+								if (filePath && isCredential?.(filePath)) {
+									skippedCredentials = true;
+									return;
+								}
 								matchCount++;
 								const lineNumber = event.data?.line_number;
 								const lineText = event.data?.lines?.text;

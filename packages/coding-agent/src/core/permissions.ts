@@ -19,7 +19,7 @@
  */
 
 import { computerPolicy } from "./computer-use/policy.ts";
-import { credentialBashReason, credentialReadReason } from "./credential-files.ts";
+import { credentialArgsReason, credentialBashReason } from "./credential-files.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
 import { readOnlyModeBlockReason } from "./plan-mode.ts";
 import { protectedTargetWriteReason } from "./protected-targets.ts";
@@ -260,13 +260,14 @@ function protectedFileWriteReason(toolName: string, input: Record<string, unknow
 	return protectedTargetWriteReason(input.path, cwd);
 }
 
-/** lunR's saved logins stay out of the conversation in every mode; see credential-files.ts. */
+/**
+ * lunR's saved logins stay out of every tool call in every mode, built-in, extension and MCP alike,
+ * because each call's arguments are scanned here; see credential-files.ts.
+ */
 function credentialToolReason(toolName: string, input: Record<string, unknown>, cwd: string): string | undefined {
-	if ((toolName === "read" || toolName === "grep") && typeof input.path === "string" && input.path) {
-		return credentialReadReason(input.path, cwd);
-	}
-	if (toolName === "bash" && typeof input.command === "string") return credentialBashReason(input.command, cwd);
-	return undefined;
+	const reason = credentialArgsReason(input, cwd);
+	if (reason || toolName !== "bash" || typeof input.command !== "string") return reason;
+	return credentialBashReason(input.command, cwd);
 }
 
 interface RequestedChildLaunch {
