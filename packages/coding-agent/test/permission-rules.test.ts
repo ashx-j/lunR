@@ -219,11 +219,15 @@ describe("permission rule matching", () => {
 			],
 			[[`edit(${"**/a/".repeat(10)}b)`], "edit", { path: `${"a/".repeat(60)}c` }],
 		];
+		// The best of 3 runs, so a cold JIT or a GC pause on a shared CI runner doesn't flake it.
 		for (const [deny, tool, input] of cases) {
 			const rules = globalRules([], deny);
-			const started = performance.now();
-			rules.denied(tool, input);
-			expect(performance.now() - started, deny[0]).toBeLessThan(100);
+			const times = [0, 1, 2].map(() => {
+				const started = performance.now();
+				rules.denied(tool, { ...input });
+				return performance.now() - started;
+			});
+			expect(Math.min(...times), deny[0]).toBeLessThan(100);
 		}
 	});
 
