@@ -43,7 +43,7 @@ import type {
 } from "@earendil-works/pi-ai/compat";
 import {
 	clampThinkingLevel,
-	cleanupModelSwitchResources,
+	cleanupConversationResources,
 	cleanupSessionResources,
 	estimateContextTokens as estimateRequestContextTokens,
 	getSupportedThinkingLevels,
@@ -2349,8 +2349,11 @@ export class AgentSession {
 		this.abortRetry();
 		if (this._activePromptRun && !this.agent.signal) this._activePromptRun.gracefulStopRequested = true;
 		const bash = [...this._bashOperations.values()];
+		const running = !this.isIdle;
 		this.abortBash();
 		this.agent.abort();
+		// A Claude subscription's Claude Code process may hold a tool call of the aborted run.
+		if (running) cleanupConversationResources(this.sessionId);
 		await this.waitForIdle();
 		await Promise.all(bash);
 	}
@@ -2382,7 +2385,7 @@ export class AgentSession {
 
 	/** A Claude subscription keeps a Claude Code process holding the old model's conversation; end it with the switch. */
 	private _endModelSession(previous: Model<Api> | undefined): void {
-		if (!previous || !modelsAreEqual(previous, this.model)) cleanupModelSwitchResources(this.sessionId);
+		if (!previous || !modelsAreEqual(previous, this.model)) cleanupConversationResources(this.sessionId);
 	}
 
 	/**

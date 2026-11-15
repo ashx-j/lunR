@@ -1,5 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
+import { isInteractiveHost } from "../session-resources.ts";
 import type { ClaudeCodeToolResult } from "./claude-code-loopback.ts";
 import { type ClaudeCodeEvent, claudeCodeEvents, stopProcessTree } from "./claude-code-process.ts";
 
@@ -22,16 +23,52 @@ export type SessionStep =
 	| { kind: "tools"; results: Map<string, ClaudeCodeToolResult> };
 
 /**
- * Stops a process that sat unused this long. Matches the 1h prompt cache TTL Claude Code writes: while the
- * cache lives, the kept process saves a restart and the history rewrite a restart costs; after it expires a
- * restart costs nothing extra.
+ * Stops a process that sat unused this long. In the TUI it matches the 1h prompt cache TTL Claude Code
+ * writes: while the cache lives, the kept process saves a restart and the history rewrite a restart costs.
+ * Headless hosts (print, RPC, ACP, the gateway) may hold one process per chat at about 210 MB each, so
+ * they keep an idle one for 10 minutes, long enough for a chat's next message.
  */
-export const CLAUDE_CODE_SESSION_IDLE_MS = 60 * 60 * 1000;
+export function claudeCodeSessionIdleMs(): number {
+	return isInteractiveHost() ? 60 * 60 * 1000 : 10 * 60 * 1000;
+}
 /** Claude Code saves larger tool results to a file and sends a preview; those turns restart instead. */
 const MAX_TOOL_RESULT_CHARS = 400_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+const ASSISTANT_TYPES: ReadonlySet<unknown> = new Set(["text", "thinking", "redacted_thinking", "tool_use"]);
+/**
+ * Progress lines Claude Code prints around a request: start, status, thinking progress, and the session's
+ * own failure hook. Any other system line changes or reports on its copy.
+ */
+const STATUS_SUBTYPES: ReadonlySet<unknown> = new Set([
+	"init",
+	"status",
+	"thinking_tokens",
+	"hook_started",
+	"hook_progress",
+	"hook_response",
+]);
+
+/**
+ * Whether Claude Code keeps an assistant turn in the order lunR has it. 2.1.310 moves every text block
+ * that follows a tool_use ahead of the tool calls, in its live copy and in a replay alike. Measured
+ * unchanged against a recording upstream, live and replayed: one text; thinking then text; two thinking
+ * blocks; two texts in a row; text, thinking, text; one tool call; thinking, text or both before tool calls;
+ * parallel calls with text before them; thinking or redacted thinking between tool calls; a call with empty
+ * input; redacted thinking before a call. So the rule is: only those four block types, and no text after
+ * the first tool_use.
+ */
+export function keepsOrder(blocks: readonly Block[]): boolean {
+	let afterTool = false;
+	for (const block of blocks) {
+		if (!ASSISTANT_TYPES.has(block.type)) return false;
+		if (block.type === "tool_use") afterTool = true;
+		else if (block.type === "text" && afterTool) return false;
+	}
+	return true;
 }
 
 /**
@@ -108,6 +145,10 @@ export class ClaudeCodeSession {
 	readonly events: AsyncGenerator<ClaudeCodeEvent>;
 	/** Set while a request runs on this process. */
 	busy = false;
+	/** When a request last ran here, for evicting the least recently used process. */
+	lastUsed = Date.now();
+	/** Set when Claude Code printed a line `verify` refused; the process stops after the current answer. */
+	drifted = false;
 	closed = false;
 
 	private readonly child: ChildProcessWithoutNullStreams;
@@ -152,7 +193,7 @@ export class ClaudeCodeSession {
 		if (!this.started) return { kind: "replay", frames: [...history] };
 		const answer = this.answer;
 		const held = this.held.length;
-		if (!answer || history.length !== held + 2) return undefined;
+		if (!answer || !keepsOrder(answer.blocks) || history.length !== held + 2) return undefined;
 		if (!isDeepStrictEqual(history.slice(0, held), this.held)) return undefined;
 		if (!isDeepStrictEqual(history[held]?.message.content, answer.blocks)) return undefined;
 		const next = history[held + 1];
@@ -181,6 +222,7 @@ export class ClaudeCodeSession {
 	begin(step: SessionStep, history: readonly SessionFrame[]): void {
 		clearTimeout(this.idle);
 		this.busy = true;
+		this.lastUsed = Date.now();
 		this.started = true;
 		this.held = [...history];
 		this.answer = new StreamedAnswer();
@@ -199,14 +241,16 @@ export class ClaudeCodeSession {
 	}
 
 	/**
-	 * Checks a `user` line Claude Code printed while it ran the current step: a tool result it recorded must
-	 * be the one lunR sent. False means the held copy drifted from lunR's history.
+	 * Checks a line Claude Code printed since the last answer. The only `user` lines allowed are the echo of
+	 * the tool results lunR sent, and the only `system` lines are its per-request status; anything else
+	 * (compaction, notes, a changed tool result) means the held copy drifted from lunR's history.
 	 */
 	verify(event: ClaudeCodeEvent, step: SessionStep): boolean {
-		if (step.kind !== "tools" || event.type !== "user" || !isRecord(event.message)) return true;
-		const content = Array.isArray(event.message.content) ? event.message.content : [];
-		return content.every((block) => {
-			if (!isRecord(block) || block.type !== "tool_result") return true;
+		if (event.type === "system") return STATUS_SUBTYPES.has(event.subtype);
+		if (event.type !== "user") return true;
+		if (step.kind !== "tools" || !isRecord(event.message) || !Array.isArray(event.message.content)) return false;
+		return event.message.content.every((block) => {
+			if (!isRecord(block) || block.type !== "tool_result") return false;
 			const expected = typeof block.tool_use_id === "string" ? step.results.get(block.tool_use_id) : undefined;
 			return !!expected && sameToolResult(block, expected);
 		});
@@ -219,7 +263,12 @@ export class ClaudeCodeSession {
 	finish(complete: boolean): void {
 		this.busy = false;
 		const reason = this.answer?.stopReason;
-		if (!complete || (reason !== "tool_use" && reason !== "end_turn")) {
+		if (
+			this.drifted ||
+			!complete ||
+			(reason !== "tool_use" && reason !== "end_turn") ||
+			!keepsOrder(this.answer?.blocks ?? [])
+		) {
 			void this.close();
 			return;
 		}
@@ -269,7 +318,7 @@ export class ClaudeCodeSession {
 
 	private armIdleTimer(): void {
 		clearTimeout(this.idle);
-		this.idle = setTimeout(() => void this.close(), CLAUDE_CODE_SESSION_IDLE_MS);
+		this.idle = setTimeout(() => void this.close(), claudeCodeSessionIdleMs());
 		this.idle.unref();
 	}
 }

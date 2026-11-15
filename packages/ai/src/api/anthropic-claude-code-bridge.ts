@@ -5,7 +5,7 @@ import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
-import { registerModelSwitchCleanup, registerSessionResourceCleanup } from "../session-resources.ts";
+import { registerConversationCleanup, registerSessionResourceCleanup } from "../session-resources.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { stream as streamMessages, streamSimple as streamSimpleMessages } from "./anthropic-messages.ts";
@@ -17,7 +17,7 @@ import {
 	spawnClaudeCode,
 	stopProcessTree,
 } from "./claude-code-process.ts";
-import { ClaudeCodeSession, type SessionStep } from "./claude-code-session.ts";
+import { ClaudeCodeSession, keepsOrder, type SessionStep } from "./claude-code-session.ts";
 
 /** MCP server name prefix Claude Code puts on lunR's tools. Stripped again before lunR sees a tool call. */
 const TOOL_PREFIX = "mcp__lunr__";
@@ -362,15 +362,17 @@ function localFailure(message: string): Response {
 	});
 }
 
-/** Passes `events` through, calling `onFirst` when the first one arrives. */
-async function* notifyFirst(
+/** Passes `events` through, calling `onFirst` when the first raw Messages stream event arrives. */
+async function* notifyFirstAnswer(
 	events: AsyncGenerator<ClaudeCodeEvent>,
 	onFirst: () => void,
 ): AsyncGenerator<ClaudeCodeEvent> {
 	let first = true;
 	for await (const event of events) {
-		if (first) onFirst();
-		first = false;
+		if (first && event.type === "stream_event") {
+			first = false;
+			onFirst();
+		}
 		yield event;
 	}
 }
@@ -429,8 +431,8 @@ async function runClaudeCode(
 	signal: AbortSignal | undefined,
 	idleMs: number,
 	upstream: string | undefined,
-	/** Called once Claude Code prints its first line, when its startup work is done. */
-	onStarted?: () => void,
+	/** Called once the first byte of Anthropic's answer arrives, when this process's request has left. */
+	onAnswer?: () => void,
 ): Promise<Response> {
 	if (!existsSync(connection.command))
 		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
@@ -512,8 +514,8 @@ async function runClaudeCode(
 			}
 		};
 
-		const events = onStarted
-			? notifyFirst(claudeCodeEvents(child.stdout), onStarted)
+		const events = onAnswer
+			? notifyFirstAnswer(claudeCodeEvents(child.stdout), onAnswer)
 			: claudeCodeEvents(child.stdout);
 		for (const [index, frame] of request.frames.entries()) {
 			// Earlier user turns are appended without a generation; Claude Code acknowledges each with a zero-turn result.
@@ -554,6 +556,21 @@ async function runClaudeCode(
 const sessions = new Map<string, Promise<ClaudeCodeSession | undefined>>();
 /** Every live process that has not exited, for the synchronous kill when lunR exits. */
 const running = new Set<ClaudeCodeSession>();
+/**
+ * Live processes one lunR process keeps, at about 210 MB each. The TUI uses one; a gateway, RPC or ACP host
+ * with several chats keeps the most recently used three and lets the others run one-shot.
+ */
+const MAX_SESSIONS = 3;
+
+/** Frees a slot for a new live process by stopping the least recently used idle one. False when all are busy. */
+function makeRoom(): boolean {
+	const live = [...running].filter((session) => !session.closed);
+	if (live.length < MAX_SESSIONS) return true;
+	const idle = live.filter((session) => !session.busy).sort((a, b) => a.lastUsed - b.lastUsed)[0];
+	if (!idle) return false;
+	void idle.close();
+	return true;
+}
 
 /** Stops the live process of one lunR session, or of all of them. */
 function stopSessions(sessionId?: string): void {
@@ -564,7 +581,7 @@ function stopSessions(sessionId?: string): void {
 	}
 }
 registerSessionResourceCleanup(stopSessions);
-registerModelSwitchCleanup(stopSessions);
+registerConversationCleanup(stopSessions);
 // SIGINT, SIGTERM and SIGHUP end lunR through process.exit. A kill -9 closes Claude Code's stdin, which ends
 // an idle process, and fails any held tool call, which the session's failure hook turns into a kill.
 process.once("exit", () => {
@@ -573,14 +590,21 @@ process.once("exit", () => {
 
 const MEDIA: ReadonlySet<unknown> = new Set(["image", "document"]);
 
-/** Whether any turn carries an image or document, directly or inside a tool result. */
-function hasMedia(frames: readonly Frame[]): boolean {
-	return frames.some((frame) =>
-		frame.message.content.some(
-			(block) =>
-				MEDIA.has(block.type) ||
-				(Array.isArray(block.content) && block.content.some((item) => isRecord(item) && MEDIA.has(item.type))),
-		),
+/**
+ * Whether a live process would hold a different copy of this history: Claude Code may resize media it
+ * reads from stdin, and it reorders an assistant turn with text after a tool call (`keepsOrder`), in a
+ * replay too. Such a history runs one-shot, where the body carries it unchanged.
+ */
+function changedByClaudeCode(frames: readonly Frame[]): boolean {
+	return frames.some(({ type, message: { content } }) =>
+		type === "assistant"
+			? !keepsOrder(content)
+			: content.some(
+					(block) =>
+						MEDIA.has(block.type) ||
+						(Array.isArray(block.content) &&
+							block.content.some((item) => isRecord(item) && MEDIA.has(item.type))),
+				),
 	);
 }
 
@@ -638,6 +662,8 @@ async function startSession(
 			request.system,
 			{
 				...settings(request.extraBody),
+				// Idle compaction would rewrite Claude Code's copy while lunR waits; a remote flag gates it today.
+				idleCompaction: false,
 				hooks: { PostToolUseFailure: [{ matcher: `${TOOL_PREFIX}.*`, hooks: [hook] }] },
 			},
 			loopback.mcpUrl,
@@ -671,27 +697,31 @@ async function startSession(
 	}
 }
 
-/** Reads to the next answer event or `result`, failing when a tool result Claude Code recorded is not lunR's. */
+/**
+ * Reads to the next answer event or `result`. A line `verify` refuses marks the session drifted: before
+ * the answer the caller discards the step, during it the process stops once the answer is complete.
+ */
 async function nextSessionEvent(session: ClaudeCodeSession, step: SessionStep): Promise<ClaudeCodeEvent | undefined> {
 	for (let next = await session.events.next(); !next.done; next = await session.events.next()) {
 		const event = next.value;
-		if (!session.verify(event, step)) {
-			void session.close();
-			throw new Error("Claude Code recorded a tool result that differs from lunR's; the request was stopped.");
-		}
+		if (!session.verify(event, step)) session.drifted = true;
 		if (event.type === "result" || (event.type === "stream_event" && isRecord(event.event))) return event;
 	}
 	return undefined;
 }
 
-/** Runs one request on a live process; `step` says what the process still needs from `request`. */
+/**
+ * Runs one request on a live process; `step` says what the process still needs from `request`. Undefined
+ * when the process ended the step without asking Anthropic, for example when Claude Code's own context
+ * limit refuses the request or its copy drifted; the caller then sends the request one-shot.
+ */
 async function runSessionStep(
 	session: ClaudeCodeSession,
 	step: SessionStep,
 	request: ClaudeCodeRequest,
 	signal: AbortSignal | undefined,
 	idleMs: number,
-): Promise<Response> {
+): Promise<Response | undefined> {
 	session.begin(step, request.frames);
 	let complete = false;
 	// A user abort ends the process: Claude Code's copy would hold a turn lunR does not keep.
@@ -731,6 +761,11 @@ async function runSessionStep(
 		}
 		const first = await within(nextSessionEvent(session, step), "Claude Code request timed out.");
 		if (signal?.aborted) throw new Error("Claude Code request cancelled");
+		// The request Claude Code sent may already carry its changed copy; its answer is not used.
+		if (session.drifted) {
+			session.finish(false);
+			return undefined;
+		}
 		if (first?.type !== "stream_event") {
 			session.finish(false);
 			const error = first && apiError(first);
@@ -738,8 +773,11 @@ async function runSessionStep(
 				throw new Error(
 					`Claude Code network error: ${typeof first.result === "string" ? first.result : "no answer"}`,
 				);
-			if (!error) throw new Error(stoppedBeforeRequest(first));
-			return new Response(error.body, { status: error.status, headers: { "content-type": "application/json" } });
+			if (error)
+				return new Response(error.body, { status: error.status, headers: { "content-type": "application/json" } });
+			if (!first) throw new Error(stoppedBeforeRequest(first));
+			// A result with no request behind it: near its own context limit Claude Code refuses to send.
+			return undefined;
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
 		const next = () => within(nextSessionEvent(session, step), "Claude Code request timed out.");
@@ -761,8 +799,9 @@ async function runSessionStep(
 /**
  * Sends a request of one lunR session to that session's live Claude Code process when the request
  * continues exactly what the process holds, and restarts the process otherwise. The first request of a
- * session runs on a process of its own, as without a session, and starts the live process for the next one.
- * A request that arrives while the live process is busy runs on a process of its own and leaves it alone.
+ * session runs one-shot and starts the live process for the next one. A request runs one-shot too when its
+ * history is one Claude Code would change, when the live process is busy with another request, when every
+ * live slot is busy, and when the live process ends a step without asking Anthropic.
  */
 async function sessionFetch(
 	connection: ExternalClaudeCodeCredential,
@@ -772,38 +811,39 @@ async function sessionFetch(
 	idleMs: number,
 	upstream: string | undefined,
 ): Promise<Response> {
-	// Claude Code may resize media it reads from stdin, which would leave its copy different from lunR's.
-	if (hasMedia(request.frames)) {
+	const oneShot = (onAnswer?: () => void) =>
+		runClaudeCode(connection, oneShotRequest(request), signal, idleMs, upstream, onAnswer);
+	if (changedByClaudeCode(request.frames)) {
 		stopSessions(sessionId);
-		return runClaudeCode(connection, oneShotRequest(request), signal, idleMs, upstream);
+		return oneShot();
 	}
 	const key = sessionKey(connection, request, upstream);
-	const current = await sessions.get(sessionId);
-	if (current?.busy) return runClaudeCode(connection, oneShotRequest(request), signal, idleMs, upstream);
-	let session = current;
-	let step = session?.plan(key, request.frames);
-	if (!session || !step) {
-		void current?.close();
-		sessions.delete(sessionId);
-		if (request.frames.length === 1) {
-			// Claude Code starts faster in the empty directory a one-shot process uses. The live process
-			// starts once that one is past its own startup, so the two never compete for the CPU, and is
-			// ready by the next request.
-			const prewarm = () => {
-				if (!sessions.has(sessionId))
-					sessions.set(
-						sessionId,
-						startSession(connection, request, key, upstream).catch(() => undefined),
-					);
-			};
-			return runClaudeCode(connection, oneShotRequest(request), signal, idleMs, upstream, prewarm);
-		}
-		session = await startSession(connection, request, key, upstream);
-		sessions.set(sessionId, Promise.resolve(session));
-		step = session.plan(key, request.frames);
-		if (!step) throw new Error("Claude Code session could not start");
+	const entry = sessions.get(sessionId);
+	const current = await entry;
+	// Another request of this session changed the entry while this one waited; leave the process to it.
+	if (sessions.get(sessionId) !== entry || current?.busy) return oneShot();
+	const step = current?.plan(key, request.frames);
+	if (current && step) return (await runSessionStep(current, step, request, signal, idleMs)) ?? oneShot();
+	void current?.close();
+	sessions.delete(sessionId);
+	const start = () => {
+		if (sessions.has(sessionId) || !makeRoom()) return undefined;
+		const starting = startSession(connection, request, key, upstream);
+		sessions.set(
+			sessionId,
+			starting.catch(() => undefined),
+		);
+		return starting;
+	};
+	if (request.frames.length === 1) {
+		// Claude Code starts faster in the empty directory a one-shot process uses. The live process starts
+		// once Anthropic's first byte arrives, after this request has left, and is ready by the next request.
+		return oneShot(() => void start()?.catch(() => {}));
 	}
-	return runSessionStep(session, step, request, signal, idleMs);
+	const started = await start()?.catch(() => undefined);
+	const fresh = started?.plan(key, request.frames);
+	if (!started || !fresh) return oneShot();
+	return (await runSessionStep(started, fresh, request, signal, idleMs)) ?? oneShot();
 }
 
 /**

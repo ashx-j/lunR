@@ -23,17 +23,28 @@ export function cleanupSessionResources(sessionId?: string): void {
 	}
 }
 
-const modelSwitchCleanups = new Set<SessionResourceCleanup>();
+const conversationCleanups = new Set<SessionResourceCleanup>();
 
-/** Registers cleanup for resources that hold one model's conversation, such as a Claude Code session process. */
-export function registerModelSwitchCleanup(cleanup: SessionResourceCleanup): () => void {
-	modelSwitchCleanups.add(cleanup);
+/** Registers cleanup for resources that hold a copy of a session's conversation, such as a Claude Code session process. */
+export function registerConversationCleanup(cleanup: SessionResourceCleanup): () => void {
+	conversationCleanups.add(cleanup);
 	return () => {
-		modelSwitchCleanups.delete(cleanup);
+		conversationCleanups.delete(cleanup);
 	};
 }
 
-/** Releases a session's per-model resources after its model changed. */
-export function cleanupModelSwitchResources(sessionId: string): void {
-	for (const cleanup of modelSwitchCleanups) cleanup(sessionId);
+/** Releases them after the conversation changed outside a request: a model switch or an aborted run. */
+export function cleanupConversationResources(sessionId: string): void {
+	for (const cleanup of conversationCleanups) cleanup(sessionId);
+}
+
+let interactiveHost = false;
+
+/** Marks this process as an interactive host (the TUI), where a person often returns to an idle session. */
+export function setInteractiveHost(value: boolean): void {
+	interactiveHost = value;
+}
+
+export function isInteractiveHost(): boolean {
+	return interactiveHost;
 }
