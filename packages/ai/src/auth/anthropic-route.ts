@@ -29,6 +29,35 @@ export function claudeCodeUpdateNote(credential: Credential | undefined): string
 	return `Claude subscription models come from Claude Code ${version}. Run /login anthropic to update to ${CLAUDE_CODE_VERSION} and get newer models.`;
 }
 
+const CLAUDE_RELEASE = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?$/;
+
+/**
+ * Catalog Claude models newer than the newest one the saved subscription login lists in the same family
+ * (opus, sonnet, haiku, ...). The login's list comes from the Claude Code picker at login time, so these
+ * need /login anthropic before the picker shows them. Dated snapshot ids are ignored. Empty when the
+ * credential is not a Claude Code subscription.
+ */
+export function claudeModelsNewerThanLogin(
+	credential: Credential | undefined,
+	catalog: readonly { id: string }[],
+): string[] {
+	if (credential?.type !== "external_claude_code") return [];
+	const release = (id: string) => {
+		const match = CLAUDE_RELEASE.exec(id);
+		return match ? { family: match[1], version: Number(match[2]) * 100 + Number(match[3] ?? 0) } : undefined;
+	};
+	const newest = new Map<string, number>();
+	for (const offered of credential.models ?? []) {
+		const listed = release(offered.id);
+		if (listed) newest.set(listed.family, Math.max(listed.version, newest.get(listed.family) ?? 0));
+	}
+	return catalog.flatMap(({ id }) => {
+		const model = release(id);
+		const listed = model && newest.get(model.family);
+		return model && listed !== undefined && model.version > listed ? [id] : [];
+	});
+}
+
 export function isAnthropicOAuthToken(value: string | undefined): boolean {
 	return !!value && (value.includes("sk-ant-oat") || value.startsWith("sk-ant-oauth"));
 }

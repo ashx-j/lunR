@@ -31,6 +31,7 @@ const SUPPORTED_PARAMS: ReadonlySet<string> = new Set([
 	"output_config",
 	"tool_choice",
 ]);
+const CLAUDE_MODEL_ID = /^claude-[a-z0-9.-]+(\[1m\])?$/;
 const USER_BLOCKS: ReadonlySet<unknown> = new Set(["text", "image", "document", "tool_result"]);
 const ASSISTANT_BLOCKS: ReadonlySet<unknown> = new Set(["text", "thinking", "redacted_thinking", "tool_use"]);
 const REQUEST_ENV = {
@@ -80,6 +81,8 @@ const HISTORY_MARKER = { type: "ephemeral", ttl: "1h" } as const;
  */
 interface ClaudeCodeRequest {
 	route: string;
+	/** Whether the saved login lists the model. */
+	listed: boolean;
 	system: string;
 	frames: Frame[];
 	tools: ClaudeCodeTool[];
@@ -166,8 +169,13 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 	if (unsupported.length) throw new Error(`Claude Code subscription does not support ${unsupported.join(", ")}`);
 	if (body.tool_choice !== undefined && !(isRecord(body.tool_choice) && body.tool_choice.type === "auto"))
 		throw new Error("Claude Code subscription does not support forced tool choice");
-	const route = connection.models?.find((model) => model.id === body.model)?.route;
-	if (!route) throw new Error(`Claude Code ${body.model} is not available through this subscription connection`);
+	// A saved route keeps the variant setup chose. A Claude id the saved login does not list, such as a model
+	// newer than the login, goes to Claude Code as is; lunR only builds requests for ids its catalog or
+	// models.json knows, and Anthropic decides whether the plan includes it.
+	const saved = connection.models?.find((model) => model.id === body.model);
+	const route = saved?.route ?? body.model;
+	if (!CLAUDE_MODEL_ID.test(route))
+		throw new Error(`Claude Code ${body.model} is not available through this subscription connection`);
 
 	const system =
 		typeof body.system === "string"
@@ -196,6 +204,7 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 	const history = historyFrames(body.messages, body.model);
 	const request = {
 		route,
+		listed: !!saved,
 		system,
 		frames: history,
 		tools,
@@ -470,6 +479,11 @@ async function runClaudeCode(
 				);
 			if (!error) throw new Error(stoppedBeforeRequest(first));
 			await finish(true);
+			// Claude Code's own refusal text points at its --model flag, which lunR users do not have.
+			if (!request.listed && (error.status === 403 || error.status === 404))
+				return localFailure(
+					`Claude ${request.route} is not available on this subscription, or the saved login predates it. Run /login anthropic to refresh the models it offers.`,
+				);
 			return new Response(error.body, { status: error.status, headers: { "content-type": "application/json" } });
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));

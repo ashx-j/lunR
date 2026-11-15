@@ -266,6 +266,37 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(record.extra.output_config).toEqual({ effort: "high" });
 	});
 
+	it("sends a catalog Claude model the saved login does not list, and explains a refusal", async () => {
+		const unlisted = ANTHROPIC_MODELS["claude-sonnet-5-5"];
+		const sent = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const answered = await streamClaudeCode(
+			unlisted,
+			context,
+			{ externalClaudeCode: sent.connection },
+			true,
+			sent.upstream,
+		).result();
+		expect(answered.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(sent.directory, "record.json"), "utf8"));
+		expect(record.argv[record.argv.indexOf("--model") + 1]).toBe("claude-sonnet-5-5");
+
+		const refused = await setup({
+			status: 404,
+			body: JSON.stringify({ type: "error", error: { type: "not_found_error", message: "Run --model" } }),
+		});
+		const failed = await streamClaudeCode(
+			unlisted,
+			context,
+			{ externalClaudeCode: refused.connection },
+			true,
+			refused.upstream,
+		).result();
+		expect(failed.errorMessage).toBe(
+			"Claude claude-sonnet-5-5 is not available on this subscription, or the saved login predates it. Run /login anthropic to refresh the models it offers.",
+		);
+		expect(isRetryableAssistantError(failed)).toBe(false);
+	});
+
 	it("replays a history too large for Claude Code's settings file through stdin", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
 		const large: Context = {

@@ -147,7 +147,24 @@ export async function handleRefreshCommand(host: ModelCommandHost): Promise<void
 
 async function findExactModelMatch(session: AgentSession, searchTerm: string): Promise<Model<Api> | undefined> {
 	const models = await getModelCandidates(session);
-	return findExactModelReferenceMatch(searchTerm, models);
+	return (
+		findExactModelReferenceMatch(searchTerm, models) ?? (await findUnlistedSubscriptionModel(session, searchTerm))
+	);
+}
+
+/**
+ * A Claude model the catalog or models.json knows that the saved subscription login does not list, such as
+ * one released after the login. The picker shows only what the login offers; an exact id still reaches
+ * Claude Code, which reports when the plan lacks the model.
+ */
+async function findUnlistedSubscriptionModel(
+	session: AgentSession,
+	searchTerm: string,
+): Promise<Model<Api> | undefined> {
+	if (session.scopedModels.length > 0) return undefined;
+	const credential = await session.modelRuntime.readCredential("anthropic").catch(() => undefined);
+	if (credential?.type !== "external_claude_code") return undefined;
+	return findExactModelReferenceMatch(searchTerm, [...session.modelRuntime.getModels("anthropic")]);
 }
 
 export async function getModelCandidates(session: AgentSession): Promise<Model<Api>[]> {
