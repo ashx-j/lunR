@@ -37,7 +37,7 @@ function findBashOnPath(): string | null {
 				}
 			}
 		} catch {
-			// Ignore errors
+			// `where` is missing or failed: fall through to the default bash locations.
 		}
 		return null;
 	}
@@ -52,7 +52,7 @@ function findBashOnPath(): string | null {
 			}
 		}
 	} catch {
-		// Ignore errors
+		// `which` is missing or failed: fall through to the default bash locations.
 	}
 	return null;
 }

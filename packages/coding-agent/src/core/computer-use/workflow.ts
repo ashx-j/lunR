@@ -20,7 +20,9 @@ export function driverData(reply: DriverReply): Record<string, unknown> {
 				const value: unknown = JSON.parse(item.text);
 				if (value && typeof value === "object" && !Array.isArray(value))
 					return Object.fromEntries(Object.entries(value));
-			} catch {}
+			} catch {
+				// Not a JSON object: try the next text block.
+			}
 		}
 	return {};
 }

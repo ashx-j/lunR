@@ -29,7 +29,9 @@ async function findGitPaths(cwd: string): Promise<GitPaths | null> {
 					let commonGitDir = gitDir;
 					try {
 						commonGitDir = resolve(gitDir, (await readFile(join(gitDir, "commondir"), "utf8")).trim());
-					} catch {}
+					} catch {
+						// No commondir file: a plain repository, so its git dir is the common dir.
+					}
 					return { repoDir: dir, commonGitDir, headPath };
 				}
 			} else if (gitStat.isDirectory()) {
@@ -37,7 +39,9 @@ async function findGitPaths(cwd: string): Promise<GitPaths | null> {
 				await stat(headPath);
 				return { repoDir: dir, commonGitDir: gitPath, headPath };
 			}
-		} catch {}
+		} catch {
+			// No usable .git here: keep walking up.
+		}
 		const parent = dirname(dir);
 		if (parent === dir) return null;
 		dir = parent;

@@ -13,7 +13,9 @@ export function readBrowserSettings(): { enabled: boolean; allowPrivate: boolean
 	let settings: Record<string, unknown> = {};
 	try {
 		settings = JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf8")) ?? {};
-	} catch {}
+	} catch {
+		// Missing or unparsable settings.json means defaults; SettingsManager reports parse errors.
+	}
 	return {
 		enabled: typeof settings.browserEnabled === "boolean" ? settings.browserEnabled : browserEnabledDefault(),
 		allowPrivate:

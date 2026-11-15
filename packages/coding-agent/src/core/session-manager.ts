@@ -941,7 +941,9 @@ export class SessionManager {
 				saved.revision === createHash("sha256").update(readFileSync(this.sessionFile)).digest("hex")
 			)
 				this.leafId = saved.leafId;
-		} catch {}
+		} catch {
+			// No saved leaf, or it no longer matches the file: open at the newest leaf.
+		}
 	}
 
 	private constructor(

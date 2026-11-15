@@ -253,7 +253,9 @@ function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
 			if (patterns.length > 0) {
 				ig.add(patterns);
 			}
-		} catch {}
+		} catch {
+			// An unreadable ignore file only widens the scan.
+		}
 	}
 }
 
@@ -327,7 +329,7 @@ function collectFiles(
 			}
 		}
 	} catch {
-		// Ignore errors
+		// An unreadable directory contributes no files.
 	}
 
 	return files;
@@ -403,7 +405,7 @@ function collectSkillEntries(
 			entries.push(...collectSkillEntries(fullPath, mode, ig, root));
 		}
 	} catch {
-		// Ignore errors
+		// An unreadable directory contributes no skills.
 	}
 
 	return entries;
@@ -479,7 +481,7 @@ function collectAutoPromptEntries(dir: string): string[] {
 			}
 		}
 	} catch {
-		// Ignore errors
+		// An unreadable directory contributes no prompts.
 	}
 
 	return entries;
@@ -516,7 +518,7 @@ function collectAutoThemeEntries(dir: string): string[] {
 			}
 		}
 	} catch {
-		// Ignore errors
+		// An unreadable directory contributes no themes.
 	}
 
 	return entries;
@@ -610,7 +612,7 @@ function collectAutoExtensionEntries(dir: string): string[] {
 			}
 		}
 	} catch {
-		// Ignore errors
+		// An unreadable directory contributes no extensions.
 	}
 
 	return entries;
@@ -2326,7 +2328,7 @@ export class DefaultPackageManager implements PackageManager {
 					files.push(...collectResourceFiles(p, resourceType));
 				}
 			} catch {
-				// Ignore errors
+				// An unreadable path contributes no files.
 			}
 		}
 		return files;
