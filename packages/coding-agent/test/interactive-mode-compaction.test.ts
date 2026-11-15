@@ -172,7 +172,7 @@ describe("messages queued during a compaction", () => {
 		return fakeThis;
 	}
 
-	test("steers them into a run that goes on after a failed or cancelled compaction", async () => {
+	test("steers them into a run still streaming after an end-of-prompt, failed or cancelled compaction", async () => {
 		const mode = createQueueMode(true);
 		await flush.call(mode, { willRetry: false });
 		expect(mode.session.steer).toHaveBeenCalledWith("steer me please", undefined);

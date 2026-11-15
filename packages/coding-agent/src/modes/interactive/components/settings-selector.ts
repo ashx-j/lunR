@@ -84,10 +84,16 @@ function parseCompactionCeiling(value: string): number | undefined {
 	return Math.round(Number.parseFloat(value) * (value.endsWith("k") ? 1000 : 1));
 }
 
-function compactionCeilingDescription(ceiling: number | undefined, floor: number | undefined): string {
-	return ceiling && floor && floor > ceiling
-		? `Raised to ${Math.round(floor / 1000)}k here, twice the size of a compacted context`
-		: "Compact at this many tokens even when the model allows more";
+function compactionCeilingDescription(
+	ceiling: number | undefined,
+	floor: number | undefined,
+	keptTokens: number | undefined,
+): string {
+	if (!ceiling || !floor || floor <= ceiling) return "Compact at this many tokens even when the model allows more";
+	const raised = `Raised to ${Math.round(floor / 1000)}k`;
+	return keptTokens
+		? `${raised} for now: the last compaction kept ${Math.round(keptTokens / 1000)}k. Back to ${formatCompactionCeiling(ceiling)} after one that keeps less`
+		: `${raised} here, twice the size of a compacted context`;
 }
 
 /** Keeps a hand-edited ceiling in the cycle so the row can show it. */
@@ -106,6 +112,8 @@ export interface SettingsConfig {
 	compactionCeilingTokens?: number;
 	/** The lowest ceiling this session uses (`compactionCeilingFloor`); a lower setting is raised to it. */
 	compactionCeilingFloorTokens?: number;
+	/** Set when what the last compaction kept, not the estimate, sets the floor. */
+	compactionCeilingKeptTokens?: number;
 	showImages: boolean;
 	imageWidthCells: number;
 	autoResizeImages: boolean;
@@ -1580,7 +1588,11 @@ export class SettingsSelectorComponent extends Container {
 		const compactionCeilingRow: SettingItem = {
 			id: "compaction-ceiling",
 			label: "Compaction ceiling",
-			description: compactionCeilingDescription(config.compactionCeilingTokens, config.compactionCeilingFloorTokens),
+			description: compactionCeilingDescription(
+				config.compactionCeilingTokens,
+				config.compactionCeilingFloorTokens,
+				config.compactionCeilingKeptTokens,
+			),
 			currentValue: formatCompactionCeiling(config.compactionCeilingTokens),
 			values: compactionCeilingValues(config.compactionCeilingTokens),
 		};
@@ -2010,6 +2022,7 @@ export class SettingsSelectorComponent extends Container {
 					compactionCeilingRow.description = compactionCeilingDescription(
 						ceiling,
 						config.compactionCeilingFloorTokens,
+						config.compactionCeilingKeptTokens,
 					);
 					callbacks.onCompactionCeilingChange(ceiling);
 					break;

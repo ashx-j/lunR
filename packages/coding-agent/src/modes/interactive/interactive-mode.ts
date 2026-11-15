@@ -4269,7 +4269,8 @@ export class InteractiveMode {
 				{
 					autoCompact: this.session.autoCompactionEnabled,
 					compactionCeilingTokens: this.settingsManager.getCompactionCeilingTokens(),
-					compactionCeilingFloorTokens: this.session.getCompactionCeilingFloor(),
+					compactionCeilingFloorTokens: this.session.getCompactionCeilingFloor().floor,
+					compactionCeilingKeptTokens: this.session.getCompactionCeilingFloor().keptTokens,
 					showImages: this.settingsManager.getShowImages(),
 					imageWidthCells: this.settingsManager.getImageWidthCells(),
 					autoResizeImages: this.settingsManager.getImageAutoResize(),

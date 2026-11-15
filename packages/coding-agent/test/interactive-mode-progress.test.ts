@@ -42,7 +42,7 @@ function createMode() {
 		footerDataProvider: { dispose: vi.fn() },
 		session: {
 			getAvailableThinkingLevels: () => [],
-			getCompactionCeilingFloor: () => 0,
+			getCompactionCeilingFloor: () => ({ floor: 0 }),
 			isIdle: true,
 			refreshModelFromRegistry: vi.fn(),
 		},

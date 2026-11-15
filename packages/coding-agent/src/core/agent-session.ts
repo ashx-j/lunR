@@ -497,8 +497,10 @@ export class AgentSession {
 	private _systemPromptAppend?: string;
 	// lunr: core-owned tool-call gates (read-only mode) checked before extension tool_call handlers
 	private _toolCallGates: ToolCallGate[] = [];
-	/** Set when a mid-prompt ceiling compaction fails or is cancelled; cleared when the next prompt starts. */
+	/** Set when a ceiling compaction fails or is cancelled; cleared just before the next prompt's opening check. */
 	private _ceilingCompactionFailedThisRun = false;
+	/** `_lastCompactedTokens`: the estimated context size the latest compaction left. Not persisted. */
+	private _compactedContextTokens = 0;
 	private _compactionPrefixCache: { systemPrompt: string; tools: readonly AgentTool[]; tokens: number } | undefined;
 	// lunr: "no questions" for /goal, subagents and ACP Autonomous, separate from the permission mode.
 	private _autonomous = false;
@@ -992,7 +994,6 @@ export class AgentSession {
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
-			this._ceilingCompactionFailedThisRun = false;
 			await this._extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
 			await this._extensionRunner.emit({ type: "agent_end", messages: event.messages });
@@ -1919,6 +1920,8 @@ export class AgentSession {
 		}
 
 		const lastAssistant = this._findLastAssistantMessage();
+		// A new prompt may try a failed ceiling compaction once more; this opening check counts as that try.
+		this._ceilingCompactionFailedThisRun = false;
 		if (lastAssistant) await this._checkCompaction(lastAssistant, false);
 
 		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: input.text }];
@@ -2747,6 +2750,7 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
+			this._recordCompactedSize(estimatedTokensAfter);
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2916,7 +2920,15 @@ export class AgentSession {
 				this._lastCompactedTokens(settings),
 			)
 		) {
-			return await this._runAutoCompaction("threshold", false);
+			const previousCompactionId = compactionEntry?.id;
+			const continued = await this._runAutoCompaction("threshold", false);
+			if (
+				settings.ceilingTokens !== undefined &&
+				getLatestCompactionEntry(this.sessionManager.getBranch())?.id === previousCompactionId
+			) {
+				this._ceilingCompactionFailedThisRun = true;
+			}
+			return continued;
 		}
 		return false;
 	}
@@ -2941,7 +2953,7 @@ export class AgentSession {
 	 * The configured compaction ceiling and the token count this session compacts at (the raised
 	 * ceiling, capped by the window threshold), when a ceiling is set.
 	 */
-	getCompactionCeiling(): { configured: number; effective: number } | undefined {
+	getCompactionCeiling(): { configured: number; effective: number; keptTokens?: number } | undefined {
 		const settings = this.settingsManager.getCompactionSettings();
 		if (settings.ceilingTokens === undefined) return undefined;
 		const effective = compactionThreshold(
@@ -2950,35 +2962,40 @@ export class AgentSession {
 			this._compactionPrefixTokens(settings),
 			this._lastCompactedTokens(settings),
 		);
-		return { configured: settings.ceilingTokens, effective };
-	}
-
-	/** The lowest ceiling this session would use, whatever the setting (`compactionCeilingFloor`). */
-	getCompactionCeilingFloor(): number {
-		const settings = { ...this.settingsManager.getCompactionSettings(), ceilingTokens: 1 };
-		return compactionCeilingFloor(
-			this.model?.contextWindow ?? 0,
-			settings,
-			this._compactionPrefixTokens(settings),
-			this._lastCompactedTokens(settings),
-		);
+		const { keptTokens } = this.getCompactionCeilingFloor();
+		return { configured: settings.ceilingTokens, effective, ...(keptTokens ? { keptTokens } : {}) };
 	}
 
 	/**
-	 * The size of the context the latest compaction left: the reported tokens of the first request
-	 * after it. 0 without a ceiling or before that request, so behavior without a ceiling is unchanged.
+	 * The lowest ceiling this session would use, whatever the setting (`compactionCeilingFloor`), and
+	 * `keptTokens` when what the last compaction kept, not the estimate, sets it. That lasts until the
+	 * next compaction keeps less.
+	 */
+	getCompactionCeilingFloor(): { floor: number; keptTokens?: number } {
+		const settings = { ...this.settingsManager.getCompactionSettings(), ceilingTokens: 1 };
+		const contextWindow = this.model?.contextWindow ?? 0;
+		const prefix = this._compactionPrefixTokens(settings);
+		const kept = this._lastCompactedTokens(settings);
+		const floor = compactionCeilingFloor(contextWindow, settings, prefix, kept);
+		return floor > compactionCeilingFloor(contextWindow, settings, prefix) ? { floor, keptTokens: kept } : { floor };
+	}
+
+	/**
+	 * The estimated size of the context the latest compaction in this process left (system prompt and
+	 * tools plus the summary and kept messages), recorded when it succeeded. An estimate, like the
+	 * mid-prompt check it feeds, so a retried, aborted or zero-usage request can't change it. 0 without
+	 * a ceiling or before the first compaction, so behavior without a ceiling is unchanged.
 	 */
 	private _lastCompactedTokens(settings: CompactionSettings): number {
-		if (!settings.ceilingTokens) return 0;
-		const branch = this.sessionManager.getBranch();
-		let first: AssistantMessage | undefined;
-		for (let i = branch.length - 1; i >= 0; i--) {
-			const entry = branch[i];
-			if (entry.type === "compaction") break;
-			if (entry.type === "message" && entry.message.role === "assistant") first = entry.message;
-		}
-		if (!first || first.stopReason === "error" || first.stopReason === "aborted") return 0;
-		return calculateContextTokens(first.usage);
+		return settings.ceilingTokens ? this._compactedContextTokens : 0;
+	}
+
+	/** Records `_lastCompactedTokens` after a compaction rebuilt the context from `messages`. */
+	private _recordCompactedSize(messagesTokens: number): void {
+		const settings = this.settingsManager.getCompactionSettings();
+		this._compactedContextTokens = settings.ceilingTokens
+			? this._compactionPrefixTokens(settings) + messagesTokens
+			: 0;
 	}
 
 	/**
@@ -3092,6 +3109,7 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
+			this._recordCompactedSize(estimatedTokensAfter);
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as

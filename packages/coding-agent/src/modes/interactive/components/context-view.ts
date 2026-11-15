@@ -8,7 +8,7 @@ export interface ContextViewData {
 	/** provider/model id shown in the box, when known. */
 	model?: string;
 	/** Set when `compaction.ceilingTokens` makes compaction start before the window fills. */
-	compactionCeiling?: { configured: number; effective: number };
+	compactionCeiling?: { configured: number; effective: number; keptTokens?: number };
 }
 
 interface BreakdownRow {
@@ -69,13 +69,15 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 	);
 	const ceiling = data.compactionCeiling;
 	if (ceiling) {
-		const why =
-			ceiling.effective > ceiling.configured
-				? `ceiling ${formatTokens(ceiling.configured)}, raised`
-				: ceiling.effective < ceiling.configured
-					? "window limit, below the ceiling"
-					: "ceiling";
-		content.push(theme.fg("dim", `  Compacts at ${formatTokens(ceiling.effective)} (${why})`));
+		const line =
+			ceiling.effective > ceiling.configured && ceiling.keptTokens
+				? `Compacts at ${formatTokens(ceiling.effective)}: the last compaction kept ${formatTokens(ceiling.keptTokens)}, so lunR waits for twice that. Back to ${formatTokens(ceiling.configured)} after one that keeps less.`
+				: ceiling.effective > ceiling.configured
+					? `Compacts at ${formatTokens(ceiling.effective)} (ceiling ${formatTokens(ceiling.configured)}, raised to twice a compacted context)`
+					: ceiling.effective < ceiling.configured
+						? `Compacts at ${formatTokens(ceiling.effective)} (window limit, below the ceiling)`
+						: `Compacts at ${formatTokens(ceiling.effective)} (ceiling)`;
+		content.push(theme.fg("dim", `  ${line}`));
 	}
 
 	return renderThemedBox(" Context ", content, maxWidth);
