@@ -66,10 +66,12 @@ describe("Claude Code release", () => {
 			vi.stubEnv("PI_CODING_AGENT_DIR", profile);
 			const pinned = managedClaudeCodePath(platform);
 			const root = join(profile, "claude-code");
-			for (const version of ["2.1.263", "2.1.310"]) {
+			// 2.1.263 is older than the pin, 9.0.0 belongs to a newer lunR, 2.1.100 is being downloaded.
+			for (const version of ["2.1.263", "2.1.310", "9.0.0", "2.1.100"]) {
 				mkdirSync(join(root, version), { recursive: true });
 				writeFileSync(join(root, version, "claude"), "");
 			}
+			writeFileSync(join(root, "2.1.100", `claude.${process.pid}.id.download`), "");
 			mkdirSync(join(root, "notes"));
 			const shared = temporaryDirectory();
 			mkdirSync(join(shared, "2.1.200"));
@@ -78,7 +80,7 @@ describe("Claude Code release", () => {
 			// A connection still on the old version keeps every version.
 			expect(await removeOldClaudeCodeVersions(join(root, "2.1.263", "claude"))).toEqual([]);
 			expect(await removeOldClaudeCodeVersions(pinned)).toEqual(["2.1.263"]);
-			expect(readdirSync(root).sort()).toEqual(["2.1.200", "2.1.310", "notes"]);
+			expect(readdirSync(root).sort()).toEqual(["2.1.100", "2.1.200", "2.1.310", "9.0.0", "notes"]);
 			expect(existsSync(join(shared, "2.1.200"))).toBe(true);
 
 			// A claude-code folder that links elsewhere is shared, so nothing in it is removed.

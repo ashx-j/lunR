@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
@@ -342,6 +342,37 @@ function removeOldVersionsOnce(command: string): void {
 	void removeOldClaudeCodeVersions(command).catch(() => {});
 }
 
+/**
+ * The connection whose binary exists. When the in-memory one's binary is gone, another lunR on the profile
+ * logged in with a newer pin and removed the old version, so this reads the saved login once and uses the
+ * version it names.
+ */
+async function currentConnection(connection: ExternalClaudeCodeCredential): Promise<ExternalClaudeCodeCredential> {
+	if (existsSync(connection.command)) return connection;
+	const versions = dirname(dirname(connection.command));
+	if (basename(versions) === "claude-code") {
+		let saved: unknown;
+		try {
+			saved = JSON.parse(await readFile(join(dirname(versions), "auth.json"), "utf8"));
+		} catch {
+			/* Falls through to the missing-binary error. */
+		}
+		const anthropic = isRecord(saved) ? saved.anthropic : undefined;
+		if (isSavedConnection(anthropic) && existsSync(anthropic.command)) return anthropic;
+	}
+	throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
+}
+
+function isSavedConnection(value: unknown): value is ExternalClaudeCodeCredential {
+	return (
+		isRecord(value) &&
+		value.type === "external_claude_code" &&
+		value.version === 3 &&
+		value.manager === "claude-code" &&
+		typeof value.command === "string"
+	);
+}
+
 async function runClaudeCode(
 	connection: ExternalClaudeCodeCredential,
 	request: ClaudeCodeRequest,
@@ -349,8 +380,6 @@ async function runClaudeCode(
 	idleMs: number,
 	upstream: string | undefined,
 ): Promise<Response> {
-	if (!existsSync(connection.command))
-		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
 	const loopback = await ClaudeCodeLoopback.open(request.tools);
 	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-")).catch((error: unknown) => {
 		loopback.close();
@@ -515,7 +544,8 @@ export function claudeCodeFetch(
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			return await runClaudeCode(connection, claudeCodeRequest(body, connection), signal, idleMs, upstream);
+			const current = await currentConnection(connection);
+			return await runClaudeCode(current, claudeCodeRequest(body, current), signal, idleMs, upstream);
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));
