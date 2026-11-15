@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "../src/core/session-manager.ts";
-import { filterAndSortSessions } from "../src/modes/interactive/components/session-selector-search.ts";
+import {
+	filterAndSortSessions,
+	findRegexMatches,
+	getSessionSearchText,
+} from "../src/modes/interactive/components/session-selector-search.ts";
 
 function makeSession(
 	overrides: Partial<SessionInfo> & { id: string; modified: Date; allMessagesText: string },
@@ -37,12 +41,23 @@ describe("session selector search", () => {
 		expect(result.map((s) => s.id)).toEqual(["a"]);
 	});
 
-	it("stops a catastrophic regex instead of freezing the selector", () => {
-		const sessions = [makeSession({ id: "slow", modified: new Date(0), allMessagesText: `${"a".repeat(40)}!` })];
-		const started = performance.now();
-		expect(filterAndSortSessions(sessions, "re:(a+)+$", "recent")).toEqual([]);
-		expect(performance.now() - started).toBeLessThan(1000);
-	});
+	it("runs a regex over a large history in the worker and stops a catastrophic one", async () => {
+		const sessions = Array.from({ length: 200 }, (_, i) =>
+			makeSession({
+				id: `s${i}`,
+				modified: new Date(i),
+				allMessagesText: "fix the build or it will fail. ".repeat(3300),
+			}),
+		);
+		const regex = /fix.*fail/i;
+		const matches = await findRegexMatches(sessions, regex, sessions.map(getSessionSearchText));
+		expect(matches).toBeInstanceOf(Map);
+		if (typeof matches === "string") return;
+		expect(filterAndSortSessions(sessions, "re:fix.*fail", "recent", "all", matches)).toHaveLength(200);
+
+		const slow = [makeSession({ id: "slow", modified: new Date(0), allMessagesText: `${"a".repeat(40)}!` })];
+		expect(await findRegexMatches(slow, /(a+)+$/i, slow.map(getSessionSearchText))).toBe("stopped");
+	}, 20_000);
 
 	it("filters by regex (re:) and is case-insensitive", () => {
 		const sessions: SessionInfo[] = [

@@ -1,6 +1,6 @@
 import type { AgentToolResult, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
-import { Worker } from "node:worker_threads";
+import { searchTexts } from "../../utils/regex-worker.ts";
 import type { McpExtensionState } from "./state.ts";
 import type { ToolMetadata, McpContent } from "./types.ts";
 import { getServerPrefix, parseUiPromptHandoff } from "./types.ts";
@@ -18,53 +18,6 @@ type ProxyToolResult = AgentToolResult<Record<string, unknown>>;
 const MAX_REGEX_SEARCH_QUERY_LENGTH = 256;
 /** Hard limit for one regex search over every tool name and description. */
 const REGEX_SEARCH_TIMEOUT_MS = 100;
-
-// Eval code, so the Node bundle and the Bun binary need no extra worker entry file.
-const REGEX_WORKER_SOURCE = `const { parentPort } = require("node:worker_threads");
-parentPort.on("message", ({ id, source, texts }) => {
-  const pattern = new RegExp(source, "i");
-  parentPort.postMessage({ id, matched: texts.map((text) => pattern.test(text)) });
-});`;
-
-let regexWorker: Worker | undefined;
-let nextRegexSearchId = 0;
-
-/**
- * Tests a model- or user-supplied regex against `texts` in a worker thread, so a backtracking match
- * such as `(a+)+$` never blocks the event loop. On REGEX_SEARCH_TIMEOUT_MS the worker is terminated
- * and the result is undefined. The worker is started on first use and reused.
- */
-function regexMatches(source: string, texts: string[]): Promise<boolean[] | undefined> {
-  if (!regexWorker) {
-    regexWorker = new Worker(REGEX_WORKER_SOURCE, { eval: true });
-    regexWorker.unref();
-  }
-  const worker = regexWorker;
-  const id = nextRegexSearchId++;
-  return new Promise((resolve) => {
-    const finish = (matched: boolean[] | undefined) => {
-      clearTimeout(timer);
-      worker.off("message", onMessage);
-      worker.off("exit", onExit);
-      resolve(matched);
-    };
-    const stop = () => {
-      if (regexWorker === worker) regexWorker = undefined;
-      void worker.terminate();
-    };
-    const onMessage = (message: { id: number; matched: boolean[] }) => {
-      if (message.id === id) finish(message.matched);
-    };
-    const onExit = () => {
-      stop();
-      finish(undefined);
-    };
-    const timer = setTimeout(onExit, REGEX_SEARCH_TIMEOUT_MS);
-    worker.on("message", onMessage);
-    worker.on("exit", onExit);
-    worker.postMessage({ id, source, texts });
-  });
-}
 
 type AutoAuthResult =
   | { status: "skipped" }
@@ -423,7 +376,7 @@ export async function executeSearch(
         };
       }
 
-      // Compiles only, to report a syntax error; matching runs in regexMatches' worker.
+      // Compiles only, to report a syntax error; matching runs in the regex worker.
       pattern = new RegExp(query, "i");
     } else {
       const terms = query.trim().split(/\s+/).filter(t => t.length > 0);
@@ -449,14 +402,21 @@ export async function executeSearch(
     for (const tool of metadata) candidates.push({ server: serverName, tool });
   }
   if (regex) {
-    const found = await regexMatches(query, candidates.flatMap(({ tool }) => [tool.name, tool.description]));
-    if (!found) {
+    const found = await searchTexts(query, "i", candidates.flatMap(({ tool }) => [tool.name, tool.description]), REGEX_SEARCH_TIMEOUT_MS);
+    if (found.kind === "timeout") {
       return {
         content: [{ type: "text" as const, text: `Regex query stopped after ${REGEX_SEARCH_TIMEOUT_MS} ms; simplify the pattern.` }],
         details: { mode: "search", error: "unsafe_pattern", query, timeoutMs: REGEX_SEARCH_TIMEOUT_MS },
       };
     }
-    matches.push(...candidates.filter((_, index) => found[index * 2] || found[index * 2 + 1]));
+    if (found.kind === "unavailable") {
+      return {
+        content: [{ type: "text" as const, text: `Regex search is unavailable: ${found.reason}. Retry, or search without regex.` }],
+        details: { mode: "search", error: "regex_unavailable", query, reason: found.reason },
+      };
+    }
+    const { indexes } = found;
+    matches.push(...candidates.filter((_, index) => indexes[index * 2] >= 0 || indexes[index * 2 + 1] >= 0));
   } else {
     matches.push(...candidates.filter(({ tool }) => pattern.test(tool.name) || pattern.test(tool.description)));
   }

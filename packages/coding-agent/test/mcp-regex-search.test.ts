@@ -32,6 +32,27 @@ describe("MCP regex search", () => {
 		expect(longestGap).toBeLessThan(80);
 	});
 
+	it("starts a new worker for an ordinary search after a catastrophic one stopped the last", async () => {
+		const slow = state([tool("srv_slow", `${"a".repeat(40)}!`)]);
+		const tools = state([tool("srv_read", "Read a file"), tool("srv_write", "Write a file")]);
+		for (let round = 0; round < 3; round++) {
+			expect((await executeSearch(slow, "(a+)+$", true)).details).toMatchObject({ error: "unsafe_pattern" });
+			// The time limit covers matching only, not the new worker's start-up.
+			expect((await executeSearch(tools, "^srv_read$", true)).details).toMatchObject({ count: 1 });
+		}
+	});
+
+	it("gives a search running beside a catastrophic one its own result", async () => {
+		const slow = state([tool("srv_slow", `${"a".repeat(40)}!`)]);
+		const tools = state([tool("srv_read", "Read a file"), tool("srv_write", "Write a file")]);
+		const [stopped, found] = await Promise.all([
+			executeSearch(slow, "(a+)+$", true),
+			executeSearch(tools, "^srv_", true),
+		]);
+		expect(stopped.details).toMatchObject({ error: "unsafe_pattern" });
+		expect(found.details).toMatchObject({ count: 2 });
+	});
+
 	it("matches tool names and descriptions and reports invalid patterns", async () => {
 		const tools = state([
 			tool("srv_read", "Read a file"),

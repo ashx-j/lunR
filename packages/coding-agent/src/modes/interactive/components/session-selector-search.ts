@@ -1,6 +1,6 @@
-import { type Context, createContext, Script } from "node:vm";
 import { fuzzyMatch } from "@earendil-works/pi-tui";
 import type { SessionInfo } from "../../../core/session-manager.ts";
+import { searchTexts } from "../../../utils/regex-worker.ts";
 
 export type SortMode = "threaded" | "recent" | "relevance";
 
@@ -24,7 +24,7 @@ function normalizeWhitespaceLower(text: string): string {
 	return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function getSessionSearchText(session: SessionInfo): string {
+export function getSessionSearchText(session: SessionInfo): string {
 	return `${session.id} ${session.name ?? ""} ${session.allMessagesText} ${session.cwd}`;
 }
 
@@ -114,14 +114,37 @@ export function parseSearchQuery(query: string): ParsedSearchQuery {
 	return { mode: "tokens", tokens, regex: null };
 }
 
-export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): MatchResult {
-	const text = getSessionSearchText(session);
+/** Limit for one regex search over every session. 100 MB of history takes about 30 ms. */
+export const SESSION_REGEX_SEARCH_TIMEOUT_MS = 1000;
 
+/**
+ * Each session's first match of `regex`, found in the regex worker so the user's own pattern cannot
+ * freeze the TUI. `texts` must hold `getSessionSearchText` for each session; pass the same array
+ * object again to reuse the copy the worker keeps.
+ */
+export async function findRegexMatches(
+	sessions: readonly SessionInfo[],
+	regex: RegExp,
+	texts: string[],
+): Promise<ReadonlyMap<SessionInfo, number> | "stopped" | "unavailable"> {
+	const result = await searchTexts(regex.source, regex.flags, texts, SESSION_REGEX_SEARCH_TIMEOUT_MS, {
+		cacheTexts: true,
+	});
+	if (result.kind === "timeout") return "stopped";
+	if (result.kind === "unavailable") return "unavailable";
+	return new Map(sessions.map((session, index) => [session, result.indexes[index] ?? -1]));
+}
+
+export function matchSession(
+	session: SessionInfo,
+	parsed: ParsedSearchQuery,
+	regexMatches?: ReadonlyMap<SessionInfo, number>,
+): MatchResult {
 	if (parsed.mode === "regex") {
 		if (!parsed.regex) {
 			return { matches: false, score: 0 };
 		}
-		const idx = text.search(parsed.regex);
+		const idx = regexMatches?.get(session) ?? getSessionSearchText(session).search(parsed.regex);
 		if (idx < 0) return { matches: false, score: 0 };
 		return { matches: true, score: idx * 0.1 };
 	}
@@ -129,6 +152,8 @@ export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): M
 	if (parsed.tokens.length === 0) {
 		return { matches: true, score: 0 };
 	}
+
+	const text = getSessionSearchText(session);
 
 	let totalScore = 0;
 	let normalizedText: string | null = null;
@@ -154,43 +179,13 @@ export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): M
 	return { matches: true, score: totalScore };
 }
 
-/** Time limit for one regex search over every session, so a backtracking pattern cannot freeze the TUI. */
-const REGEX_SEARCH_TIMEOUT_MS = 25;
-
-let regexSearch: { script: Script; context: Context } | undefined;
-
-/**
- * Index of `regex`'s first match in each text, or undefined when the search hits the time limit.
- * vm's timeout interrupts V8 inside a backtracking match such as `(a+)+$`.
- */
-function searchAll(regex: RegExp, texts: string[]): number[] | undefined {
-	regexSearch ??= { script: new Script("texts.map((text) => text.search(regex))"), context: createContext({}) };
-	const { script, context } = regexSearch;
-	context.regex = regex;
-	context.texts = texts;
-	try {
-		const result: unknown = script.runInContext(context, { timeout: REGEX_SEARCH_TIMEOUT_MS });
-		return Array.isArray(result) ? result.map((index) => (typeof index === "number" ? index : -1)) : undefined;
-	} catch (error) {
-		if (
-			typeof error === "object" &&
-			error !== null &&
-			"code" in error &&
-			error.code === "ERR_SCRIPT_EXECUTION_TIMEOUT"
-		)
-			return undefined;
-		throw error;
-	} finally {
-		context.regex = undefined;
-		context.texts = undefined;
-	}
-}
-
 export function filterAndSortSessions(
 	sessions: SessionInfo[],
 	query: string,
 	sortMode: SortMode,
 	nameFilter: NameFilter = "all",
+	/** Regex match indexes from `findRegexMatches`. Without them a `re:` query runs on this thread. */
+	regexMatches?: ReadonlyMap<SessionInfo, number>,
 ): SessionInfo[] {
 	const nameFiltered =
 		nameFilter === "all" ? sessions : sessions.filter((session) => matchesNameFilter(session, nameFilter));
@@ -199,27 +194,21 @@ export function filterAndSortSessions(
 
 	const parsed = parseSearchQuery(query);
 	if (parsed.error) return [];
-	const regexIndexes = parsed.regex ? searchAll(parsed.regex, nameFiltered.map(getSessionSearchText)) : undefined;
-	if (parsed.regex && !regexIndexes) return [];
-	const match = (session: SessionInfo, index: number): MatchResult => {
-		if (!regexIndexes) return matchSession(session, parsed);
-		const at = regexIndexes[index] ?? -1;
-		return at < 0 ? { matches: false, score: 0 } : { matches: true, score: at * 0.1 };
-	};
 
 	// Recent mode: filter only, keep incoming order.
 	if (sortMode === "recent") {
 		const filtered: SessionInfo[] = [];
-		for (const [index, s] of nameFiltered.entries()) {
-			if (match(s, index).matches) filtered.push(s);
+		for (const s of nameFiltered) {
+			const res = matchSession(s, parsed, regexMatches);
+			if (res.matches) filtered.push(s);
 		}
 		return filtered;
 	}
 
 	// Relevance mode: sort by score, tie-break by modified desc.
 	const scored: { session: SessionInfo; score: number }[] = [];
-	for (const [index, s] of nameFiltered.entries()) {
-		const res = match(s, index);
+	for (const s of nameFiltered) {
+		const res = matchSession(s, parsed, regexMatches);
 		if (!res.matches) continue;
 		scored.push({ session: s, score: res.score });
 	}
