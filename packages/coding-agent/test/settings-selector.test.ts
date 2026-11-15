@@ -78,7 +78,7 @@ const config: SettingsConfig = {
 };
 
 // Records every callback call as "name:args". The selector only calls callbacks after input.
-function createSelector() {
+function createSelector(overrides: Partial<SettingsConfig> = {}) {
 	const calls: string[] = [];
 	const callbacks = new Proxy(
 		{},
@@ -89,7 +89,7 @@ function createSelector() {
 					: (...args: unknown[]) => calls.push(`${String(name)}:${args.join(",")}`),
 		},
 	) as SettingsCallbacks;
-	return { selector: new SettingsSelectorComponent({ ...config }, callbacks), calls };
+	return { selector: new SettingsSelectorComponent({ ...config, ...overrides }, callbacks), calls };
 }
 
 describe("settings selector Advanced submenu", () => {
@@ -119,5 +119,32 @@ describe("settings selector Advanced submenu", () => {
 
 		list.handleInput("\r");
 		expect(selector.render(100).some((line) => line.includes("Clear on shrink"))).toBe(true);
+	});
+});
+
+describe("settings selector compaction ceiling", () => {
+	beforeAll(() => initTheme("moon"));
+	const text = (selector: SettingsSelectorComponent) => selector.render(120).join("\n");
+
+	it("shows a hand-edited ceiling exactly and saves the next choice as a whole number", () => {
+		const { selector, calls } = createSelector({
+			compactionCeilingTokens: 128003,
+			compactionCeilingFloorTokens: 110_000,
+		});
+		const list = selector.getSettingsList();
+		list.handleInput("ceiling");
+		expect(text(selector)).toContain("128003");
+		list.handleInput("\r");
+		expect(calls).toEqual(["onCompactionCeilingChange:150000"]);
+	});
+
+	it("rewrites the raised-ceiling note when the value changes", () => {
+		const { selector } = createSelector({ compactionCeilingTokens: 150_000, compactionCeilingFloorTokens: 160_000 });
+		const list = selector.getSettingsList();
+		list.handleInput("ceiling");
+		expect(text(selector)).toContain("Raised to 160k here");
+		list.handleInput("\r");
+		expect(text(selector)).not.toContain("Raised to");
+		expect(text(selector)).toContain("Compact at this many tokens");
 	});
 });

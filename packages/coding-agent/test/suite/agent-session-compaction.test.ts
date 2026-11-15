@@ -3,6 +3,7 @@ import {
 	type Api,
 	type AssistantMessage,
 	createAssistantMessageEventStream,
+	estimateContextTokens,
 	fauxAssistantMessage,
 	fauxToolCall,
 	type Model,
@@ -254,6 +255,160 @@ describe("AgentSession compaction characterization", () => {
 			aborted: false,
 			willRetry: true,
 		});
+	});
+
+	// One run of tool turns whose reported usage is `usage[i]` per request. Returns, per request, whether it
+	// already carried the compaction summary.
+	async function runToolTurns(harness: Harness, usage: number[]): Promise<boolean[]> {
+		const sawSummary: boolean[] = [];
+		harness.session.agent.streamFn = (_model, context) => {
+			const index = sawSummary.length;
+			sawSummary.push(JSON.stringify(context.messages).includes("ceiling summary"));
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				const last = index === usage.length - 1;
+				const message = createAssistant(harness, {
+					stopReason: last ? "stop" : "toolUse",
+					totalTokens: usage[index],
+				});
+				message.content = last ? [{ type: "text", text: "done" }] : [fauxToolCall("dump", {})];
+				stream.push({ type: "done", reason: message.stopReason, message });
+			});
+			return stream;
+		};
+		await harness.session.prompt("start");
+		return sawSummary;
+	}
+
+	async function createCeilingHarness(
+		toolDescription: string,
+		options: { cancelCompaction?: boolean; seed?: boolean } = {},
+	): Promise<Harness & { compactionAttempts: () => number }> {
+		let attempts = 0;
+		const dumpTool: AgentTool = {
+			name: "dump",
+			label: "Dump",
+			description: toolDescription,
+			parameters: Type.Object({ chars: Type.Optional(Type.Number()) }),
+			execute: async (_id, params) => ({
+				content: [{ type: "text", text: "x".repeat(typeof params.chars === "number" ? params.chars : 800) }],
+				details: {},
+			}),
+		};
+		const harness = await createHarness({
+			models: [{ id: "big-window", contextWindow: 1_000_000, maxTokens: 100 }],
+			tools: [dumpTool],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => {
+						attempts++;
+						if (options.cancelCompaction) return { cancel: true };
+						return {
+							compaction: {
+								summary: "ceiling summary",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+							},
+						};
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		if (options.seed !== false) seedCompactableSession(harness);
+		harness.settingsManager.applyOverrides({
+			compaction: { reserveTokens: 100, keepRecentTokens: 1, ceilingTokens: 5000 },
+		});
+		return Object.assign(harness, { compactionAttempts: () => attempts });
+	}
+
+	// Tool turns whose results have `resultChars[i]` characters, with usage reported as the request's real
+	// estimated size, as a provider would. `errorAt` makes that request fail once with a retryable 529.
+	async function runSizedTurns(
+		harness: Harness,
+		resultChars: number[],
+		options: { prompt?: string; errorAt?: number } = {},
+	): Promise<number> {
+		let requests = 0;
+		let failed = false;
+		let turn = 0;
+		harness.session.agent.streamFn = (_model, context) => {
+			const index = requests++;
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				if (index === options.errorAt && !failed) {
+					failed = true;
+					const error = createAssistant(harness, {
+						stopReason: "error",
+						errorMessage: "529 overloaded_error: Overloaded",
+					});
+					stream.push({ type: "error", reason: "error", error });
+					return;
+				}
+				const last = turn === resultChars.length;
+				const message = createAssistant(harness, {
+					stopReason: last ? "stop" : "toolUse",
+					totalTokens: estimateContextTokens(context).tokens,
+				});
+				message.content = last
+					? [{ type: "text", text: "done" }]
+					: [fauxToolCall("dump", { chars: resultChars[turn] })];
+				turn++;
+				stream.push({ type: "done", reason: message.stopReason, message });
+			});
+			return stream;
+		};
+		await harness.session.prompt(options.prompt ?? "start");
+		return harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction").length;
+	}
+
+	it("waits until the context grows by what the last compaction kept before compacting again", async () => {
+		// Each tool result is about 6000 tokens, more than the 5000 ceiling, so a compaction keeps more
+		// than the ceiling and the next one waits for twice what it kept: every other turn, not every turn.
+		const harness = await createCeilingHarness("Return a large result");
+		expect(await runSizedTurns(harness, Array(6).fill(24_000))).toBe(3);
+	});
+
+	it("is not thrown off by a failed request right after a compaction", async () => {
+		const plain = await createCeilingHarness("Return a large result");
+		const withRetry = await createCeilingHarness("Return a large result");
+		withRetry.settingsManager.applyOverrides({ retry: { baseDelayMs: 1 } });
+		const expected = await runSizedTurns(plain, Array(6).fill(24_000));
+		// Request 1 is the first one after the compaction that the first big result triggers.
+		expect(await runSizedTurns(withRetry, Array(6).fill(24_000), { errorAt: 1 })).toBe(expected);
+	});
+
+	it("compacts a large first prompt at the configured ceiling", async () => {
+		// A fresh session: nothing before the prompt, which is about 4500 tokens on its own.
+		const harness = await createCeilingHarness("Return a large result", { seed: false });
+		// 2000-character results add about 500 tokens a turn, so the first tool turn crosses 5000.
+		expect(await runSizedTurns(harness, [2000, 2000, 2000], { prompt: `start ${"word ".repeat(3600)}` })).toBe(1);
+	});
+
+	it("does not retry a failed ceiling compaction until the next prompt", async () => {
+		const harness = await createCeilingHarness("Return a large result", { cancelCompaction: true });
+		await runToolTurns(harness, [6000, 7000, 8000, 9000, 100]);
+		expect(harness.compactionAttempts()).toBe(1);
+		await runToolTurns(harness, [9000, 9500, 100]);
+		expect(harness.compactionAttempts()).toBe(2);
+	});
+
+	it("compacts at the ceiling between tool turns on any provider, inside one prompt", async () => {
+		const harness = await createCeilingHarness("Return a large result");
+		const sawSummary = await runToolTurns(harness, [3000, 6000, 1000, 100]);
+		// The request after the turn that crossed 5000 tokens already carries the summary.
+		expect(sawSummary).toEqual([false, false, true, true]);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+	});
+
+	it("counts the system prompt and tool schemas when it raises a low ceiling", async () => {
+		// About 10k tokens of tool schema raise the 5000-token ceiling to about 20k.
+		const harness = await createCeilingHarness("y ".repeat(20_000));
+		const sawSummary = await runToolTurns(harness, [15_000, 15_000, 15_000]);
+		expect(sawSummary).toEqual([false, false, false]);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+		expect(harness.session.getCompactionCeiling()?.configured).toBe(5000);
+		expect(harness.session.getCompactionCeiling()?.effective).toBeGreaterThan(20_000);
 	});
 
 	it("cancels in-progress manual compaction when abortCompaction is called", async () => {

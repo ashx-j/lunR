@@ -319,3 +319,26 @@ describe("splitSystemPromptSections", () => {
 		expect(breakdown.skills).toBeGreaterThan(0);
 	});
 });
+
+describe("renderContextBox compaction ceiling", () => {
+	it("says why the ceiling is raised and when it comes back down", () => {
+		const breakdown = computeContextBreakdown({
+			systemPrompt: "x",
+			tools: TOOLS,
+			messages: [],
+			contextWindow: 1_000_000,
+		});
+		const kept = renderContextBox(
+			{ breakdown, compactionCeiling: { configured: 150_000, effective: 236_000, keptTokens: 118_000 } },
+			200,
+		).join("\n");
+		expect(kept).toContain(
+			"Compacts at 236k: the last compaction kept 118k, so lunR waits for twice that. Back to 150k after one that keeps less.",
+		);
+		const estimate = renderContextBox(
+			{ breakdown, compactionCeiling: { configured: 10_000, effective: 111_000 } },
+			200,
+		).join("\n");
+		expect(estimate).toContain("Compacts at 111k (ceiling 10k, raised to twice a compacted context)");
+	});
+});

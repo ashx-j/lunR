@@ -4172,8 +4172,9 @@ export class InteractiveMode {
 		};
 
 		try {
-			if (options?.willRetry) {
-				// When retry is pending, queue messages for the retry turn
+			// A retry is pending, or a compaction between tool turns ended (failed or cancelled included)
+			// while the run goes on: queue the messages into that run instead of starting a new prompt.
+			if (options?.willRetry || this.session.isStreaming) {
 				for (const message of queuedMessages) {
 					if (this.isExtensionCommand(message.text)) {
 						await this.promptAfterDeferredBuiltins(message.text);
@@ -4267,6 +4268,9 @@ export class InteractiveMode {
 			const selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
+					compactionCeilingTokens: this.settingsManager.getCompactionCeilingTokens(),
+					compactionCeilingFloorTokens: this.session.getCompactionCeilingFloor().floor,
+					compactionCeilingKeptTokens: this.session.getCompactionCeilingFloor().keptTokens,
 					showImages: this.settingsManager.getShowImages(),
 					imageWidthCells: this.settingsManager.getImageWidthCells(),
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
@@ -4347,6 +4351,9 @@ export class InteractiveMode {
 					onAutoCompactChange: (enabled) => {
 						this.session.setAutoCompactionEnabled(enabled);
 						this.footer.setAutoCompactEnabled(enabled);
+					},
+					onCompactionCeilingChange: (ceilingTokens) => {
+						this.settingsManager.setCompactionCeilingTokens(ceilingTokens);
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
@@ -5891,7 +5898,10 @@ export class InteractiveMode {
 			return;
 		}
 
-		const lines = renderContextBox({ breakdown, model: `${model.provider}/${model.id}` }, this.ui.terminal.columns);
+		const lines = renderContextBox(
+			{ breakdown, model: `${model.provider}/${model.id}`, compactionCeiling: this.session.getCompactionCeiling() },
+			this.ui.terminal.columns,
+		);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		this.ui.requestRender();
