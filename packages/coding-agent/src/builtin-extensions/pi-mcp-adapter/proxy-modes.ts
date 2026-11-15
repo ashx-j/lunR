@@ -1,6 +1,6 @@
 import type { AgentToolResult, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
-import { createContext, Script, type Context } from "node:vm";
+import { Worker } from "node:worker_threads";
 import type { McpExtensionState } from "./state.ts";
 import type { ToolMetadata, McpContent } from "./types.ts";
 import { getServerPrefix, parseUiPromptHandoff } from "./types.ts";
@@ -19,30 +19,51 @@ const MAX_REGEX_SEARCH_QUERY_LENGTH = 256;
 /** Hard limit for one regex search over every tool name and description. */
 const REGEX_SEARCH_TIMEOUT_MS = 100;
 
-let regexSearch: { script: Script; context: Context } | undefined;
+// Eval code, so the Node bundle and the Bun binary need no extra worker entry file.
+const REGEX_WORKER_SOURCE = `const { parentPort } = require("node:worker_threads");
+parentPort.on("message", ({ id, source, texts }) => {
+  const pattern = new RegExp(source, "i");
+  parentPort.postMessage({ id, matched: texts.map((text) => pattern.test(text)) });
+});`;
+
+let regexWorker: Worker | undefined;
+let nextRegexSearchId = 0;
 
 /**
- * Tests a model- or user-supplied regex against `texts` in a vm context, because vm's timeout
- * interrupts V8 inside a backtracking match such as `(a+)+$` against MCP-supplied descriptions.
- * Returns undefined when the search hits REGEX_SEARCH_TIMEOUT_MS.
+ * Tests a model- or user-supplied regex against `texts` in a worker thread, so a backtracking match
+ * such as `(a+)+$` never blocks the event loop. On REGEX_SEARCH_TIMEOUT_MS the worker is terminated
+ * and the result is undefined. The worker is started on first use and reused.
  */
-function regexMatches(source: string, texts: string[]): boolean[] | undefined {
-  regexSearch ??= {
-    script: new Script("((pattern) => texts.map((text) => pattern.test(text)))(new RegExp(source, 'i'))"),
-    context: createContext({}),
-  };
-  const { script, context } = regexSearch;
-  context.source = source;
-  context.texts = texts;
-  try {
-    const result: unknown = script.runInContext(context, { timeout: REGEX_SEARCH_TIMEOUT_MS });
-    return Array.isArray(result) ? result.map((matched) => matched === true) : undefined;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ERR_SCRIPT_EXECUTION_TIMEOUT") return undefined;
-    throw error;
-  } finally {
-    context.texts = undefined;
+function regexMatches(source: string, texts: string[]): Promise<boolean[] | undefined> {
+  if (!regexWorker) {
+    regexWorker = new Worker(REGEX_WORKER_SOURCE, { eval: true });
+    regexWorker.unref();
   }
+  const worker = regexWorker;
+  const id = nextRegexSearchId++;
+  return new Promise((resolve) => {
+    const finish = (matched: boolean[] | undefined) => {
+      clearTimeout(timer);
+      worker.off("message", onMessage);
+      worker.off("exit", onExit);
+      resolve(matched);
+    };
+    const stop = () => {
+      if (regexWorker === worker) regexWorker = undefined;
+      void worker.terminate();
+    };
+    const onMessage = (message: { id: number; matched: boolean[] }) => {
+      if (message.id === id) finish(message.matched);
+    };
+    const onExit = () => {
+      stop();
+      finish(undefined);
+    };
+    const timer = setTimeout(onExit, REGEX_SEARCH_TIMEOUT_MS);
+    worker.on("message", onMessage);
+    worker.on("exit", onExit);
+    worker.postMessage({ id, source, texts });
+  });
 }
 
 type AutoAuthResult =
@@ -381,13 +402,13 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
   };
 }
 
-export function executeSearch(
+export async function executeSearch(
   state: McpExtensionState,
   query: string,
   regex?: boolean,
   server?: string,
   includeSchemas?: boolean,
-): ProxyToolResult {
+): Promise<ProxyToolResult> {
   const showSchemas = includeSchemas !== false;
 
   const matches: Array<{ server: string; tool: ToolMetadata }> = [];
@@ -402,7 +423,7 @@ export function executeSearch(
         };
       }
 
-      // Compiles only, to report a syntax error; matching runs under regexMatches' time limit.
+      // Compiles only, to report a syntax error; matching runs in regexMatches' worker.
       pattern = new RegExp(query, "i");
     } else {
       const terms = query.trim().split(/\s+/).filter(t => t.length > 0);
@@ -428,7 +449,7 @@ export function executeSearch(
     for (const tool of metadata) candidates.push({ server: serverName, tool });
   }
   if (regex) {
-    const found = regexMatches(query, candidates.flatMap(({ tool }) => [tool.name, tool.description]));
+    const found = await regexMatches(query, candidates.flatMap(({ tool }) => [tool.name, tool.description]));
     if (!found) {
       return {
         content: [{ type: "text" as const, text: `Regex query stopped after ${REGEX_SEARCH_TIMEOUT_MS} ms; simplify the pattern.` }],

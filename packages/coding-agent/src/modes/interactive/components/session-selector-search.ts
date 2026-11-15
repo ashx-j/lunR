@@ -1,3 +1,4 @@
+import { type Context, createContext, Script } from "node:vm";
 import { fuzzyMatch } from "@earendil-works/pi-tui";
 import type { SessionInfo } from "../../../core/session-manager.ts";
 
@@ -153,6 +154,38 @@ export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): M
 	return { matches: true, score: totalScore };
 }
 
+/** Time limit for one regex search over every session, so a backtracking pattern cannot freeze the TUI. */
+const REGEX_SEARCH_TIMEOUT_MS = 25;
+
+let regexSearch: { script: Script; context: Context } | undefined;
+
+/**
+ * Index of `regex`'s first match in each text, or undefined when the search hits the time limit.
+ * vm's timeout interrupts V8 inside a backtracking match such as `(a+)+$`.
+ */
+function searchAll(regex: RegExp, texts: string[]): number[] | undefined {
+	regexSearch ??= { script: new Script("texts.map((text) => text.search(regex))"), context: createContext({}) };
+	const { script, context } = regexSearch;
+	context.regex = regex;
+	context.texts = texts;
+	try {
+		const result: unknown = script.runInContext(context, { timeout: REGEX_SEARCH_TIMEOUT_MS });
+		return Array.isArray(result) ? result.map((index) => (typeof index === "number" ? index : -1)) : undefined;
+	} catch (error) {
+		if (
+			typeof error === "object" &&
+			error !== null &&
+			"code" in error &&
+			error.code === "ERR_SCRIPT_EXECUTION_TIMEOUT"
+		)
+			return undefined;
+		throw error;
+	} finally {
+		context.regex = undefined;
+		context.texts = undefined;
+	}
+}
+
 export function filterAndSortSessions(
 	sessions: SessionInfo[],
 	query: string,
@@ -166,21 +199,27 @@ export function filterAndSortSessions(
 
 	const parsed = parseSearchQuery(query);
 	if (parsed.error) return [];
+	const regexIndexes = parsed.regex ? searchAll(parsed.regex, nameFiltered.map(getSessionSearchText)) : undefined;
+	if (parsed.regex && !regexIndexes) return [];
+	const match = (session: SessionInfo, index: number): MatchResult => {
+		if (!regexIndexes) return matchSession(session, parsed);
+		const at = regexIndexes[index] ?? -1;
+		return at < 0 ? { matches: false, score: 0 } : { matches: true, score: at * 0.1 };
+	};
 
 	// Recent mode: filter only, keep incoming order.
 	if (sortMode === "recent") {
 		const filtered: SessionInfo[] = [];
-		for (const s of nameFiltered) {
-			const res = matchSession(s, parsed);
-			if (res.matches) filtered.push(s);
+		for (const [index, s] of nameFiltered.entries()) {
+			if (match(s, index).matches) filtered.push(s);
 		}
 		return filtered;
 	}
 
 	// Relevance mode: sort by score, tie-break by modified desc.
 	const scored: { session: SessionInfo; score: number }[] = [];
-	for (const s of nameFiltered) {
-		const res = matchSession(s, parsed);
+	for (const [index, s] of nameFiltered.entries()) {
+		const res = match(s, index);
 		if (!res.matches) continue;
 		scored.push({ session: s, score: res.score });
 	}

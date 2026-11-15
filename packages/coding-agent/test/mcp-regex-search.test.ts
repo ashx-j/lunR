@@ -9,21 +9,37 @@ function state(tools: ToolMetadata[]): McpExtensionState {
 const tool = (name: string, description: string): ToolMetadata => ({ name, originalName: name, description });
 
 describe("MCP regex search", () => {
-	it("stops a catastrophic pattern against a long description within the time limit", () => {
-		const started = performance.now();
-		const result = executeSearch(state([tool("srv_slow", `${"a".repeat(40)}!`)]), "(a+)+$", true);
-		expect(performance.now() - started).toBeLessThan(1000);
-		expect(result.details).toMatchObject({ error: "unsafe_pattern" });
+	it("runs a pattern that can backtrack when the text does not make it", async () => {
+		const result = await executeSearch(state([tool("srv_a", "aaa")]), "(a+)+$", true);
+		expect(result.details).toMatchObject({ count: 1 });
 	});
 
-	it("matches tool names and descriptions and reports invalid patterns", () => {
+	it("stops a catastrophic match without blocking the event loop", async () => {
+		await executeSearch(state([tool("srv_warm", "warm")]), "warm", true);
+		let last = performance.now();
+		let longestGap = 0;
+		const ticker = setInterval(() => {
+			const now = performance.now();
+			longestGap = Math.max(longestGap, now - last);
+			last = now;
+		}, 5);
+		const result = await executeSearch(state([tool("srv_slow", `${"a".repeat(40)}!`)]), "(a+)+$", true);
+		// Let the ticker run once more, so a search that blocked the loop shows up as a gap.
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		clearInterval(ticker);
+		expect(result.details).toMatchObject({ error: "unsafe_pattern" });
+		// The match runs off the main thread, so the loop keeps ticking through the 100 ms limit.
+		expect(longestGap).toBeLessThan(80);
+	});
+
+	it("matches tool names and descriptions and reports invalid patterns", async () => {
 		const tools = state([
 			tool("srv_read", "Read a file"),
 			tool("srv_write", "Write a file"),
 			tool("srv_list", "List items"),
 		]);
-		expect(executeSearch(tools, "^srv_(read|write)$", true).details).toMatchObject({ count: 2 });
-		expect(executeSearch(tools, "items$", true).details).toMatchObject({ count: 1 });
-		expect(executeSearch(tools, "(", true).details).toMatchObject({ error: "invalid_pattern" });
+		expect((await executeSearch(tools, "^srv_(read|write)$", true)).details).toMatchObject({ count: 2 });
+		expect((await executeSearch(tools, "items$", true)).details).toMatchObject({ count: 1 });
+		expect((await executeSearch(tools, "(", true)).details).toMatchObject({ error: "invalid_pattern" });
 	});
 });

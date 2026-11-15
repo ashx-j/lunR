@@ -37,6 +37,13 @@ describe("session selector search", () => {
 		expect(result.map((s) => s.id)).toEqual(["a"]);
 	});
 
+	it("stops a catastrophic regex instead of freezing the selector", () => {
+		const sessions = [makeSession({ id: "slow", modified: new Date(0), allMessagesText: `${"a".repeat(40)}!` })];
+		const started = performance.now();
+		expect(filterAndSortSessions(sessions, "re:(a+)+$", "recent")).toEqual([]);
+		expect(performance.now() - started).toBeLessThan(1000);
+	});
+
 	it("filters by regex (re:) and is case-insensitive", () => {
 		const sessions: SessionInfo[] = [
 			makeSession({
