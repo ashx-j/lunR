@@ -23,6 +23,8 @@ Use `/login` in interactive mode, then select a provider:
 
 Use `/logout` to remove the lunR connection. Most subscription providers store refreshable tokens in `~/.lunr/agent/auth.json`. Anthropic uses a non-secret Claude Code connection record instead.
 
+There is no Google sign-in, because Google often bans accounts used this way. lunR ignores a Google OAuth record left in `auth.json` by another tool. Use a Gemini API key instead.
+
 ### OpenAI Codex
 
 - Requires ChatGPT Plus or Pro subscription
