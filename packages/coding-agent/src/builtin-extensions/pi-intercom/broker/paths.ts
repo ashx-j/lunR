@@ -1,5 +1,6 @@
-import { chmodSync, mkdirSync, readFileSync } from "fs";
-import { isAbsolute, join, resolve } from "path";
+import { chmodSync, lstatSync, mkdirSync, readFileSync } from "fs";
+import { createHash } from "crypto";
+import { dirname, isAbsolute, join, resolve } from "path";
 import { homedir } from "os";
 
 export const INTERCOM_DIR_MODE = 0o700;
@@ -64,6 +65,18 @@ export function getBrokerPortFilePath(intercomDir: string = getIntercomDirPath()
   return join(intercomDir, "broker.port.json");
 }
 
+// sun_path holds 108 bytes on Linux and 104 on macOS and the BSDs, including the NUL.
+function maxSocketPathBytes(platform: NodeJS.Platform): number {
+  return platform === "linux" ? 107 : 103;
+}
+
+/**
+ * Broker socket path shared by the broker and its clients. The socket lives in the profile's
+ * intercom dir when that path fits in sun_path, so existing profiles keep their socket. A longer
+ * profile path gets a per-user private dir under /tmp and a socket named by a hash of the agent
+ * dir. The base dir ignores the environment, so sessions that see different XDG_RUNTIME_DIR or
+ * TMPDIR values (a systemd service, cron, ssh) still share one broker per profile.
+ */
 export function getBrokerSocketPath(
   platform: NodeJS.Platform = process.platform,
   agentDir: string = getAgentDirPath(),
@@ -72,7 +85,39 @@ export function getBrokerSocketPath(
     return `\\\\.\\pipe\\pi-intercom-${sanitizePipeSegment(agentDir)}`;
   }
 
-  return join(getIntercomDirPath(agentDir), "broker.sock");
+  const profileSocket = join(getIntercomDirPath(agentDir), "broker.sock");
+  if (Buffer.byteLength(profileSocket) <= maxSocketPathBytes(platform)) {
+    return profileSocket;
+  }
+
+  const hash = createHash("sha256").update(agentDir).digest("hex").slice(0, 16);
+  return join("/tmp", `lunr-intercom-${process.getuid?.() ?? "user"}`, `${hash}.sock`);
+}
+
+/**
+ * Creates the directory that holds a short socket path. Refuses one that is a symlink, belongs to
+ * another user or has any group or other permission bits, because anyone could have created the
+ * fixed /tmp name first or left a socket in it. The error names the dir so the user can remove it.
+ */
+export function ensurePrivateSocketDir(socketPath: string, agentDir: string = getAgentDirPath()): void {
+  const socketDir = dirname(socketPath);
+  if (socketDir === getIntercomDirPath(agentDir)) {
+    return;
+  }
+
+  mkdirSync(socketDir, { recursive: true, mode: INTERCOM_DIR_MODE });
+  const stat = lstatSync(socketDir);
+  const uid = process.getuid?.();
+  const problem = !stat.isDirectory()
+    ? "is not a directory"
+    : uid !== undefined && stat.uid !== uid
+      ? `is owned by uid ${stat.uid}, not ${uid}`
+      : stat.mode & 0o077
+        ? `has mode ${(stat.mode & 0o777).toString(8).padStart(4, "0")}; it must be 0700`
+        : undefined;
+  if (problem) {
+    throw new Error(`Intercom socket directory ${socketDir} ${problem}. Remove it and start lunR again.`);
+  }
 }
 
 export function getBrokerConnectTarget(
@@ -103,7 +148,12 @@ export function getBrokerConnectTarget(
     return { transport: "tcp", host: endpoint.host, port: endpoint.port, stateId: endpoint.stateId };
   }
 
-  return getBrokerSocketPath(platform, getAgentDirPath(env));
+  const agentDir = getAgentDirPath(env);
+  const socketPath = getBrokerSocketPath(platform, agentDir);
+  if (platform !== "win32") {
+    ensurePrivateSocketDir(socketPath, agentDir);
+  }
+  return socketPath;
 }
 
 export function getBrokerListenTarget(
