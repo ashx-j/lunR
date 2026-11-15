@@ -1,8 +1,19 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, fstatSync, mkdtempSync, openSync, readSync, rmSync, writeSync } from "node:fs";
-import { constants, tmpdir } from "node:os";
+import {
+	appendFileSync,
+	closeSync,
+	fstatSync,
+	mkdtempSync,
+	openSync,
+	readdirSync,
+	readSync,
+	rmSync,
+	writeSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai/compat";
+import onExit from "signal-exit";
 import { type Static, Type } from "typebox";
 import { getShellConfig, killProcessTree } from "../../utils/shell.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
@@ -15,7 +26,10 @@ export interface BashJob {
 	logPath: string;
 	/** Log bytes the model has already read. */
 	readOffset: number;
+	/** The shell's exit. Processes it started with `&` can outlive it, see childrenRunning. */
 	exit?: { code: number | null; signal: NodeJS.Signals | null };
+	/** The shell exited but its process group still has members, so the job still runs. */
+	childrenRunning: boolean;
 	/** Set when bash_job or session end stopped the job, so its exit is not announced. */
 	stopped: boolean;
 	/** Set once the model has seen the exit, in a read or a notice. */
@@ -24,41 +38,58 @@ export interface BashJob {
 
 /** Process groups of every running job in this process, stopped when lunR exits. */
 const liveJobPids = new Set<number>();
+/** Log dirs of every session in this process, removed when lunR exits. */
+const liveLogDirs = new Set<string>();
 let exitHookInstalled = false;
-const signalHooks = new Map<NodeJS.Signals, () => void>();
+const LOG_DIR_PREFIX = "lunr-jobs-";
 
 function stopLiveJobs(): void {
 	for (const pid of liveJobPids) killProcessTree(pid);
 	liveJobPids.clear();
+	try {
+		for (const dir of liveLogDirs) rmSync(dir, { recursive: true, force: true });
+	} catch {}
+	liveLogDirs.clear();
 }
 
 /**
  * Every mode reaches `exit`, so one hook covers TUI, print, RPC, ACP and subagent children.
- * A signal ends the process without `exit`, so a signal hook runs first, stops the jobs and
- * removes itself. Then the other listeners decide as before: `signal-exit` (from proper-lockfile)
- * re-raises only when its own listeners are all that is left. With no listener left, the hook
- * exits with the default action's code, because Node swallows a signal re-raised in its handler.
- * The next job start installs the hook again.
+ * signal-exit also runs it for a signal that ends lunR, but not for one a listener keeps lunR
+ * alive through (the SIGINT guard while the TUI is suspended, the gateway's restart).
  */
-function installProcessHooks(): void {
-	if (!exitHookInstalled) {
-		exitHookInstalled = true;
-		process.once("exit", stopLiveJobs);
-	}
-	const signals: NodeJS.Signals[] =
-		process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
-	for (const signal of signals) {
-		if (signalHooks.has(signal)) continue;
-		const onSignal = () => {
-			stopLiveJobs();
-			process.off(signal, onSignal);
-			signalHooks.delete(signal);
-			if (process.listenerCount(signal) === 0) process.exit(128 + constants.signals[signal]);
-		};
-		signalHooks.set(signal, onSignal);
-		process.prependListener(signal, onSignal);
+function installExitHook(): void {
+	if (exitHookInstalled) return;
+	exitHookInstalled = true;
+	process.once("exit", stopLiveJobs);
+	onExit(stopLiveJobs);
+}
+
+function pidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "EPERM";
 	}
 }
+
+/**
+ * Log dirs carry their lunR pid. A lunR killed with SIGKILL leaves its dir, so the first job of
+ * a later lunR removes the dirs whose lunR is gone. Their job processes cannot be stopped safely,
+ * because the pids may belong to other processes by now.
+ */
+function removeOrphanedLogDirs(): void {
+	try {
+		for (const name of readdirSync(tmpdir())) {
+			if (!name.startsWith(LOG_DIR_PREFIX)) continue;
+			const pid = Number.parseInt(name.slice(LOG_DIR_PREFIX.length), 10);
+			if (pid > 0 && pid !== process.pid && !pidAlive(pid)) {
+				rmSync(join(tmpdir(), name), { recursive: true, force: true });
+			}
+		}
+	} catch {}
+}
+let orphanedLogDirsRemoved = false;
 
 /**
  * Background jobs the bash tool starts with `run_in_background`, owned by one session.
@@ -74,7 +105,15 @@ export class BashJobs {
 
 	start(command: string, cwd: string, env: NodeJS.ProcessEnv, shellPath?: string): BashJob {
 		const shellConfig = getShellConfig(shellPath);
-		this.logDir ??= mkdtempSync(join(tmpdir(), "lunr-jobs-"));
+		if (!this.logDir) {
+			if (!orphanedLogDirsRemoved) {
+				orphanedLogDirsRemoved = true;
+				removeOrphanedLogDirs();
+			}
+			installExitHook();
+			this.logDir = mkdtempSync(join(tmpdir(), `${LOG_DIR_PREFIX}${process.pid}-`));
+			liveLogDirs.add(this.logDir);
+		}
 		const id = `j${this.nextId++}`;
 		const logPath = join(this.logDir, `${id}.log`);
 		const logFd = openSync(logPath, "a");
@@ -98,16 +137,24 @@ export class BashJobs {
 		}
 		// A job never keeps lunR alive; the exit hook stops it instead.
 		child.unref();
-		const job: BashJob = { id, command, pid: child.pid, logPath, readOffset: 0, stopped: false, exitReported: false };
+		const job: BashJob = {
+			id,
+			command,
+			pid: child.pid,
+			logPath,
+			readOffset: 0,
+			childrenRunning: false,
+			stopped: false,
+			exitReported: false,
+		};
 		this.jobs.set(id, job);
-		if (child.pid) {
-			installProcessHooks();
-			liveJobPids.add(child.pid);
-		}
+		if (child.pid) liveJobPids.add(child.pid);
 		const finish = (code: number | null, signal: NodeJS.Signals | null) => {
 			if (job.exit) return;
 			job.exit = { code, signal };
-			if (job.pid) liveJobPids.delete(job.pid);
+			// The job runs in its own process group, so `cmd &` children keep it alive and in reach of stop.
+			job.childrenRunning = !job.stopped && job.pid !== undefined && groupAlive(job.pid);
+			if (job.pid && !job.childrenRunning) liveJobPids.delete(job.pid);
 			if (!job.stopped) this.unreported.push(job);
 			this.emitChange();
 		};
@@ -125,7 +172,7 @@ export class BashJobs {
 	}
 
 	running(): BashJob[] {
-		return [...this.jobs.values()].filter((job) => !job.exit);
+		return [...this.jobs.values()].filter((job) => isRunning(job));
 	}
 
 	/** New output since the last read, capped like bash output. Says how much it left out. */
@@ -142,18 +189,24 @@ export class BashJobs {
 			const truncation = truncateTail(buffer.toString("utf-8"), { maxLines: DEFAULT_MAX_LINES });
 			const dropped = skipped + truncation.totalBytes - truncation.outputBytes;
 			parts.push(truncation.content.replace(/\n$/, "") || "(no new output)");
-			if (dropped > 0) parts.push(`[${formatSize(dropped)} of earlier output left out. Full log: ${job.logPath}]`);
+			if (dropped > 0) {
+				parts.push(
+					`[${formatSize(dropped)} of earlier output left out. Full log, deleted when the session ends: ${job.logPath}]`,
+				);
+			}
 		} finally {
 			closeSync(fd);
 		}
 		parts.push(`[${describeStatus(job)}]`);
-		if (job.exit) job.exitReported = true;
+		if (job.exit && !job.childrenRunning) job.exitReported = true;
 		return parts.join("\n");
 	}
 
+	/** Stops the job's whole process group, also after its shell exited. */
 	stop(job: BashJob): void {
-		if (job.exit) return;
+		if (!isRunning(job)) return;
 		job.stopped = true;
+		job.childrenRunning = false;
 		if (job.pid) {
 			killProcessTree(job.pid);
 			liveJobPids.delete(job.pid);
@@ -164,7 +217,10 @@ export class BashJobs {
 	stopAll(): void {
 		for (const job of this.jobs.values()) this.stop(job);
 		this.unreported = [];
-		if (this.logDir) rmSync(this.logDir, { recursive: true, force: true });
+		if (this.logDir) {
+			rmSync(this.logDir, { recursive: true, force: true });
+			liveLogDirs.delete(this.logDir);
+		}
 		this.logDir = undefined;
 		this.jobs.clear();
 		this.emitChange();
@@ -199,9 +255,23 @@ function appendLog(path: string, text: string): void {
 	} catch {}
 }
 
+/** Whether the job still runs. Clears childrenRunning once the exited shell's group is gone. */
+function isRunning(job: BashJob): boolean {
+	if (job.stopped) return false;
+	if (!job.exit) return true;
+	if (job.childrenRunning && job.pid !== undefined && !groupAlive(job.pid)) {
+		job.childrenRunning = false;
+		liveJobPids.delete(job.pid);
+	}
+	return job.childrenRunning;
+}
+
 function describeStatus(job: BashJob): string {
 	if (!job.exit) return job.stopped ? "stopping" : "running";
 	if (job.stopped) return "stopped";
+	if (isRunning(job)) {
+		return `shell exited with code ${job.exit.code}, but processes it started are still running (bash_job stop ends them)`;
+	}
 	if (job.exit.code !== null) return `exited with code ${job.exit.code}`;
 	return job.exit.signal ? `was killed by ${job.exit.signal}` : "ended without an exit code";
 }
@@ -232,7 +302,7 @@ export function createBashJobToolDefinition(jobs: BashJobs): ToolDefinition<type
 				throw new Error(`No job ${id}. Running jobs: ${known.length > 0 ? known.join(", ") : "none"}`);
 			}
 			if (action === "stop") {
-				const wasRunning = !job.exit;
+				const wasRunning = jobs.running().includes(job);
 				jobs.stop(job);
 				job.exitReported = true;
 				return {
@@ -255,7 +325,9 @@ const leftovers = new Map<number, string>();
 const MAX_LEFTOVERS = 50;
 let leftoverHookInstalled = false;
 
+/** Always false on Windows, which has no process groups; there a job ends with its shell. */
 function groupAlive(pid: number): boolean {
+	if (process.platform === "win32") return false;
 	try {
 		process.kill(-pid, 0);
 		return true;

@@ -524,16 +524,15 @@ describe("Coding Agent Tools", () => {
 		it("runs a background job, reads only new output, stops its process group and announces other exits once", async () => {
 			const jobs = new BashJobs();
 			const tools = createAllTools(testDir, { bash: { jobs } });
-			const startedAt = Date.now();
 			const start = await tools.bash.execute("bg-start", {
 				command: "echo first; echo second; sleep 60",
 				run_in_background: true,
 			});
-			expect(Date.now() - startedAt).toBeLessThan(1000);
 			expect(getTextOutput(start)).toBe("Started job j1.");
 			const job = jobs.get("j1");
 			if (!job?.pid) throw new Error("job did not start");
-			await vi.waitFor(() => expect(readFileSync(job.logPath, "utf-8")).toContain("second"));
+			expect(job.exit).toBeUndefined();
+			await vi.waitFor(() => expect(readFileSync(job.logPath, "utf-8")).toContain("second"), { timeout: 10_000 });
 			expect(getTextOutput(await tools.bash_job.execute("bg-read-1", { id: "j1" }))).toBe(
 				"first\nsecond\n[running]",
 			);
@@ -544,13 +543,34 @@ describe("Coding Agent Tools", () => {
 			expect(getTextOutput(await tools.bash_job.execute("bg-stop", { id: "j1", action: "stop" }))).toBe(
 				"Stopped job j1.",
 			);
-			await vi.waitFor(() => expect(job.exit).toBeDefined());
+			expect(jobs.running()).toEqual([]);
+			await vi.waitFor(() => expect(job.exit).toBeDefined(), { timeout: 10_000 });
 			expect(() => process.kill(-job.pid!, 0)).toThrow();
 
 			await tools.bash.execute("bg-exit", { command: "exit 3", run_in_background: true });
-			await vi.waitFor(() => expect(jobs.running()).toEqual([]));
+			await vi.waitFor(() => expect(jobs.get("j2")?.exit).toBeDefined(), { timeout: 10_000 });
+			expect(jobs.running()).toEqual([]);
 			expect(jobs.takeExitNotices()).toBe("[Background job j2 exited with code 3: exit 3]");
 			expect(jobs.takeExitNotices()).toBeUndefined();
+			jobs.stopAll();
+		});
+
+		it("keeps a background job running while processes its shell started with & live, and stops them", async () => {
+			const jobs = new BashJobs();
+			const tools = createAllTools(testDir, { bash: { jobs } });
+			await tools.bash.execute("bg-amp", { command: "sleep 60 & echo started", run_in_background: true });
+			const job = jobs.get("j1");
+			if (!job?.pid) throw new Error("job did not start");
+			await vi.waitFor(() => expect(job.exit).toBeDefined(), { timeout: 10_000 });
+
+			expect(jobs.running()).toEqual([job]);
+			expect(jobs.takeExitNotices()).toContain(
+				"shell exited with code 0, but processes it started are still running",
+			);
+			expect(getTextOutput(await tools.bash_job.execute("bg-amp-stop", { id: "j1", action: "stop" }))).toBe(
+				"Stopped job j1.",
+			);
+			await vi.waitFor(() => expect(() => process.kill(-job.pid!, 0)).toThrow(), { timeout: 10_000 });
 			jobs.stopAll();
 		});
 

@@ -102,6 +102,7 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 		case "bash":
 			return createBashToolDefinition(cwd, options?.bash);
 		case "bash_job":
+			// Sees only jobs of a bash tool built with the same options.bash.jobs.
 			return createBashJobToolDefinition(options?.bash?.jobs ?? new BashJobs());
 		case "edit":
 			return createEditToolDefinition(cwd, options?.edit);
@@ -125,6 +126,7 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 		case "bash":
 			return createBashTool(cwd, options?.bash);
 		case "bash_job":
+			// Sees only jobs of a bash tool built with the same options.bash.jobs.
 			return wrapToolDefinition(createBashJobToolDefinition(options?.bash?.jobs ?? new BashJobs()));
 		case "edit":
 			return createEditTool(cwd, options?.edit);

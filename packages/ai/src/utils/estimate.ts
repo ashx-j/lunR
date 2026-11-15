@@ -37,12 +37,36 @@ export function estimateTextTokens(text: string): number {
 	return Math.ceil(ascii / CHARS_PER_TOKEN + nonAscii);
 }
 
+/**
+ * The last fingerprint, reused while a request carries the same tool objects and system prompt.
+ * Stringifying ~64 KB of tools costs 0.3 to 0.5 ms per request. Sessions copy the tools array
+ * every turn, so the tools are compared one by one; a tool object edited in place goes unnoticed.
+ */
+let lastFingerprint:
+	| { systemPrompt: string | undefined; tools: readonly Tool[] | undefined; value: string }
+	| undefined;
+
+function sameTools(a: readonly Tool[] | undefined, b: readonly Tool[] | undefined): boolean {
+	if (a === b) return true;
+	if (!a || !b || a.length !== b.length) return false;
+	return a.every((tool, index) => tool === b[index]);
+}
+
 /** Only the stable request prefix; conversation growth is handled separately. */
 export function getContextFingerprint(context: Pick<Context, "systemPrompt" | "tools">): string {
+	if (
+		lastFingerprint &&
+		lastFingerprint.systemPrompt === context.systemPrompt &&
+		sameTools(lastFingerprint.tools, context.tools)
+	) {
+		return lastFingerprint.value;
+	}
 	const serialized = safeJsonStringify([context.systemPrompt ?? "", context.tools ?? []]);
 	let hash = 2166136261;
 	for (let i = 0; i < serialized.length; i++) hash = Math.imul(hash ^ serialized.charCodeAt(i), 16777619);
-	return `${serialized.length}:${hash >>> 0}`;
+	const value = `${serialized.length}:${hash >>> 0}`;
+	lastFingerprint = { systemPrompt: context.systemPrompt, tools: context.tools?.slice(), value };
+	return value;
 }
 
 export function estimateTextAndImageContentTokens(content: string | Array<TextContent | ImageContent>): number {

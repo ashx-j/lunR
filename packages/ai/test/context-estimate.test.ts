@@ -92,6 +92,12 @@ describe("request prefix identity", () => {
 		context.systemPrompt = "old";
 		context.tools = [{ name: "read", description: "read files", parameters: { type: "object", properties: {} } }];
 		expect(estimateContextTokens(context).usageTokens).toBe(0);
+		// The fingerprint is cached per tool object: a copied array keeps it, a replaced tool does not.
+		assistant.usage.contextFingerprint = getContextFingerprint(context);
+		context.tools = [...context.tools];
+		expect(estimateContextTokens(context).usageTokens).toBe(9500);
+		context.tools = [{ ...context.tools[0], description: "read and list files" }];
+		expect(estimateContextTokens(context).usageTokens).toBe(0);
 	});
 	it("avoids the ASCII divisor for non-ASCII text", async () => {
 		const { estimateTextTokens } = await import("../src/utils/estimate.ts");
