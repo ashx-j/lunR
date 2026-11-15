@@ -249,8 +249,9 @@ function withoutHarmlessRedirects(command: string): string | undefined {
 			quote = ch;
 			continue;
 		}
-		// A comment runs to the end of its line, so a quote inside it can't hide the next line.
-		if (ch === "#" && (i === 0 || /[\s;|&()]/.test(command[i - 1]))) {
+		// A comment runs to the end of its line, so a quote inside it can't hide the next line. Bash starts
+		// one only after its own word breaks: `\r`, a no-break space and other Unicode spaces are word text.
+		if (ch === "#" && (i === 0 || /[ \t\n;|&()<>]/.test(command[i - 1]))) {
 			const lineEnd = command.indexOf("\n", i);
 			const end = lineEnd < 0 ? command.length : lineEnd;
 			blank(i, end);
@@ -280,14 +281,15 @@ function fdStart(command: string, at: number): number {
 /** Where the redirect whose `>` is at `at` begins: a whole-word fd number or a lone `&` before it. */
 function redirectStart(command: string, at: number): number {
 	const start = fdStart(command, at);
-	if (start < at) return start === 0 || /[\s;|&(]/.test(command[start - 1]) ? start : at;
-	return command[at - 1] === "&" && (at === 1 || /\s/.test(command[at - 2])) ? at - 1 : at;
+	if (start < at) return start === 0 || /[ \t\n;|&(]/.test(command[start - 1]) ? start : at;
+	return command[at - 1] === "&" && (at === 1 || /[ \t\n]/.test(command[at - 2])) ? at - 1 : at;
 }
 
 /** End index of a harmless redirect whose `>` is at `at`, or undefined. */
 function harmlessRedirectEnd(command: string, at: number): number | undefined {
 	if (command[at - 1] === "<") return undefined;
-	const boundary = (index: number) => index >= command.length || /[\s;|&)]/.test(command[index]);
+	// Bash's word breaks only: after `>&1`, a no-break space and a name would be a file target.
+	const boundary = (index: number) => index >= command.length || /[ \t\n;|&)]/.test(command[index]);
 	const next = command[at + 1];
 	if (next === "&" && command[at - 1] !== "&") {
 		let end = at + 2;

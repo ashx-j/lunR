@@ -181,6 +181,12 @@ describe("isMutatingBashCommand", () => {
 		"ls #'\nrm x\n'",
 		"ls 2>/dev/null #'\nrm x\n'",
 		"true # note\ntouch x",
+		// only bash's own word breaks start a comment or end a redirect
+		"ls\r#; touch x",
+		"ls\u00a0#; touch x",
+		"true\u3000#; touch x",
+		"cat f\u00a0#|| touch x",
+		"echo hi >&1\u00a0x",
 	])("still blocks %s", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(true);
 	});
