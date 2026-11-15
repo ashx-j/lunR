@@ -271,8 +271,8 @@ registerHooks({load(url, context, nextLoad) {
 			assert.equal(
 				request.toolSchemaHash,
 				computerHost
-					? browserEnabled ? "72ffc131ae741b12f0845752834ac10baef4f4b3c2d0589e9f554fc26d7d1a1a" : "72e6a4b3b90a6ad4fd7fcc85b83f4debd792c3f1d234e05a101552f6ca4504be"
-					: browserEnabled ? "4667964a33f8df0b443a8788322cb1423c9492a746579fa729c0eda567df0880" : "798db6e57235adcd252b28667772d8d429558a63d1054b75fdce7f3f8e98226e",
+					? browserEnabled ? "4420ce2ca292df78ea2e651f91d562342c535b2df7f3915cf2b4a5c824770514" : "a67e5f7fdb7af0a081c1b2fff24665ca7df0d256affb7aa1a6f6f0c219fea71d"
+					: browserEnabled ? "e1338d67de5e892555981714767b922d6b8651ca381d4846f654cd99ee38fd85" : "ee3ee623eb4c90d277fc0df48c04c50d98a4943264f2f1b84e8154c6b977d5a4",
 				"First request tool payload differs from the baseline fixture",
 			);
 			if (!toolUrl && !toolKind) fullToolsByBrowser.set(browserEnabled, request.tools);
