@@ -19,7 +19,7 @@ describe("buildInitialMessage", () => {
 			stdinContent: "README contents\n",
 		});
 
-		expect(result.initialMessage).toBe("README contents\nSummarize the text given");
+		expect(result.initialMessage).toBe("README contents\n\nSummarize the text given");
 		expect(parsed.messages).toEqual([]);
 	});
 
@@ -42,7 +42,7 @@ describe("buildInitialMessage", () => {
 			fileText: "file\n",
 		});
 
-		expect(result.initialMessage).toBe("stdin\nfile\nExplain it");
+		expect(result.initialMessage).toBe("stdin\n\nfile\n\nExplain it");
 		expect(parsed.messages).toEqual(["Second message"]);
 	});
 });
