@@ -58,7 +58,7 @@ import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-a
 import { READ_ONLY_WRITE_SPAWN_ERROR, resolveChildPermissions, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
-import { captureSingleOutputSnapshot, extractChildWrittenOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
+import { captureSingleOutputSnapshot, extractChildWrittenOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, outputTargetError, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
 	formatModelAttemptNote,
@@ -1045,7 +1045,7 @@ async function runSingleAttempt(
 				fullOutput = fullOutput.trim() || recoveredResult.error || recoveredResult.finalOutput || "Detached child exited without final output.";
 				recoveredResult.outputMode = options.outputMode ?? "inline";
 				if (options.outputPath && recoveredResult.exitCode === 0) {
-					const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
+					const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot, runtimeCwd);
 					fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
 					recoveredResult.savedOutputPath = resolvedOutput.savedPath;
 					recoveredResult.outputSaveError = resolvedOutput.saveError;
@@ -1253,7 +1253,7 @@ async function runSingleAttempt(
 		}));
 	}
 		if (options.outputPath && result.exitCode === 0) {
-			const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
+			const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot, runtimeCwd);
 			fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
 			result.savedOutputPath = resolvedOutput.savedPath;
 			result.outputSaveError = resolvedOutput.saveError;
@@ -1311,7 +1311,7 @@ export async function runSync(
 			error,
 		};
 	}
-	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${label})`);
+	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${label})`) ?? outputTargetError(options.outputPath, runtimeCwd);
 	if (outputModeValidationError) {
 		return {
 			childId: spec.childId,
