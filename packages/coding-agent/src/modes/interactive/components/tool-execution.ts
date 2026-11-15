@@ -1,15 +1,15 @@
 import { Box, type Component, Container, getCapabilities, Image, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
-import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
+import { convertToPng } from "../../../utils/image-convert.ts";
+import { theme } from "../theme/theme.ts";
+import { getBuiltinToolRenderer } from "../tool-renderers/index.ts";
 import {
 	formatGroupedCall,
 	getTextOutput as getRenderedTextOutput,
 	toolGroupRole,
 	toolGroupTree,
 	toolStatusDot,
-} from "../../../core/tools/render-utils.ts";
-import { convertToPng } from "../../../utils/image-convert.ts";
-import { theme } from "../theme/theme.ts";
+} from "../tool-renderers/render-utils.ts";
 
 export interface ToolExecutionOptions {
 	showImages?: boolean;
@@ -36,7 +36,7 @@ export class ToolExecutionComponent extends Container {
 	private imageWidthCells: number;
 	private isPartial = true;
 	private toolDefinition?: ToolDefinition<any, any>;
-	private builtInToolDefinition?: ToolDefinition<any, any>;
+	private builtInRenderer?: ReturnType<typeof getBuiltinToolRenderer>;
 	private ui: TUI;
 	private cwd: string;
 	private executionStarted = false;
@@ -66,7 +66,7 @@ export class ToolExecutionComponent extends Container {
 		this.toolCallId = toolCallId;
 		this.args = args;
 		this.toolDefinition = toolDefinition;
-		this.builtInToolDefinition = createAllToolDefinitions(cwd)[toolName as ToolName];
+		this.builtInRenderer = getBuiltinToolRenderer(toolName);
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
 		this.ui = ui;
@@ -94,37 +94,37 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private getCallRenderer(): ToolDefinition<any, any>["renderCall"] | undefined {
-		if (!this.builtInToolDefinition) {
+		if (!this.builtInRenderer) {
 			return this.toolDefinition?.renderCall;
 		}
 		if (!this.toolDefinition) {
-			return this.builtInToolDefinition.renderCall;
+			return this.builtInRenderer.renderCall;
 		}
-		return this.toolDefinition.renderCall ?? this.builtInToolDefinition.renderCall;
+		return this.toolDefinition.renderCall ?? this.builtInRenderer.renderCall;
 	}
 
 	private getResultRenderer(): ToolDefinition<any, any>["renderResult"] | undefined {
-		if (!this.builtInToolDefinition) {
+		if (!this.builtInRenderer) {
 			return this.toolDefinition?.renderResult;
 		}
 		if (!this.toolDefinition) {
-			return this.builtInToolDefinition.renderResult;
+			return this.builtInRenderer.renderResult;
 		}
-		return this.toolDefinition.renderResult ?? this.builtInToolDefinition.renderResult;
+		return this.toolDefinition.renderResult ?? this.builtInRenderer.renderResult;
 	}
 
 	private hasRendererDefinition(): boolean {
-		return this.builtInToolDefinition !== undefined || this.toolDefinition !== undefined;
+		return this.builtInRenderer !== undefined || this.toolDefinition !== undefined;
 	}
 
 	private getRenderShell(): "default" | "self" {
-		if (!this.builtInToolDefinition) {
+		if (!this.builtInRenderer) {
 			return this.toolDefinition?.renderShell ?? "default";
 		}
 		if (!this.toolDefinition) {
-			return this.builtInToolDefinition.renderShell ?? "default";
+			return this.builtInRenderer.renderShell ?? "default";
 		}
-		return this.toolDefinition.renderShell ?? this.builtInToolDefinition.renderShell ?? "default";
+		return this.toolDefinition.renderShell ?? this.builtInRenderer.renderShell ?? "default";
 	}
 
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
