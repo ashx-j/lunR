@@ -7,6 +7,7 @@ import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
+import { CREDENTIAL_SKIP_NOTE, credentialWalkFilter } from "../credential-files.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import {
@@ -321,9 +322,16 @@ export function createFindToolDefinition(
 							}
 
 							const relativized: string[] = [];
+							// Same exclusion as lunR's other recursive tools, so the profile's logins never show up.
+							const isCredential = credentialWalkFilter(searchPath);
+							let skippedCredentials = false;
 							for (const rawLine of lines) {
 								const line = rawLine.replace(/\r$/, "").trim();
 								if (!line) continue;
+								if (isCredential?.(line.replace(/[/\\]$/, ""))) {
+									skippedCredentials = true;
+									continue;
+								}
 								const hadTrailingSlash = line.endsWith("/") || line.endsWith("\\");
 								let relativePath = line;
 								if (line.startsWith(searchPath)) {
@@ -354,6 +362,7 @@ export function createFindToolDefinition(
 							if (notices.length > 0) {
 								resultOutput += `\n\n[${notices.join(". ")}]`;
 							}
+							if (skippedCredentials) resultOutput += `\n\n${CREDENTIAL_SKIP_NOTE}`;
 							settle(() =>
 								resolve({
 									content: [{ type: "text", text: resultOutput }],

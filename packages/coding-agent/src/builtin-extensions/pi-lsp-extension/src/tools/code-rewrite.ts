@@ -8,6 +8,7 @@
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { truncateHead, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from "../../../../core/tools/truncate.js";
+import { CREDENTIAL_SKIP_NOTE } from "../../../../core/credential-files.js";
 import { resolveToCwd } from "../../../../core/tools/path-utils.js";
 import { relative } from "node:path";
 import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
@@ -85,14 +86,16 @@ export function createCodeRewriteTool(
       }
 
       // Find matches
+      let skipNote = "";
       const matches = await searchFiles(compiled, rootDir, treeSitter, {
         path: path ? resolveToCwd(path, rootDir) : undefined,
         maxResults: 500,
+        onSkippedCredentials: () => { skipNote = `\n\n${CREDENTIAL_SKIP_NOTE}`; },
       });
 
       if (matches.length === 0) {
         return {
-          content: [{ type: "text", text: "No matches found. No changes to make." }],
+          content: [{ type: "text", text: `No matches found. No changes to make.${skipNote}` }],
           details: { matchCount: 0, filesModified: 0, dryRun: isDryRun },
         };
       }
@@ -127,6 +130,7 @@ export function createCodeRewriteTool(
         if (truncation.truncated) {
           output += `\n\n[Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines]`;
         }
+        output += skipNote;
 
         const uniqueFiles = new Set(changes.map((c) => c.file));
         return {
@@ -166,6 +170,7 @@ export function createCodeRewriteTool(
       if (truncation.truncated) {
         output += `\n\n[Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines]`;
       }
+      output += skipNote;
 
       return {
         content: [{ type: "text", text: output }],
