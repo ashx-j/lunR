@@ -73,7 +73,7 @@ process.stdin.on("end", async () => {
 		line({ type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: "API Error" }] }, error: "unknown" });
 	}
 	if (response.status === 200) result({ is_error: false, num_turns: 1 });
-	else result({ is_error: true, num_turns: 1, terminal_reason: "api_error", api_error_status: response.status, result: "API Error: " + response.status + " " + JSON.parse(text).error.type });
+	else result({ is_error: true, num_turns: 1, terminal_reason: "api_error", api_error_status: response.status, result: "API Error: " + response.status + " " + (JSON.parse(text).error.message ?? JSON.parse(text).error.type) });
 	if (__dirname.endsWith("lingers")) {
 		await new Promise((resolve) => setTimeout(resolve, 400));
 		writeFileSync(join(__dirname, "exited-cleanly"), "");
@@ -333,6 +333,26 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			"Claude claude-sonnet-5-5 is not available on this subscription, or the saved login predates it. Run /login anthropic to refresh the models it offers.",
 		);
 		expect(isRetryableAssistantError(failed)).toBe(false);
+
+		// A 403 is about the model only when Anthropic's message names it; otherwise its reason is kept.
+		for (const [message, hint] of [
+			["model: claude-sonnet-5-5", true],
+			["Your organization has been disabled.", false],
+		] as const) {
+			const denied = await setup({
+				status: 403,
+				body: JSON.stringify({ type: "error", error: { type: "permission_error", message } }),
+			});
+			const result = await streamClaudeCode(
+				unlisted,
+				context,
+				{ externalClaudeCode: denied.connection },
+				true,
+				denied.upstream,
+			).result();
+			expect(result.errorMessage?.includes("not available on this subscription")).toBe(hint);
+			expect(result.errorMessage?.includes(message)).toBe(!hint);
+		}
 	});
 
 	it("lists an offered model the catalog lacks in picker order and streams it with its family's settings", async () => {
@@ -507,7 +527,7 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			upstream,
 		).result();
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toMatch(/^429 .*rate_limit_error/);
+		expect(result.errorMessage).toMatch(/^429 .*Slow down/);
 		expect(isRetryableAssistantError(result)).toBe(true);
 	});
 
