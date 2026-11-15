@@ -311,6 +311,7 @@ async function streamAssistantResponse(
 		systemPrompt: context.systemPrompt,
 		messages: llmMessages,
 		tools: context.tools,
+		deferredTools: context.deferredTools,
 	};
 
 	const streamFunction = streamFn || streamSimple;
@@ -484,6 +485,21 @@ type ExecutedToolCallBatch = {
 	terminate: boolean;
 };
 
+/**
+ * lunr: makes declared tools a result just loaded callable by the rest of the same message. The run's
+ * `tools` snapshot otherwise only refreshes at the next turn, so `[load_tools(cron), cron(...)]` failed.
+ * Sequential execution only, which a loader opts into. Parallel execution may prepare a call before an
+ * earlier call in the same message has run.
+ */
+function addLoadedDeferredTools(currentContext: AgentContext, addedToolNames: string[] | undefined): void {
+	if (!addedToolNames?.length || !currentContext.deferredTools) return;
+	const tools = currentContext.tools ?? [];
+	const loaded = currentContext.deferredTools.filter(
+		(tool) => addedToolNames.includes(tool.name) && !tools.some((t) => t.name === tool.name),
+	);
+	if (loaded.length) currentContext.tools = [...tools, ...loaded];
+}
+
 async function executeToolCallsSequential(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -528,6 +544,7 @@ async function executeToolCallsSequential(
 		await emitToolResultMessage(toolResultMessage, emit);
 		finalizedCalls.push(finalized);
 		messages.push(toolResultMessage);
+		addLoadedDeferredTools(currentContext, finalized.result.addedToolNames);
 
 		if (signal?.aborted) {
 			break;
@@ -720,9 +737,16 @@ async function prepareToolCall(
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
 	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
 	if (!tool) {
+		// lunr: a declared but unloaded tool tells the model to load it. The loop cannot know which tool
+		// loads it (an extension may declare its own), and that loader's description already says so.
+		const deferred = currentContext.deferredTools?.some((t) => t.name === toolCall.name);
 		return {
 			kind: "immediate",
-			result: createErrorToolResult(`Tool ${toolCall.name} not found`),
+			result: createErrorToolResult(
+				deferred
+					? `Tool ${toolCall.name} is not loaded. Load it first, then call it again.`
+					: `Tool ${toolCall.name} not found`,
+			),
 			isError: true,
 		};
 	}

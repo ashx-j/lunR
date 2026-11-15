@@ -46,6 +46,7 @@ export {
 export * from "./providers/faux.ts";
 export * from "./session-resources.ts";
 export * from "./types.ts";
+export { supportsDeferredToolLoading } from "./utils/deferred-tools.ts";
 export * from "./utils/diagnostics.ts";
 export * from "./utils/estimate.ts";
 export * from "./utils/event-stream.ts";

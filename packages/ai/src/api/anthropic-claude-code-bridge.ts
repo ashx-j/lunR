@@ -94,13 +94,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Renames a tool_result's tool_reference entries, or drops one when `rename` returns undefined. The API
+ * rejects a reference to a tool the request does not declare as deferred.
+ */
+function mapToolReferences(block: Block, rename: (name: string) => string | undefined): Block {
+	if (block.type !== "tool_result" || !Array.isArray(block.content)) return block;
+	const content = block.content.flatMap((entry: unknown) => {
+		if (!isRecord(entry) || entry.type !== "tool_reference" || typeof entry.tool_name !== "string") return [entry];
+		const name = rename(entry.tool_name);
+		return name ? [{ ...entry, tool_name: name }] : [];
+	});
+	if (content.length) return { ...block, content };
+	// The tool's output already follows as a sibling text block, and tool_result content is optional.
+	const { content: _dropped, ...rest } = block;
+	return rest;
+}
+
+/** Claude Code knows lunR's tools by their MCP names. A tool the bridge left out for its name loses its reference. */
+const prefixedToolName = (name: string) => (TOOL_NAME.test(name) ? `${TOOL_PREFIX}${name}` : undefined);
+
 function contentBlocks(content: unknown, allowed: ReadonlySet<unknown>): Block[] {
 	if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
 	if (!Array.isArray(content)) throw new Error("Invalid Claude Code message content");
 	return content.map((block) => {
 		if (!isRecord(block) || !allowed.has(block.type))
 			throw new Error(`Claude Code subscription does not support ${isRecord(block) ? block.type : "this"} content`);
-		return block.type === "tool_use" ? { ...block, name: `${TOOL_PREFIX}${block.name}` } : block;
+		if (block.type === "tool_use") return { ...block, name: `${TOOL_PREFIX}${block.name}` };
+		return mapToolReferences(block, prefixedToolName);
 	});
 }
 
@@ -181,13 +202,16 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 				: "";
 
 	// Claude Code's MCP names cap the length; one long or unusual tool name is left out rather than failing the turn.
-	const tools = (Array.isArray(body.tools) ? body.tools : []).flatMap((tool): ClaudeCodeTool[] =>
+	const listed = (Array.isArray(body.tools) ? body.tools : []).flatMap((tool) =>
 		isRecord(tool) && typeof tool.name === "string" && TOOL_NAME.test(tool.name) && isRecord(tool.input_schema)
 			? [
 					{
-						name: tool.name,
-						description: typeof tool.description === "string" ? tool.description : "",
-						inputSchema: tool.input_schema,
+						tool: {
+							name: tool.name,
+							description: typeof tool.description === "string" ? tool.description : "",
+							inputSchema: tool.input_schema,
+						} satisfies ClaudeCodeTool,
+						deferLoading: tool.defer_loading === true,
 					},
 				]
 			: [],
@@ -200,13 +224,14 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 		route,
 		system,
 		frames: history,
-		tools,
+		tools: listed.map(({ tool }) => tool),
 		maxTokens,
 		extraBody: {
-			tools: tools.map((tool) => ({
+			tools: listed.map(({ tool, deferLoading }) => ({
 				name: `${TOOL_PREFIX}${tool.name}`,
 				description: tool.description,
 				input_schema: tool.inputSchema,
+				...(deferLoading ? { defer_loading: true } : {}),
 			})),
 			...(thinking ? { thinking } : {}),
 			// Claude Code's own clear-thinking context edits are invalid once thinking is disabled.
@@ -216,9 +241,35 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 		},
 	};
 	const extraBody = { ...request.extraBody, messages: historyMessages(history) };
-	return Buffer.byteLength(settingsJson(extraBody)) <= SETTINGS_LIMIT
-		? { ...request, frames: [queryFrame(history)], extraBody }
-		: request;
+	if (Buffer.byteLength(settingsJson(extraBody)) <= SETTINGS_LIMIT)
+		return { ...request, frames: [queryFrame(history)], extraBody };
+	// Claude Code strips tool_reference blocks from a replayed transcript, which would leave loaded tools
+	// unloaded. The replay drops the references and sends the deferred tools the history loaded or called
+	// as normal tools. Deferred tools it never used stay out, so the model cannot call them unloaded.
+	const used = new Set<unknown>();
+	const frames = history.map((frame) => ({
+		...frame,
+		message: {
+			...frame.message,
+			content: frame.message.content.map((block) => {
+				if (block.type === "tool_use") used.add(block.name);
+				return mapToolReferences(block, (name) => {
+					used.add(name);
+					return undefined;
+				});
+			}),
+		},
+	}));
+	return {
+		...request,
+		frames,
+		extraBody: {
+			...request.extraBody,
+			tools: request.extraBody.tools.flatMap(({ defer_loading, ...tool }) =>
+				!defer_loading || used.has(tool.name) ? [tool] : [],
+			),
+		},
+	};
 }
 
 /** Reads events up to the next `result`, or undefined when Claude Code's output ends first. */
@@ -259,12 +310,16 @@ function apiError(result: ClaudeCodeEvent): { status: number; body: string } | u
 	return { status, body: JSON.stringify(body) };
 }
 
-/** Strips the MCP prefix from a tool call in one stream event and rejects tools lunR did not offer. */
+/**
+ * Strips the MCP prefix from a tool call in one stream event and rejects tools lunR did not offer. A bare
+ * lunR name passes too: the model calls an unloaded tool by the name `load_tools`' catalog shows, and the
+ * agent loop answers that call with a load hint.
+ */
 function renameToolCall(event: Record<string, unknown>, inventory: ReadonlySet<string>): Record<string, unknown> {
 	const block = event.content_block;
 	if (event.type !== "content_block_start" || !isRecord(block) || block.type !== "tool_use") return event;
-	const name = block.name;
-	const tool = typeof name === "string" && name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : "";
+	const name = typeof block.name === "string" ? block.name : "";
+	const tool = name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : name;
 	if (!inventory.has(tool)) throw new Error("Claude Code returned a tool outside lunR's tool list");
 	return { ...event, content_block: { ...block, name: tool } };
 }
@@ -550,8 +605,9 @@ function validateOptions(model: Model<Api>, options: StreamOptions | SimpleStrea
 /**
  * Streams one Anthropic turn for a Claude subscription. lunR builds the same Messages request it sends
  * with an API key; the injected client hands it to Claude Code, which authenticates and sends it.
- * Tool references, eager tool input, and sampling stay off because Claude Code manages those parts of
- * its own request. lunR adds no cache markers; the bridge places the history marker itself.
+ * Tool references and deferred tools pass through Claude Code unchanged. Eager tool input and sampling
+ * stay off because Claude Code manages those parts of its own request. lunR adds no cache markers; the
+ * bridge places the history marker itself.
  */
 export function streamClaudeCode(
 	model: Model<"anthropic-messages">,
@@ -576,7 +632,6 @@ export function streamClaudeCode(
 		...model,
 		compat: {
 			...model.compat,
-			supportsToolReferences: false,
 			supportsEagerToolInputStreaming: false,
 			supportsCacheControlOnTools: false,
 			supportsTemperature: false,

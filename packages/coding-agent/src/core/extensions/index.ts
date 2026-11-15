@@ -140,6 +140,7 @@ export type {
 	SessionStartEvent,
 	SessionTreeEvent,
 	SetActiveToolsHandler,
+	SetDeferredToolsHandler,
 	SetLabelHandler,
 	SetModelHandler,
 	SetThinkingLevelHandler,

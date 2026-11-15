@@ -205,6 +205,40 @@ const context: Context = {
 };
 const model = ANTHROPIC_MODELS["claude-opus-4-8"];
 
+/** A history whose last turn loaded `cron` through `load_tools`, with `cron` and `web_search` declared deferred. */
+function loadedContext(firstPrompt: string): Context {
+	const tool = (name: string) => ({ name, description: name, parameters: { type: "object", properties: {} } });
+	// Too long for Claude Code's MCP names, so the bridge leaves out the tool and its reference.
+	const longName = "x".repeat(60);
+	return {
+		systemPrompt: "You are lunR.",
+		messages: [
+			{ role: "user", content: firstPrompt, timestamp: 1 },
+			{
+				role: "assistant",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-opus-4-8",
+				content: [{ type: "toolCall", id: "toolu_1", name: "load_tools", arguments: { names: ["cron"] } }],
+				usage,
+				stopReason: "toolUse",
+				timestamp: 2,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "toolu_1",
+				toolName: "load_tools",
+				content: [{ type: "text", text: "Loaded tools: cron." }],
+				addedToolNames: ["cron", longName],
+				isError: false,
+				timestamp: 3,
+			},
+		],
+		tools: [tool("read"), tool("load_tools"), tool("cron"), tool(longName)],
+		deferredTools: [tool("cron"), tool("web_search")],
+	};
+}
+
 describe.skipIf(process.platform === "win32")("Claude Code subscription bridge", () => {
 	it("sends lunR's history in the request body and returns the upstream turn with lunR tool names", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
@@ -288,6 +322,66 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		]);
 		// Claude Code keeps signed thinking only when the replayed turn names its model.
 		expect(record.frames[1].message.model).toBe("claude-opus-4-8");
+	});
+
+	it("passes deferred tools and their tool_reference loads through with Claude Code's tool names", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__cron") });
+		const result = await streamClaudeCode(
+			model,
+			loadedContext("Load cron"),
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(
+			record.extra.tools.map((entry: { name: string; defer_loading?: boolean }) => [
+				entry.name,
+				entry.defer_loading,
+			]),
+		).toEqual([
+			["mcp__lunr__read", undefined],
+			["mcp__lunr__load_tools", undefined],
+			["mcp__lunr__cron", true],
+			["mcp__lunr__web_search", true],
+		]);
+		expect(record.extra.messages.at(-1).content[0]).toMatchObject({
+			type: "tool_result",
+			content: [{ type: "tool_reference", tool_name: "mcp__lunr__cron" }],
+		});
+	});
+
+	it("sends loaded deferred tools undeferred, leaves unused ones out and drops tool_reference on a replay", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__cron") });
+		const result = await streamClaudeCode(
+			model,
+			loadedContext("x".repeat(2_200_000)),
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(record.extra.messages).toBeUndefined();
+		// Claude Code strips references from a replayed transcript, so a loaded tool must not depend on one.
+		expect(
+			record.extra.tools.map((entry: { name: string; defer_loading?: boolean }) => [
+				entry.name,
+				entry.defer_loading,
+			]),
+		).toEqual([
+			["mcp__lunr__read", undefined],
+			["mcp__lunr__load_tools", undefined],
+			["mcp__lunr__cron", undefined],
+		]);
+		expect(JSON.stringify(record.frames)).not.toContain("tool_reference");
+		expect(record.frames.at(-1).message.content).toEqual([
+			{ type: "tool_result", tool_use_id: "toolu_1", is_error: false },
+			{ type: "text", text: "Loaded tools: cron." },
+		]);
 	});
 
 	it("accepts an explicit automatic tool choice", async () => {
@@ -443,6 +537,19 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		).result();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("outside lunR's tool list");
+	});
+
+	it("passes a call by lunR's bare tool name through for the agent loop to answer", async () => {
+		const { connection, upstream } = await setup({ status: 200, body: toolCallAnswer("read") });
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: "read" }));
 	});
 
 	it("asks connections without saved routes and windows to set up again", async () => {
