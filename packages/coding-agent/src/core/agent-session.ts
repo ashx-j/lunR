@@ -67,6 +67,7 @@ import {
 	parseAutoReviewVerdict,
 	registerAutoReviewSnapshot,
 	resolveAutoReviewer,
+	reviewerFailed,
 	SUBAGENT_CHILD_AUTO_REVIEW_ENV,
 } from "./auto-review.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
@@ -1293,6 +1294,12 @@ export class AgentSession {
 			configuredRef: this.settingsManager.getAutoReviewModel(),
 			sessionModel: this.model,
 			getModel: (provider, modelId) => this._modelRuntime.getModel(provider, modelId),
+			getOffered: (provider) => {
+				const offered = this._modelRuntime.getAvailableSnapshot().filter((model) => model.provider === provider);
+				// An ambient env key, or a subscription saved without a model list, lists nothing to check against.
+				return offered.length > 0 ? offered : undefined;
+			},
+			getCatalog: (provider) => this._modelRuntime.getModels(provider),
 		});
 	}
 
@@ -1334,11 +1341,11 @@ export class AgentSession {
 				reason =
 					verdict?.reason ??
 					(response.stopReason === "error"
-						? `The review model failed: ${response.errorMessage ?? "unknown error"}.`
+						? reviewerFailed(reviewer.ref, response.errorMessage ?? "unknown error")
 						: "The review model gave no clear answer.");
 			} catch (error) {
 				if (this.agent.signal?.aborted) return "Aborted before auto review finished.";
-				reason = `The review model failed: ${error instanceof Error ? error.message : String(error)}.`;
+				reason = reviewerFailed(reviewer.ref, error instanceof Error ? error.message : String(error));
 			}
 		}
 		const limitReached = this._autoReviewTracker.recordBlock();

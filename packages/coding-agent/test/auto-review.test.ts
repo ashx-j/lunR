@@ -5,7 +5,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	AUTO_REVIEW_CONSECUTIVE_LIMIT,
 	AutoReviewTracker,
@@ -95,44 +95,124 @@ describe("choosing the review model", () => {
 		["openrouter/some-model", model("openrouter", "some-model")],
 	]);
 	const getModel = (provider: string, id: string) => known.get(`${provider}/${id}`);
+	const offering =
+		(...ids: string[]) =>
+		(provider: string) =>
+			ids.map((id) => model(provider, id));
+	const unlisted = () => undefined;
+	const catalog = offering("claude-sonnet-5", "claude-opus-5");
 
-	it("uses the provider's documented reviewer, else the session model for supported providers", () => {
-		expect(resolveAutoReviewer({ sessionModel: model("anthropic", "claude-opus-5"), getModel })).toMatchObject({
-			kind: "ready",
-			ref: "anthropic/claude-sonnet-5",
-			source: "provider",
-		});
-		expect(resolveAutoReviewer({ sessionModel: model("openai-codex", "gpt-6"), getModel })).toMatchObject({
-			kind: "ready",
-			ref: "openai-codex/gpt-6",
-			source: "session",
-		});
+	it("uses the newest documented reviewer the credential offers, else the session model", () => {
+		// A Claude subscription offers only what Claude Code's picker listed at setup.
+		const subscription = offering("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5");
+		expect(
+			resolveAutoReviewer({
+				sessionModel: model("anthropic", "claude-opus-5-5"),
+				getModel,
+				getOffered: subscription,
+				getCatalog: catalog,
+			}),
+		).toMatchObject({ kind: "ready", ref: "anthropic/claude-sonnet-5-5", source: "provider" });
+		const apiKey = offering("claude-sonnet-4-5-20250929", "claude-sonnet-5", "claude-sonnet-5-5", "claude-opus-5");
+		expect(
+			resolveAutoReviewer({
+				sessionModel: model("anthropic", "claude-opus-5"),
+				getModel,
+				getOffered: apiKey,
+				getCatalog: catalog,
+			}),
+		).toMatchObject({ ref: "anthropic/claude-sonnet-5-5", source: "provider" });
+		expect(
+			resolveAutoReviewer({
+				sessionModel: model("anthropic", "claude-opus-5-5"),
+				getModel,
+				getOffered: offering("claude-opus-5-5"),
+				getCatalog: catalog,
+			}),
+		).toMatchObject({ kind: "ready", ref: "anthropic/claude-opus-5-5", source: "session" });
+		// An ambient env key lists nothing, so the catalog decides.
+		expect(
+			resolveAutoReviewer({
+				sessionModel: model("anthropic", "claude-opus-5"),
+				getModel,
+				getOffered: unlisted,
+				getCatalog: catalog,
+			}),
+		).toMatchObject({ ref: "anthropic/claude-sonnet-5", source: "provider" });
+		expect(
+			resolveAutoReviewer({
+				sessionModel: model("openai-codex", "gpt-6"),
+				getModel,
+				getOffered: offering("gpt-6"),
+				getCatalog: catalog,
+			}),
+		).toMatchObject({ kind: "ready", ref: "openai-codex/gpt-6", source: "session" });
 	});
 
 	it("needs a chosen model for unsupported providers, and the choice or a parent's reviewer wins", () => {
 		const session = model("openrouter", "some-model");
-		expect(resolveAutoReviewer({ sessionModel: session, getModel })).toEqual({
-			kind: "missing",
-			provider: "openrouter",
-		});
-		expect(
-			resolveAutoReviewer({ sessionModel: session, configuredRef: "openrouter/some-model", getModel }),
-		).toMatchObject({
+		const getOffered = (provider: string) => (provider === "openrouter" ? [session] : undefined);
+		const options = { sessionModel: session, getModel, getOffered, getCatalog: catalog };
+		expect(resolveAutoReviewer(options)).toEqual({ kind: "missing", provider: "openrouter" });
+		expect(resolveAutoReviewer({ ...options, configuredRef: "openrouter/some-model" })).toMatchObject({
 			kind: "ready",
 			source: "setting",
 		});
-		expect(resolveAutoReviewer({ sessionModel: session, configuredRef: "x/gone", getModel })).toEqual({
+		expect(resolveAutoReviewer({ ...options, configuredRef: "x/gone" })).toEqual({
 			kind: "unavailable",
 			ref: "x/gone",
 		});
 		expect(
-			resolveAutoReviewer({
-				sessionModel: session,
-				parentRef: "anthropic/claude-sonnet-5",
-				configuredRef: "x/gone",
-				getModel,
-			}),
+			resolveAutoReviewer({ ...options, parentRef: "anthropic/claude-sonnet-5", configuredRef: "x/gone" }),
 		).toMatchObject({ kind: "ready", source: "parent" });
+	});
+
+	it("treats a chosen model the login doesn't list as unavailable, and trusts it when nothing is listed", () => {
+		// Sonnet 5 picked on an older Claude Code, then a fresh subscription login that lists only 5.5 models.
+		const options = {
+			sessionModel: model("anthropic", "claude-opus-5-5"),
+			configuredRef: "anthropic/claude-sonnet-5",
+			getModel,
+			getCatalog: catalog,
+		};
+		expect(resolveAutoReviewer({ ...options, getOffered: offering("claude-opus-5-5", "claude-sonnet-5-5") })).toEqual(
+			{ kind: "unavailable", ref: "anthropic/claude-sonnet-5" },
+		);
+		expect(resolveAutoReviewer({ ...options, getOffered: unlisted })).toMatchObject({
+			kind: "ready",
+			ref: "anthropic/claude-sonnet-5",
+			source: "setting",
+		});
+	});
+
+	it("reads the session's offered models for its provider, and the catalog when the login lists none", async () => {
+		const sessionHarness = await createHarness({ provider: "anthropic", models: [{ id: "claude-opus-5-5" }] });
+		try {
+			const runtime = sessionHarness.session.modelRuntime;
+			const snapshot = vi
+				.spyOn(runtime, "getAvailableSnapshot")
+				.mockReturnValue([
+					model("other", "claude-sonnet-9"),
+					model("anthropic", "claude-opus-5-5"),
+					model("anthropic", "claude-sonnet-5-5"),
+				]);
+			vi.spyOn(runtime, "getModels").mockReturnValue([model("anthropic", "claude-sonnet-5")]);
+			expect(sessionHarness.session.resolveAutoReviewer()).toMatchObject({ ref: "anthropic/claude-sonnet-5-5" });
+			snapshot.mockReturnValue([model("other", "claude-sonnet-9")]);
+			expect(sessionHarness.session.resolveAutoReviewer()).toMatchObject({ ref: "anthropic/claude-sonnet-5" });
+
+			// A reviewer chosen under an older Claude Code that this login no longer lists.
+			snapshot.mockReturnValue([model("anthropic", "claude-opus-5-5"), model("anthropic", "claude-sonnet-5-5")]);
+			vi.spyOn(runtime, "getModel").mockReturnValue(model("anthropic", "claude-sonnet-5"));
+			vi.spyOn(sessionHarness.settingsManager, "getAutoReviewModel").mockReturnValue("anthropic/claude-sonnet-5");
+			expect(sessionHarness.session.resolveAutoReviewer()).toEqual({
+				kind: "unavailable",
+				ref: "anthropic/claude-sonnet-5",
+			});
+		} finally {
+			await sessionHarness.session.shutdown();
+			sessionHarness.cleanup();
+		}
 	});
 });
 
