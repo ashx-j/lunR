@@ -35,7 +35,7 @@ describe("AgentSession model and extension characterization", () => {
 		await harness.session.setModel(nextModel);
 
 		expect(harness.session.model?.id).toBe("faux-2");
-		expect(harness.session.systemPrompt).toContain(`currently running ''${nextModel.provider}/${nextModel.id}''`);
+		expect(harness.session.systemPrompt).toContain(`currently running ${nextModel.provider}/${nextModel.id},`);
 		expect(modelEvents).toEqual(["faux-1->faux-2:set"]);
 		expect(
 			harness.sessionManager
@@ -64,12 +64,32 @@ describe("AgentSession model and extension characterization", () => {
 		await harness.session.cycleModel();
 		expect(harness.session.model?.id).toBe("faux-2");
 		expect(harness.session.thinkingLevel).toBe("off");
-		expect(harness.session.systemPrompt).toContain(`currently running ''${modelTwo.provider}/${modelTwo.id}''`);
+		expect(harness.session.systemPrompt).toContain(`currently running ${modelTwo.provider}/${modelTwo.id},`);
 
 		await harness.session.cycleModel();
 		expect(harness.session.model?.id).toBe("faux-1");
 		expect(harness.session.thinkingLevel).toBe("high");
-		expect(harness.session.systemPrompt).toContain(`currently running ''${modelOne.provider}/${modelOne.id}''`);
+		expect(harness.session.systemPrompt).toContain(`currently running ${modelOne.provider}/${modelOne.id},`);
+	});
+
+	it("drops a tool's prompt line when an extension deactivates the tool", async () => {
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.registerTool({
+						name: "ast_search",
+						label: "AST search",
+						description: "Structural search",
+						parameters: Type.Object({}),
+						execute: async () => ({ content: [{ type: "text", text: "none" }], details: {} }),
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		expect(harness.session.systemPrompt).toContain("Use ast_search");
+		harness.session.setActiveToolsByName(["read"]);
+		expect(harness.session.systemPrompt).not.toContain("Use ast_search");
 	});
 
 	it("clamps thinking levels to model capabilities and cycles available levels", async () => {
