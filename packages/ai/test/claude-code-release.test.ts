@@ -1,11 +1,26 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { extractTarEntry, installClaudeCode, managedClaudeCodePath } from "../src/utils/claude-code-release.ts";
+import {
+	claudeCodePlatform,
+	extractTarEntry,
+	installClaudeCode,
+	managedClaudeCodePath,
+	removeOldClaudeCodeVersions,
+} from "../src/utils/claude-code-release.ts";
 
 /** One ustar entry; tar readers only need name, size, type, and the 512-byte layout. */
 function tarEntry(name: string, body: Buffer, type = "0"): Buffer {
@@ -41,6 +56,41 @@ describe("Claude Code release", () => {
 		expect(managedClaudeCodePath("win32-x64")).toBe(join("/agent", "claude-code", "2.1.310", "claude.exe"));
 		vi.unstubAllEnvs();
 	});
+
+	it.skipIf(!claudeCodePlatform() || process.platform === "win32")(
+		"removes versions left by a pin bump once the pinned one is in use",
+		async () => {
+			const platform = claudeCodePlatform();
+			if (!platform) return;
+			const profile = temporaryDirectory();
+			vi.stubEnv("PI_CODING_AGENT_DIR", profile);
+			const pinned = managedClaudeCodePath(platform);
+			const root = join(profile, "claude-code");
+			for (const version of ["2.1.263", "2.1.310"]) {
+				mkdirSync(join(root, version), { recursive: true });
+				writeFileSync(join(root, version, "claude"), "");
+			}
+			mkdirSync(join(root, "notes"));
+			const shared = temporaryDirectory();
+			mkdirSync(join(shared, "2.1.200"));
+			symlinkSync(join(shared, "2.1.200"), join(root, "2.1.200"));
+
+			// A connection still on the old version keeps every version.
+			expect(await removeOldClaudeCodeVersions(join(root, "2.1.263", "claude"))).toEqual([]);
+			expect(await removeOldClaudeCodeVersions(pinned)).toEqual(["2.1.263"]);
+			expect(readdirSync(root).sort()).toEqual(["2.1.200", "2.1.310", "notes"]);
+			expect(existsSync(join(shared, "2.1.200"))).toBe(true);
+
+			// A claude-code folder that links elsewhere is shared, so nothing in it is removed.
+			const linked = temporaryDirectory();
+			vi.stubEnv("PI_CODING_AGENT_DIR", linked);
+			mkdirSync(join(shared, "2.1.263"));
+			symlinkSync(shared, join(linked, "claude-code"));
+			expect(await removeOldClaudeCodeVersions(managedClaudeCodePath(platform))).toEqual([]);
+			expect(existsSync(join(shared, "2.1.263"))).toBe(true);
+			vi.unstubAllEnvs();
+		},
+	);
 
 	it("extracts only the requested file, following pax names across small chunks", async () => {
 		const binary = Buffer.alloc(1500, 7);

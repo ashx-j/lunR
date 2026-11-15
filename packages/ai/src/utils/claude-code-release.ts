@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { arch, homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { finished, pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
@@ -52,6 +52,32 @@ function binaryName(platform: ClaudeCodePlatform): string {
 export function managedClaudeCodePath(platform: ClaudeCodePlatform): string {
 	const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".lunr", "agent");
 	return join(agentDir, "claude-code", CLAUDE_CODE_VERSION, binaryName(platform));
+}
+
+/**
+ * Removes Claude Code versions other than the pinned one from the profile's `claude-code/` folder, once
+ * `command` (the saved connection's binary) is the pinned managed copy, so the version in use is never
+ * removed. Each version is about 280 MB and a pin bump leaves the previous one behind. Only folders named
+ * like a version are removed, and nothing when `claude-code/` is a symlink. Returns the versions removed;
+ * a folder that cannot be removed (a running binary on Windows) stays for the next run.
+ */
+export async function removeOldClaudeCodeVersions(command: string): Promise<string[]> {
+	const platform = claudeCodePlatform();
+	if (!platform || command !== managedClaudeCodePath(platform)) return [];
+	const root = dirname(dirname(command));
+	if ((await lstat(root)).isSymbolicLink()) return [];
+	const removed: string[] = [];
+	for (const entry of await readdir(root, { withFileTypes: true })) {
+		if (!entry.isDirectory() || entry.name === basename(dirname(command)) || !/^\d+\.\d+\.\d+$/.test(entry.name))
+			continue;
+		try {
+			await rm(join(root, entry.name), { recursive: true });
+			removed.push(entry.name);
+		} catch {
+			/* Kept for the next run. */
+		}
+	}
+	return removed;
 }
 
 /** Copies one regular file out of a tar stream into `target`; every other entry is read and discarded. Exported for tests. */

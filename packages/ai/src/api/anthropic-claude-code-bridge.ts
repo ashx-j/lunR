@@ -6,6 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
+import { removeOldClaudeCodeVersions } from "../utils/claude-code-release.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { stream as streamMessages, streamSimple as streamSimpleMessages } from "./anthropic-messages.ts";
 import { ClaudeCodeLoopback, type ClaudeCodeTool } from "./claude-code-loopback.ts";
@@ -279,6 +280,7 @@ function answerStream(
 	next: () => Promise<ClaudeCodeEvent | undefined>,
 	inventory: ReadonlySet<string>,
 	finish: (graceful?: boolean) => Promise<void>,
+	answered: () => void,
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	let pending: ClaudeCodeEvent | undefined = first;
@@ -307,6 +309,7 @@ function answerStream(
 					// The answer is complete; stopping now also keeps Claude Code from any further request.
 					controller.close();
 					await finish();
+					answered();
 				}
 			} catch (error) {
 				controller.error(error);
@@ -325,6 +328,18 @@ function localFailure(message: string): Response {
 		status: 200,
 		headers: { "content-type": "text/event-stream" },
 	});
+}
+
+let oldVersionsRemoved = false;
+
+/**
+ * After the first answer this process gets from the saved Claude Code, removes other versions left by a pin
+ * bump. It runs once per process and in the background, so no request waits for it.
+ */
+function removeOldVersionsOnce(command: string): void {
+	if (oldVersionsRemoved) return;
+	oldVersionsRemoved = true;
+	void removeOldClaudeCodeVersions(command).catch(() => {});
 }
 
 async function runClaudeCode(
@@ -474,10 +489,13 @@ async function runClaudeCode(
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
 		const next = () => within(nextAnswerEvent(events), "Claude Code request timed out.");
-		return new Response(answerStream(first, next, inventory, finish), {
-			status: 200,
-			headers: { "content-type": "text/event-stream" },
-		});
+		return new Response(
+			answerStream(first, next, inventory, finish, () => removeOldVersionsOnce(connection.command)),
+			{
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			},
+		);
 	} catch (error) {
 		await finish();
 		throw error;
