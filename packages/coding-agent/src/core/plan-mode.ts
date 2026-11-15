@@ -189,7 +189,7 @@ export function isMutatingBashCommand(command: string): boolean {
 	if (!command.trim()) return false;
 
 	// Output redirects outside quotes can write a file, except to /dev/null or onto another descriptor.
-	const withoutRedirects = withoutHarmlessRedirects(command);
+	const withoutRedirects = withoutHarmlessRedirects(joinLineContinuations(command));
 	if (withoutRedirects === undefined) return true;
 
 	// Substitutions, parameter expansion, ANSI-C quoting and brace expansion change
@@ -213,6 +213,42 @@ export function isMutatingBashCommand(command: string): boolean {
 	return false;
 }
 
+/**
+ * The command without the backslash-newline pairs bash deletes before it tokenizes, so a
+ * continuation can't split `<<`, `>>`, `&&`, `$(` or a command name across lines. Bash keeps the
+ * pair inside single quotes and ends a comment at the newline even after a backslash, so those
+ * stay as written.
+ */
+function joinLineContinuations(command: string): string {
+	if (!command.includes("\\\n")) return command;
+	let out = "";
+	let quote: "'" | '"' | undefined;
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (quote === "'") {
+			if (ch === "'") quote = undefined;
+			out += ch;
+		} else if (ch === "\\") {
+			if (command[i + 1] !== "\n") out += ch + (command[i + 1] ?? "");
+			i++;
+		} else if (quote) {
+			if (ch === quote) quote = undefined;
+			out += ch;
+		} else if (ch === "'" || ch === '"') {
+			quote = ch;
+			out += ch;
+		} else if (ch === "#" && (out === "" || /[ \t\n;|&()<>]/.test(out[out.length - 1]))) {
+			const lineEnd = command.indexOf("\n", i);
+			const end = lineEnd < 0 ? command.length : lineEnd;
+			out += command.slice(i, end);
+			i = end - 1;
+		} else {
+			out += ch;
+		}
+	}
+	return out;
+}
+
 /** Allowed commands that load config, hooks or a program from the working directory. */
 const CWD_CONFIG_COMMANDS = new Set(["git", "gh", "npm", "pnpm", "bun"]);
 
@@ -224,7 +260,8 @@ function isPlainCd(segment: string, tokens: string[]): boolean {
 /**
  * The command with each unquoted `[n]>/dev/null`, `&>/dev/null` and `[n]>&m` blanked out, or
  * undefined when any other output redirect remains (`>file`, `>>`, `>|`, `<>`, `>&-`, a quoted or
- * expanded target) or any redirect names its fd (`{PATH}>`, `{HOME}<`). Comments are blanked too.
+ * expanded target), any redirect names its fd (`{PATH}>`, `{HOME}<`) or a here-document starts (`<<`).
+ * Comments are blanked too.
  * Blanking keeps the `&` of `2>&1` from reading as an operator later.
  */
 function withoutHarmlessRedirects(command: string): string | undefined {
@@ -261,7 +298,15 @@ function withoutHarmlessRedirects(command: string): string | undefined {
 		if (ch !== ">" && ch !== "<") continue;
 		// `{name}>` and `{name}<` store the new fd number in a variable such as PATH or HOME.
 		if (command[fdStart(command, i) - 1] === "}") return undefined;
-		if (ch === "<") continue;
+		if (ch === "<") {
+			// A here-document body is text, not code, so a quote in it would hide the lines after it from
+			// this scan. Bash ends the body at a delimiter line; rather than track that, block `<<`.
+			if (command[i + 1] === "<") {
+				if (command[i + 2] !== "<") return undefined;
+				i += 2; // `<<<` is a here-string: one word on the same line.
+			}
+			continue;
+		}
 		const end = harmlessRedirectEnd(command, i);
 		if (end === undefined) return undefined;
 		blank(redirectStart(command, i), end);
@@ -391,7 +436,8 @@ function hasShellExpansion(command: string): boolean {
 			braceDepth--;
 		} else if (braceDepth > 0 && (ch === "," || (ch === "." && next === "."))) {
 			braceList = true;
-		} else if (/[\s;&|]/.test(ch)) {
+		} else if (/[ \t\n;&|]/.test(ch)) {
+			// Bash's word breaks only: `{-o,x<NBSP>}` is one word to bash and still expands.
 			braceDepth = 0;
 			braceList = false;
 		}
@@ -421,7 +467,8 @@ function shellWords(segment: string): string[] | undefined {
 		} else if (ch === "'" || ch === '"') {
 			quote = ch;
 			inWord = true;
-		} else if (/\s/.test(ch)) {
+		} else if (/[ \t\n]/.test(ch)) {
+			// Bash splits only here: `A=1<NBSP>ls touch x` assigns "1<NBSP>ls" and runs touch.
 			if (inWord) words.push(word);
 			word = "";
 			inWord = false;
