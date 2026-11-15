@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 import { afterEach, expect, it } from "vitest";
+import { ensurePrivateSocketDir } from "../src/builtin-extensions/pi-intercom/broker/paths.ts";
 
 const sourceDir = fileURLToPath(new URL("../src/builtin-extensions/pi-intercom/", import.meta.url));
 const fixtures: Array<{ root: string; agentDir: string }> = [];
@@ -236,3 +237,26 @@ it("reports a health timeout with the log path when the process never listens", 
 	expect(result.error).toBeUndefined();
 	expect(result.status, result.stderr).toBe(0);
 }, 20_000);
+
+it.skipIf(process.platform === "win32")("refuses a socket dir that is not private instead of fixing it up", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "lunr-intercom-dir-"));
+	fixtures.push({ root, agentDir: path.join(root, "agent") });
+	const wide = path.join(root, "wide");
+	fs.mkdirSync(wide);
+	fs.chmodSync(wide, 0o777);
+	fs.writeFileSync(path.join(wide, "planted.sock"), "");
+	expect(() => ensurePrivateSocketDir(path.join(wide, "broker.sock"), path.join(root, "agent"))).toThrow(
+		`Intercom socket directory ${wide} has mode 0777; it must be 0700. Remove it and start lunR again.`,
+	);
+	expect(fs.statSync(wide).mode & 0o777).toBe(0o777);
+
+	const link = path.join(root, "link");
+	fs.symlinkSync(wide, link);
+	expect(() => ensurePrivateSocketDir(path.join(link, "broker.sock"), path.join(root, "agent"))).toThrow(
+		`Intercom socket directory ${link} is not a directory`,
+	);
+
+	const fresh = path.join(root, "fresh");
+	ensurePrivateSocketDir(path.join(fresh, "broker.sock"), path.join(root, "agent"));
+	expect(fs.statSync(fresh).mode & 0o777).toBe(0o700);
+});

@@ -95,8 +95,9 @@ export function getBrokerSocketPath(
 }
 
 /**
- * Creates the directory that holds a short socket path and refuses one that another user owns or
- * that is a symlink, since a shared temp dir lets anyone create the name first.
+ * Creates the directory that holds a short socket path. Refuses one that is a symlink, belongs to
+ * another user or has any group or other permission bits, because anyone could have created the
+ * fixed /tmp name first or left a socket in it. The error names the dir so the user can remove it.
  */
 export function ensurePrivateSocketDir(socketPath: string, agentDir: string = getAgentDirPath()): void {
   const socketDir = dirname(socketPath);
@@ -106,10 +107,17 @@ export function ensurePrivateSocketDir(socketPath: string, agentDir: string = ge
 
   mkdirSync(socketDir, { recursive: true, mode: INTERCOM_DIR_MODE });
   const stat = lstatSync(socketDir);
-  if (!stat.isDirectory() || (process.getuid && stat.uid !== process.getuid())) {
-    throw new Error(`Intercom socket directory ${socketDir} is not a directory owned by this user`);
+  const uid = process.getuid?.();
+  const problem = !stat.isDirectory()
+    ? "is not a directory"
+    : uid !== undefined && stat.uid !== uid
+      ? `is owned by uid ${stat.uid}, not ${uid}`
+      : stat.mode & 0o077
+        ? `has mode ${(stat.mode & 0o777).toString(8).padStart(4, "0")}; it must be 0700`
+        : undefined;
+  if (problem) {
+    throw new Error(`Intercom socket directory ${socketDir} ${problem}. Remove it and start lunR again.`);
   }
-  chmodSync(socketDir, INTERCOM_DIR_MODE);
 }
 
 export function getBrokerConnectTarget(
