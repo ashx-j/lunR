@@ -132,6 +132,7 @@ export class AgentSessionRuntime {
 		this.transferring = true;
 		this.session.setTransferring(true);
 		const hasAttachedWork = () =>
+			this.session.bashJobs.running().length > 0 ||
 			getSubagentCancellation(this.session.sessionId)?.hasActiveRuns() ||
 			getSubagentCancellation(this.session.sessionFile ?? "")?.hasActiveRuns() ||
 			processRegistry

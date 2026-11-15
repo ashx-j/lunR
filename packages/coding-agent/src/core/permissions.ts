@@ -98,6 +98,8 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"grep",
 	"find",
 	"ls",
+	// Reads or stops a job that a bash call started; that call already passed every gate.
+	"bash_job",
 	"web_search",
 	"fetch_content",
 	"get_search_content",

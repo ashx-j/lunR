@@ -114,6 +114,7 @@ const optionalModules = [
 const alwaysLoadedTools = [
 	"ast_search",
 	"bash",
+	"bash_job",
 	"code_overview",
 	"edit",
 	"goal_blocked",
@@ -249,6 +250,7 @@ registerHooks({load(url, context, nextLoad) {
 			for (const name of [
 				"read",
 				"bash",
+				"bash_job",
 				"edit",
 				"write",
 				"subagent",

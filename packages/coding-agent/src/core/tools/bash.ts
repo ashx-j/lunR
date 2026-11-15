@@ -17,6 +17,7 @@ import {
 } from "../../utils/shell.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { markExited as markProcessExited, register as registerProcess } from "../process-registry.ts";
+import { BashJobs, noteLeftoverProcesses } from "./bash-jobs.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import {
 	GroupedCallText,
@@ -52,6 +53,7 @@ const bashSchema = Type.Object({
 	timeout: Type.Optional(
 		Type.Number({ description: "Timeout in seconds. Raise it for commands that need longer than the default" }),
 	),
+	run_in_background: Type.Optional(Type.Boolean({ description: "Run as a background job and return its id at once" })),
 });
 
 export type BashToolInput = Static<typeof bashSchema>;
@@ -158,6 +160,7 @@ export function createLocalBashOperations(options?: { shellPath?: string; sessio
 				return { exitCode, signal: child.signalCode };
 			} finally {
 				if (child.pid) untrackDetachedChildPid(child.pid);
+				if (child.pid && !timedOut && !signal?.aborted) noteLeftoverProcesses(child.pid, command);
 				// lunr: unregister from /processes if the process has exited; keep it if still
 				// alive (detached/backgrounded dev servers survive the shell call).
 				if (child.pid) {
@@ -209,6 +212,8 @@ export interface BashToolOptions {
 	spawnHook?: BashSpawnHook;
 	/** Timeout in seconds for calls that pass none; 0 means none. Default: DEFAULT_BASH_TIMEOUT_SECONDS */
 	defaultTimeout?: number;
+	/** Where `run_in_background` jobs live, shared with the bash_job tool. The session passes its own and stops them when it ends. */
+	jobs?: BashJobs;
 }
 
 const BASH_PREVIEW_LINES = 5;
@@ -243,7 +248,7 @@ function formatDuration(ms: number): string {
 const MAX_COLLAPSED_COMMAND_CHARS = 100;
 
 function formatBashCall(
-	args: { command?: string; timeout?: number } | undefined,
+	args: { command?: string; timeout?: number; run_in_background?: boolean } | undefined,
 	options?: { expanded?: boolean; compact?: boolean },
 ): string {
 	const command = str(args?.command);
@@ -261,7 +266,8 @@ function formatBashCall(
 	if (command) {
 		commandDisplay = theme.fg("toolTitle", theme.bold(commandDisplay));
 	}
-	return commandDisplay + timeoutSuffix;
+	const backgroundSuffix = args?.run_in_background ? theme.fg("muted", " (background)") : "";
+	return commandDisplay + timeoutSuffix + backgroundSuffix;
 }
 
 function rebuildBashResultRenderComponent(
@@ -341,6 +347,7 @@ export function createBashToolDefinition(
 	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
 	const commandPrefix = options?.commandPrefix;
 	const spawnHook = options?.spawnHook;
+	const jobs = options?.jobs ?? new BashJobs();
 	// Capped at setTimeout's limit so a huge setting cannot make every call fail validation.
 	const defaultTimeout = Math.min(options?.defaultTimeout ?? DEFAULT_BASH_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS);
 	const timeoutText =
@@ -350,18 +357,23 @@ export function createBashToolDefinition(
 	return {
 		name: "bash",
 		label: "bash",
-		description: `Execute a bash command. Each call starts a new shell in the session working directory, so cd and exported variables do not carry over to the next call. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. ${timeoutText}`,
+		description: `Execute a bash command. Each call starts a new shell in the session working directory, so cd and exported variables do not carry over to the next call. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. ${timeoutText} Start dev servers, watchers and other commands that keep running with run_in_background, not & or nohup: the call returns a job id at once with no timeout, and bash_job reads or stops the job. Jobs stop when the session ends.`,
 		promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
 		parameters: bashSchema,
 		async execute(
 			_toolCallId,
-			{ command, timeout }: { command: string; timeout?: number },
+			{ command, timeout, run_in_background }: { command: string; timeout?: number; run_in_background?: boolean },
 			signal?: AbortSignal,
 			onUpdate?,
 			_ctx?,
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+			if (run_in_background) {
+				if (options?.operations) throw new Error("run_in_background needs the local shell.");
+				const job = jobs.start(spawnContext.command, spawnContext.cwd, spawnContext.env, options?.shellPath);
+				return { content: [{ type: "text", text: `Started job ${job.id}.` }], details: undefined };
+			}
 			const output = new OutputAccumulator({ tempFilePrefix: "lunr-bash" }); // lunr: renamed from pi-bash
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;

@@ -37,12 +37,63 @@ export function estimateTextTokens(text: string): number {
 	return Math.ceil(ascii / CHARS_PER_TOKEN + nonAscii);
 }
 
+/** A tool as the last fingerprint saw it: the object and the fields an in-place edit replaces. */
+interface ToolKey {
+	tool: Tool;
+	name: string;
+	description: string;
+	parameters: Tool["parameters"];
+}
+
+/**
+ * The last fingerprint, reused while a request carries the same tools and system prompt. Stringifying
+ * ~64 KB of tools costs 0.3 to 0.5 ms per request. Sessions copy the tools array every turn, so each
+ * tool is compared with its name, description and schema object, which also catches an SDK caller that
+ * reassigns one of those on a tool it reuses. Mutating a schema's nested objects in place goes unnoticed.
+ */
+let lastFingerprint: { systemPrompt: string | undefined; tools: ToolKey[]; value: string } | undefined;
+
+function sameTools(previous: readonly ToolKey[], tools: readonly Tool[]): boolean {
+	if (previous.length !== tools.length) return false;
+	for (let index = 0; index < tools.length; index++) {
+		const key = previous[index];
+		const tool = tools[index];
+		if (
+			key.tool !== tool ||
+			key.name !== tool.name ||
+			key.description !== tool.description ||
+			key.parameters !== tool.parameters
+		)
+			return false;
+	}
+	return true;
+}
+
 /** Only the stable request prefix; conversation growth is handled separately. */
 export function getContextFingerprint(context: Pick<Context, "systemPrompt" | "tools">): string {
-	const serialized = safeJsonStringify([context.systemPrompt ?? "", context.tools ?? []]);
+	const tools = context.tools ?? [];
+	if (
+		lastFingerprint &&
+		lastFingerprint.systemPrompt === context.systemPrompt &&
+		sameTools(lastFingerprint.tools, tools)
+	) {
+		return lastFingerprint.value;
+	}
+	const serialized = safeJsonStringify([context.systemPrompt ?? "", tools]);
 	let hash = 2166136261;
 	for (let i = 0; i < serialized.length; i++) hash = Math.imul(hash ^ serialized.charCodeAt(i), 16777619);
-	return `${serialized.length}:${hash >>> 0}`;
+	const value = `${serialized.length}:${hash >>> 0}`;
+	lastFingerprint = {
+		systemPrompt: context.systemPrompt,
+		tools: tools.map((tool) => ({
+			tool,
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters,
+		})),
+		value,
+	};
+	return value;
 }
 
 export function estimateTextAndImageContentTokens(content: string | Array<TextContent | ImageContent>): number {

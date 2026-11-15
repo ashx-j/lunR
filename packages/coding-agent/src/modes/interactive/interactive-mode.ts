@@ -2819,9 +2819,27 @@ export class InteractiveMode {
 	}
 
 	private subscribeToAgent(): void {
-		this.unsubscribe = this.session.subscribe(async (event) => {
+		const offEvents = this.session.subscribe(async (event) => {
 			await this.handleEvent(event);
 		});
+		// Footer list of running `run_in_background` jobs; the session stops them when it ends.
+		const jobs = this.session.bashJobs;
+		const showJobs = () => {
+			const running = jobs.running().map((job) => {
+				const command = job.command.trim().split("\n")[0] ?? "";
+				return `${job.id} ${command.length > 32 ? `${command.slice(0, 32)}…` : command}`;
+			});
+			this.setExtensionStatus(
+				"bash-jobs",
+				running.length > 0 ? theme.fg("dim", `jobs: ${running.join(", ")}`) : undefined,
+			);
+		};
+		const offJobs = jobs.subscribe(showJobs);
+		showJobs();
+		this.unsubscribe = () => {
+			offEvents();
+			offJobs();
+		};
 	}
 
 	private async handleEvent(event: AgentSessionEvent): Promise<void> {
