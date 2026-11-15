@@ -1,4 +1,5 @@
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstatSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { canonicalizeTargetPath } from "../utils/paths.ts";
 import { getInstructionsRoot } from "./model-instructions.ts";
@@ -22,21 +23,21 @@ function normalize(path: string): string {
 	return process.platform === "win32" || process.platform === "darwin" ? normalized.toLowerCase() : normalized;
 }
 
-const canonicalRootCache = new Map<string, string[]>();
-
 /**
- * A policy path and its canonical form, cached because canonicalizing walks the filesystem and every
- * edit and write checks every policy. A symlink created later at a protected path is not seen, but
- * creating one takes a shell command, which could change the file directly anyway.
+ * `canonicalizeTargetPath`, recomputed on every check because `git checkout`, an unpacked archive or
+ * another terminal can turn any component into a symlink. The target and the policies share most
+ * ancestors, so `memo` keeps one result per path for one check: one `lstat` per ancestor, and a full
+ * resolve only for a component that is a symlink.
  */
-function canonicalRoots(path: string): string[] {
-	let roots = canonicalRootCache.get(path);
-	if (!roots) {
-		if (canonicalRootCache.size >= 256) canonicalRootCache.clear();
-		roots = [normalize(path), normalize(canonicalizeTargetPath(path))];
-		canonicalRootCache.set(path, roots);
-	}
-	return roots;
+function canonicalPath(path: string, memo: Map<string, string>): string {
+	let canonical = memo.get(path);
+	if (canonical !== undefined) return canonical;
+	const parent = dirname(path);
+	if (parent === path) canonical = path;
+	else if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) canonical = canonicalizeTargetPath(path);
+	else canonical = join(canonicalPath(parent, memo), basename(path));
+	memo.set(path, canonical);
+	return canonical;
 }
 
 function isWithin(target: string, root: string): boolean {
@@ -47,8 +48,9 @@ function isWithin(target: string, root: string): boolean {
 /** Shared direct-mutation policy. Check the requested name and its canonical destination. */
 export function protectedTargetWriteReason(path: string, cwd: string): string | undefined {
 	try {
-		const target = resolveToCwd(path, cwd);
-		const targets = [normalize(target), normalize(canonicalizeTargetPath(target))];
+		const memo = new Map<string, string>();
+		const target = resolve(resolveToCwd(path, cwd));
+		const targets = [normalize(target), normalize(canonicalPath(target, memo))];
 		const agentDir = getAgentDir();
 		const policies = [
 			{ path: getInstructionsRoot(agentDir), tree: true, reason: GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON },
@@ -68,7 +70,8 @@ export function protectedTargetWriteReason(path: string, cwd: string): string | 
 			{ path: join(agentDir, "claude-code"), tree: true, reason: LUNR_MANAGED_STATE_WRITE_BLOCK_REASON },
 		];
 		for (const policy of policies) {
-			const roots = canonicalRoots(policy.path);
+			const root = resolve(policy.path);
+			const roots = [normalize(root), normalize(canonicalPath(root, memo))];
 			if (
 				targets.some((candidate) =>
 					roots.some((root) => (policy.tree ? isWithin(candidate, root) : candidate === root)),

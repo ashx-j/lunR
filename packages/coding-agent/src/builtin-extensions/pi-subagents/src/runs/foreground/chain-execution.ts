@@ -14,6 +14,7 @@ import { ChainClarifyComponent, type ChainClarifyResult, type BehaviorOverride }
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
 import {
 	resolveChainTemplates,
+	chainDirPath,
 	createChainDir,
 	removeChainDir,
 	resolveStepBehavior,
@@ -199,7 +200,7 @@ function staticChainOutputError(chainSteps: ChainStep[], chainDir: string, cwd: 
 			? step.parallel.map((task) => task.output)
 			: isDynamicParallelStep(step)
 				? [step.parallel.output]
-				: [(step as SequentialStep).output],
+				: [step.output],
 	);
 	for (const output of outputs) {
 		if (typeof output !== "string" || !output) continue;
@@ -607,13 +608,11 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		throw error;
 	}
 
-	const chainDir = createChainDir(runId, chainDirBase);
 	// A later step's output is otherwise checked only when that step starts, after earlier children ran.
-	const outputError = staticChainOutputError(chainSteps, chainDir, ctx.cwd);
-	if (outputError) {
-		removeChainDir(chainDir);
-		return buildChainExecutionErrorResult(outputError, makeDetailsInput());
-	}
+	// Checked before the chain directory exists, so a refused chain leaves nothing behind.
+	const outputError = staticChainOutputError(chainSteps, chainDirPath(runId, chainDirBase), ctx.cwd);
+	if (outputError) return buildChainExecutionErrorResult(outputError, makeDetailsInput());
+	const chainDir = createChainDir(runId, chainDirBase);
 	const hasParallelSteps = chainSteps.some((step) => isParallelStep(step) || isDynamicParallelStep(step));
 	let templates: ResolvedTemplates = resolveChainTemplates(chainSteps);
 	const shouldClarify = clarify === true && ctx.hasUI && !hasParallelSteps;

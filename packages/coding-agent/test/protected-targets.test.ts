@@ -98,6 +98,24 @@ describe("protected destinations", () => {
 		expect(await readFile(settings, "utf8")).toBe("original");
 	});
 
+	it("sees a protected path that became a symlink after an earlier check", async () => {
+		setPermissionMode("yolo");
+		expect(await gateToolCall("write", { path: join(profile, "notes.md") }, profile)).toBeUndefined();
+		// What `git checkout` of a branch with `.lunr -> tools/lunr` does, after the first check ran.
+		await mkdir(join(profile, "tools", "lunr"), { recursive: true });
+		await rm(join(profile, ".lunr"), { recursive: true });
+		await symlink(join("tools", "lunr"), join(profile, ".lunr"), "dir");
+		await mkdir(join(profile, "dotfiles", "agents"), { recursive: true });
+		await rm(join(agentDir, "agents"), { recursive: true });
+		await symlink(join(profile, "dotfiles", "agents"), join(agentDir, "agents"), "dir");
+		for (const path of [
+			join(profile, "tools", "lunr", "settings.json"),
+			join(profile, "dotfiles", "agents", "AGENTS.md"),
+		]) {
+			expect((await gateToolCall("write", { path }, profile))?.block, path).toBe(true);
+		}
+	});
+
 	it("fails closed for an unresolved symlink to a not-yet-created protected file", async () => {
 		const alias = join(profile, "alias.json");
 		await symlink(join(agentDir, "settings.json"), alias);

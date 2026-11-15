@@ -120,6 +120,8 @@ interface SubagentRunConfig {
 	steps: RunnerStep[];
 	resultPath: string;
 	cwd: string;
+	/** The parent session's directory, which decides the project `.lunr/settings.json` output may not write. */
+	sessionCwd?: string;
 	placeholder: string;
 	taskIndex?: number;
 	totalTasks?: number;
@@ -874,6 +876,7 @@ interface SingleStepContext {
 	outputs?: ChainOutputMap;
 	placeholder: string;
 	cwd: string;
+	sessionCwd?: string;
 	sessionEnabled: boolean;
 	sessionDir?: string;
 	artifactsDir?: string;
@@ -1248,7 +1251,7 @@ export async function runSingleStep(
 	const rawOutput = finalResult?.finalOutput ?? "";
 	const outputForPersistence = stripAcceptanceReport(rawOutput);
 	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
-		? resolveSingleOutput(step.outputPath, outputForPersistence, finalOutputSnapshot, ctx.cwd)
+		? resolveSingleOutput(step.outputPath, outputForPersistence, finalOutputSnapshot, ctx.sessionCwd ?? ctx.cwd)
 		: { fullOutput: outputForPersistence };
 	const output = stripAcceptanceReport(resolvedOutput.fullOutput);
 	const outputReference = resolvedOutput.savedPath ? formatSavedOutputReference(resolvedOutput.savedPath, output) : undefined;
@@ -2794,7 +2797,7 @@ async function runSubagent(
 				flushPendingStepSteers(fi);
 				const singleResult = await runSingleStep(task, {
 					supervisorSessionId: config.sessionId ?? undefined,
-					previousOutput, placeholder, cwd, sessionEnabled,
+					previousOutput, placeholder, cwd, sessionCwd: config.sessionCwd, sessionEnabled,
 					handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 					outputs,
 					sessionDir: config.sessionDir ? path.join(config.sessionDir, `dynamic-${stepIndex}-${taskIdx}`) : undefined,
@@ -3103,7 +3106,7 @@ async function runSubagent(
 
 						const singleResult = await runSingleStep(taskForRun, {
 							supervisorSessionId: config.sessionId ?? undefined,
-							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
+							previousOutput, placeholder, cwd: taskCwd, sessionCwd: config.sessionCwd, sessionEnabled,
 							handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 							outputs,
 							sessionDir: taskSessionDir,
@@ -3316,7 +3319,7 @@ async function runSubagent(
 			flushPendingStepSteers(flatIndex);
 			const singleResult = await runSingleStep(seqStep, {
 				supervisorSessionId: config.sessionId ?? undefined,
-				previousOutput, placeholder, cwd, sessionEnabled,
+				previousOutput, placeholder, cwd, sessionCwd: config.sessionCwd, sessionEnabled,
 				handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 				outputs: statusPayload.mode === "single" ? undefined : outputs,
 				sessionDir: config.sessionDir,

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +13,16 @@ import { resetPermissions } from "../src/core/permissions.ts";
 vi.mock("../src/builtin-extensions/pi-subagents/src/runs/foreground/execution.ts", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("../src/builtin-extensions/pi-subagents/src/runs/foreground/execution.ts")>();
-	return { ...actual, runSync: vi.fn() };
+	return {
+		...actual,
+		runSync: vi.fn(async (_cwd: string, _agents: unknown, agent: string, task: string) => ({
+			agent,
+			task,
+			exitCode: 0,
+			messages: [],
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+		})),
+	};
 });
 
 const model = "openai-codex/gpt-5.6-sol";
@@ -48,8 +57,25 @@ describe("subagent output to a protected target", () => {
 	function launch(params: SubagentParamsLike) {
 		const executor = createSubagentExecutor({
 			pi: { getSessionName: () => "test-session", events: { emit() {} } } as never,
-			state: { foregroundControls: new Map() } as never,
-			config: { intercomBridge: false } as never,
+			state: {
+				baseCwd: root,
+				currentSessionId: null,
+				foregroundSubagentInFlight: 0,
+				subagentSpawns: { sessionId: null, count: 0 },
+				asyncJobs: new Map(),
+				foregroundRuns: new Map(),
+				foregroundControls: new Map(),
+				lastForegroundControlId: null,
+				pendingForegroundControlNotices: new Map(),
+				cleanupTimers: new Map(),
+				lastUiContext: null,
+				poller: null,
+				completionSeen: new Map(),
+				watcher: null,
+				watcherRestartTimer: null,
+				resultFileCoalescer: { schedule: () => false, clear: () => {} },
+			},
+			config: { intercomBridge: { mode: "off" } },
 			tempArtifactsDir: root,
 			getSubagentSessionRoot: () => root,
 			expandTilde: (path) => path,
@@ -65,14 +91,24 @@ describe("subagent output to a protected target", () => {
 
 	const child = (output?: string) => ({ description: "probe", model, thinking: "high", task: "say hi", output });
 
-	it.each([
+	it("starts a child for an output inside the project", async () => {
+		const result = await launch(child(join(root, "report.md")));
+		expect(JSON.stringify(result.content)).not.toContain("Subagent output can't go to");
+		expect(runSync).toHaveBeenCalledTimes(1);
+	});
+
+	it.each<[string, () => SubagentParamsLike]>([
 		["single", () => child(join(agentDir, "settings.json"))],
 		["parallel", () => ({ tasks: [child(join(agentDir, "settings.json"))] })],
-		["a later chain step", () => ({ chain: [child(), child(join(agentDir, "gateway.json"))] })],
+		[
+			"a later chain step",
+			() => ({ chain: [child(), child(join(agentDir, "gateway.json"))], chainDir: join(root, "chains") }),
+		],
 	])("refuses %s before any child starts", async (_shape, params) => {
-		const result = await launch(params() as SubagentParamsLike);
-		expect(result.isError).toBe(true);
+		const result = await launch(params());
+		expect(result).toMatchObject({ isError: true });
 		expect(JSON.stringify(result.content)).toContain("Subagent output can't go to");
 		expect(runSync).not.toHaveBeenCalled();
+		expect(existsSync(join(root, "chains"))).toBe(false);
 	});
 });
