@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "./cli/args.ts";
 import { readPipedStdin, readsStdinBeforeTurn } from "./cli/piped-stdin.ts";
-import { isNodeBundle } from "./config.ts";
+import { isNodeBundle, VERSION } from "./config.ts";
 import type { InteractiveView } from "./startup/interactive-view.ts";
 import { resolvePreloadLaunchMode } from "./startup/launch-routing.ts";
 import { markStartupMilestone } from "./startup/startup-milestones.ts";
@@ -12,7 +12,9 @@ import { markStartupMilestone } from "./startup/startup-milestones.ts";
 markStartupMilestone("process_entry");
 const isDevChannel = process.env.PI_CODING_AGENT_DEV === "1";
 process.title = isDevChannel ? "lunr-dev" : "lunr";
-const ownsTitle = process.stdout.isTTY && parseArgs(process.argv.slice(2)).mode !== "acp";
+const args = process.argv.slice(2);
+const parsedArgs = parseArgs(args);
+const ownsTitle = process.stdout.isTTY && parsedArgs.mode !== "acp";
 // Bound before print and json modes redirect process.stdout.write to stderr.
 const writeStdout = process.stdout.write.bind(process.stdout);
 // Push the terminal's current title onto the xterm title stack (CSI 22;0 t) before lunR's first
@@ -30,17 +32,17 @@ process.once("exit", () => {
 	} catch {}
 });
 
-if (!isNodeBundle) {
-	try {
-		const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".lunr", "agent");
-		enableCompileCache(join(agentDir, "compile-cache"));
-	} catch {}
+// Answer --version without importing main.ts (about 500 ms). Subcommands and argument errors
+// take main's path, so the output matches. --help stays there because it lists the flags of
+// every loaded extension.
+if (parsedArgs.version && parsedArgs.diagnostics.length === 0 && args[0]?.startsWith("-")) {
+	console.log(VERSION);
+	process.exit(0);
 }
 
 process.env.PI_CODING_AGENT = "true";
 process.emitWarning = (() => {}) as typeof process.emitWarning;
 
-const args = process.argv.slice(2);
 const startupBenchmark = process.env.PI_STARTUP_BENCHMARK === "1";
 const preloadMode = resolvePreloadLaunchMode(args, {
 	stdinIsTTY: process.stdin.isTTY === true,
@@ -52,20 +54,30 @@ markStartupMilestone("mode_routed");
 // A prompt launch with piped stdin starts reading it here, before main.ts loads (about 500 ms),
 // so the first-byte wait overlaps startup. Subcommands (a leading non-flag word) and launches
 // that use stdin for something else keep main's own read.
-const launchArgs = parseArgs(args);
 const pipedStdin =
 	!process.stdin.isTTY &&
 	!startupBenchmark &&
 	(args[0] === undefined || args[0].startsWith("-")) &&
-	launchArgs.mode !== "rpc" &&
-	launchArgs.mode !== "acp" &&
-	!launchArgs.help &&
-	!launchArgs.version &&
-	launchArgs.listModels === undefined &&
-	launchArgs.export === undefined &&
-	!readsStdinBeforeTurn(launchArgs)
+	parsedArgs.mode !== "rpc" &&
+	parsedArgs.mode !== "acp" &&
+	!parsedArgs.help &&
+	!parsedArgs.version &&
+	parsedArgs.listModels === undefined &&
+	parsedArgs.export === undefined &&
+	!readsStdinBeforeTurn(parsedArgs)
 		? readPipedStdin()
 		: undefined;
+
+// The bundle uses the compile cache only for non-interactive launches. There it saves about
+// 170 ms, but in interactive launches it delays the first request by about 60 ms. Node checks
+// each entry against its source and Node version and recompiles on a mismatch, so a cache
+// left by an older lunR is safe.
+if (!isNodeBundle || preloadMode !== "interactive") {
+	try {
+		const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".lunr", "agent");
+		enableCompileCache(join(agentDir, "compile-cache"));
+	} catch {}
+}
 
 if (preloadMode === "interactive") {
 	const { InteractiveView } = await import("./startup/interactive-view.ts");
