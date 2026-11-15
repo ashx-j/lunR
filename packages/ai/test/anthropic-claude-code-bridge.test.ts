@@ -297,6 +297,47 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(isRetryableAssistantError(failed)).toBe(false);
 	});
 
+	it("lists an offered model the catalog lacks in picker order and streams it with its family's settings", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const offered: ExternalClaudeCodeCredential = {
+			...connection,
+			models: [
+				{
+					id: "claude-opus-9",
+					route: "claude-opus-9[1m]",
+					contextWindow: 1_000_000,
+					description: "Opus 9 · Newest",
+				},
+				{ id: "claude-opus-4-8", route: "claude-opus-4-8" },
+				{ id: "claude-mythos-1", route: "claude-mythos-1" },
+			],
+		};
+		const listed = anthropicProvider().filterModels?.(Object.values(ANTHROPIC_MODELS), offered) ?? [];
+		expect(listed.map((row) => row.id)).toEqual(["claude-opus-9", "claude-opus-4-8", "claude-mythos-1"]);
+		const [unknown, , newFamily] = listed;
+		expect(unknown).toMatchObject({
+			name: "Opus 9",
+			contextWindow: 1_000_000,
+			reasoning: true,
+			catalog: { pricing: "unknown" },
+		});
+		// No family row to borrow from: lunR sends no thinking setting.
+		expect(newFamily).toMatchObject({ name: "claude-mythos-1", reasoning: false, contextWindow: 128_000 });
+
+		const result = await streamClaudeCode(
+			unknown,
+			context,
+			{ reasoning: "high", externalClaudeCode: offered },
+			true,
+			upstream,
+		).result();
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(record.argv[record.argv.indexOf("--model") + 1]).toBe("claude-opus-9[1m]");
+		expect(record.extra.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(record.extra.output_config).toEqual({ effort: "high" });
+	});
+
 	it("replays a history too large for Claude Code's settings file through stdin", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
 		const large: Context = {
