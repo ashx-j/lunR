@@ -177,6 +177,8 @@ class IntercomBroker {
       writeFileSync(PID_PATH, String(process.pid), { mode: INTERCOM_RUNTIME_FILE_MODE });
       restrictIntercomRuntimeFile(PID_PATH);
       console.log(`Intercom broker started (pid: ${process.pid})`);
+      // A broker whose spawning client died before registering would otherwise never exit.
+      this.scheduleShutdownCheck();
     };
 
     // Without this handler a failed listen is an unhandled 'error' event and a stack trace.
@@ -254,9 +256,10 @@ class IntercomBroker {
           this.sessions.delete(sessionId);
           this.clearAskEdgesForSession(sessionId);
           this.broadcast({ type: "session_left", sessionId }, sessionId);
-          this.scheduleShutdownCheck();
         }
       }
+      // Also covers connections that never registered, such as a client killed mid-startup.
+      if (this.sessions.size === 0) this.scheduleShutdownCheck();
     });
 
     socket.on("error", (error) => {
@@ -294,12 +297,14 @@ class IntercomBroker {
     return true;
   }
 
+  /** Exits 5 s after the last client leaves, unless a client connects again in that time. */
   private scheduleShutdownCheck(): void {
-    if (this.shutdownTimer) return;
+    if (this.shutdownTimer) clearTimeout(this.shutdownTimer);
 
     this.shutdownTimer = setTimeout(() => {
       this.shutdownTimer = null;
-      if (this.sessions.size === 0) {
+      // A connection that has not registered yet is a client on its way in.
+      if (this.sessions.size === 0 && this.connections.size === 0) {
         console.log("No sessions connected, shutting down");
         this.shutdown();
       }

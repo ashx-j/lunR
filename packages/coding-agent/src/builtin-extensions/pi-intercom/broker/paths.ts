@@ -1,7 +1,7 @@
 import { chmodSync, lstatSync, mkdirSync, readFileSync } from "fs";
 import { createHash } from "crypto";
 import { dirname, isAbsolute, join, resolve } from "path";
-import { homedir, tmpdir } from "os";
+import { homedir } from "os";
 
 export const INTERCOM_DIR_MODE = 0o700;
 export const INTERCOM_RUNTIME_FILE_MODE = 0o600;
@@ -73,13 +73,13 @@ function maxSocketPathBytes(platform: NodeJS.Platform): number {
 /**
  * Broker socket path shared by the broker and its clients. The socket lives in the profile's
  * intercom dir when that path fits in sun_path, so existing profiles keep their socket. A longer
- * profile path gets a per-user private dir under XDG_RUNTIME_DIR (or the OS temp dir) and a
- * socket named by a hash of the agent dir, which keeps one broker per profile.
+ * profile path gets a per-user private dir under /tmp and a socket named by a hash of the agent
+ * dir. The base dir ignores the environment, so sessions that see different XDG_RUNTIME_DIR or
+ * TMPDIR values (a systemd service, cron, ssh) still share one broker per profile.
  */
 export function getBrokerSocketPath(
   platform: NodeJS.Platform = process.platform,
   agentDir: string = getAgentDirPath(),
-  env: NodeJS.ProcessEnv = process.env,
 ): string {
   if (platform === "win32") {
     return `\\\\.\\pipe\\pi-intercom-${sanitizePipeSegment(agentDir)}`;
@@ -90,10 +90,8 @@ export function getBrokerSocketPath(
     return profileSocket;
   }
 
-  const runtimeDir = env.XDG_RUNTIME_DIR?.trim();
-  const baseDir = runtimeDir && isAbsolute(runtimeDir) ? runtimeDir : tmpdir();
   const hash = createHash("sha256").update(agentDir).digest("hex").slice(0, 16);
-  return join(baseDir, `lunr-intercom-${process.getuid?.() ?? "user"}`, `${hash}.sock`);
+  return join("/tmp", `lunr-intercom-${process.getuid?.() ?? "user"}`, `${hash}.sock`);
 }
 
 /**
@@ -143,7 +141,7 @@ export function getBrokerConnectTarget(
   }
 
   const agentDir = getAgentDirPath(env);
-  const socketPath = getBrokerSocketPath(platform, agentDir, env);
+  const socketPath = getBrokerSocketPath(platform, agentDir);
   if (platform !== "win32") {
     ensurePrivateSocketDir(socketPath, agentDir);
   }
@@ -158,7 +156,7 @@ export function getBrokerListenTarget(
     return { transport: "tcp", host: INTERCOM_TCP_HOST, port: 0 };
   }
 
-  return getBrokerSocketPath(platform, getAgentDirPath(env), env);
+  return getBrokerSocketPath(platform, getAgentDirPath(env));
 }
 
 export function ensureIntercomRuntimeDir(
