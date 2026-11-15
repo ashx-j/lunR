@@ -1,11 +1,12 @@
 import { existsSync, rmSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { CLAUDE_CODE_HISTORY_REPLAYED, CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
+import { removeOldClaudeCodeVersions } from "../utils/claude-code-release.ts";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { type AssistantMessageEventStream, createAssistantMessageEventStream } from "../utils/event-stream.ts";
 import { stream as streamMessages, streamSimple as streamSimpleMessages } from "./anthropic-messages.ts";
@@ -350,6 +351,7 @@ function answerStream(
 	next: () => Promise<ClaudeCodeEvent | undefined>,
 	inventory: ReadonlySet<string>,
 	finish: (graceful?: boolean) => Promise<void>,
+	answered: () => void,
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	let pending: ClaudeCodeEvent | undefined = first;
@@ -378,6 +380,7 @@ function answerStream(
 					// The answer is complete; stopping now also keeps Claude Code from any further request.
 					controller.close();
 					await finish();
+					answered();
 				}
 			} catch (error) {
 				controller.error(error);
@@ -412,6 +415,49 @@ function removeOnExit(directory: string): () => void {
 	return () => liveDirectories.delete(directory);
 }
 
+let oldVersionsRemoved = false;
+
+/**
+ * After the first answer this process gets from the saved Claude Code, removes other versions left by a pin
+ * bump. It runs once per process and in the background, so no request waits for it.
+ */
+function removeOldVersionsOnce(command: string): void {
+	if (oldVersionsRemoved) return;
+	oldVersionsRemoved = true;
+	void removeOldClaudeCodeVersions(command).catch(() => {});
+}
+
+/**
+ * The connection whose binary exists. When the in-memory one's binary is gone, another lunR on the profile
+ * logged in with a newer pin and removed the old version, so this reads the saved login once and uses the
+ * version it names.
+ */
+async function currentConnection(connection: ExternalClaudeCodeCredential): Promise<ExternalClaudeCodeCredential> {
+	if (existsSync(connection.command)) return connection;
+	const versions = dirname(dirname(connection.command));
+	if (basename(versions) === "claude-code") {
+		let saved: unknown;
+		try {
+			saved = JSON.parse(await readFile(join(dirname(versions), "auth.json"), "utf8"));
+		} catch {
+			/* Falls through to the missing-binary error. */
+		}
+		const anthropic = isRecord(saved) ? saved.anthropic : undefined;
+		if (isSavedConnection(anthropic) && existsSync(anthropic.command)) return anthropic;
+	}
+	throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
+}
+
+function isSavedConnection(value: unknown): value is ExternalClaudeCodeCredential {
+	return (
+		isRecord(value) &&
+		value.type === "external_claude_code" &&
+		value.version === 3 &&
+		value.manager === "claude-code" &&
+		typeof value.command === "string"
+	);
+}
+
 async function runClaudeCode(
 	connection: ExternalClaudeCodeCredential,
 	request: ClaudeCodeRequest,
@@ -419,8 +465,6 @@ async function runClaudeCode(
 	idleMs: number,
 	upstream: string | undefined,
 ): Promise<Response> {
-	if (!existsSync(connection.command))
-		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
 	const loopback = await ClaudeCodeLoopback.open(request.tools);
 	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-")).catch((error: unknown) => {
 		loopback.close();
@@ -562,8 +606,13 @@ async function runClaudeCode(
 				);
 			if (!error) throw new Error(stoppedBeforeRequest(first));
 			await finish(true);
-			// Claude Code's own refusal text points at its --model flag, which lunR users do not have.
-			if (!request.listed && (error.status === 403 || error.status === 404))
+			// Claude Code's own 404 text points at its --model flag, which lunR users do not have. Its result
+			// carries Anthropic's message but not the error type, so a 403 counts as a model refusal only when
+			// the message names the model; any other 403 (a disabled organization, a policy block) keeps it.
+			const refusedModel =
+				error.status === 404 ||
+				(error.status === 403 && typeof first.result === "string" && first.result.includes(request.route));
+			if (!request.listed && refusedModel)
 				return localFailure(
 					`Claude ${request.route} is not available on this subscription, or the saved login predates it. Run /login anthropic to refresh the models it offers.`,
 				);
@@ -571,10 +620,13 @@ async function runClaudeCode(
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
 		const next = () => within(nextAnswerEvent(events), "Claude Code request timed out.");
-		return new Response(answerStream(first, next, inventory, finish), {
-			status: 200,
-			headers: { "content-type": "text/event-stream" },
-		});
+		return new Response(
+			answerStream(first, next, inventory, finish, () => removeOldVersionsOnce(connection.command)),
+			{
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			},
+		);
 	} catch (error) {
 		await finish();
 		throw error;
@@ -596,9 +648,10 @@ export function claudeCodeFetch(
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			const request = claudeCodeRequest(body, connection);
+			const current = await currentConnection(connection);
+			const request = claudeCodeRequest(body, current);
 			if (!("messages" in request.extraBody)) onHistoryReplay?.();
-			return await runClaudeCode(connection, request, signal, idleMs, upstream);
+			return await runClaudeCode(current, request, signal, idleMs, upstream);
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));

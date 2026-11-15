@@ -728,7 +728,8 @@ export function renderStatsLine(
 			const v = statuses.get(key);
 			if (v) modeZone.push(color(theme, "white", stripAnsi(v)));
 		}
-		const pipedKeys: string[] = [];
+		// lunr: running bash background jobs (set by InteractiveMode); always shown, they stop at exit.
+		const pipedKeys: string[] = ["bash-jobs"];
 		if (footerToggles.tps) pipedKeys.push("tps");
 		if (footerToggles.mcp) pipedKeys.push("mcp", "mcp-auth");
 		if (footerToggles.lsp) pipedKeys.push("lsp");

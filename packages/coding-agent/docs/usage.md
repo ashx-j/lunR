@@ -247,7 +247,7 @@ lunR waits up to 3 seconds for the first byte of stdin. The wait starts early in
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools but keep extension/custom tools enabled |
 | `--no-tools`, `-nt` | Disable all tools |
 
-Built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. Default on: `read`, `bash`, `edit`, `write`. `grep`/`find`/`ls` start off.
+Built-in tools: `read`, `bash`, `bash_job`, `edit`, `write`, `grep`, `find`, `ls`. Default on: `read`, `bash`, `edit`, `write`. `grep`/`find`/`ls` start off. `bash_job` is on whenever `bash` is: `bash` with `run_in_background` starts a job (a dev server, a watcher) and returns its id at once, and `bash_job` reads the job's new output or stops it. The footer lists running jobs. lunR stops them when the session ends. Processes a foreground command starts with `&` keep running after lunR exits, and lunR lists them on exit with the command to kill them.
 
 ### Resource Options
 

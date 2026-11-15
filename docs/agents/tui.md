@@ -24,6 +24,7 @@ Read before changing startup, rendering, input, slash commands, `/settings` or o
 - The wait card reads elapsed time from the leading `Waited`, `Wait timed out after` or `Wait aborted after` phrase; keep it in sync if those strings change.
 - Extension widget layout sorts built-in keys explicitly. Keep `todos` directly before `subagent-async` with only the dim rule between.
 - The subagent spinner setting changes the shared foreground/async glyph source live (default `braille`, choices from `unicode-animations`). Animation ticks stay unbounded and scale by each interval; a `% 10` counter freezes longer animations.
+- The ashxj-tui footer renders only whitelisted status keys (`pipedKeys`, mode-zone `plan`/`goal`); a new `setExtensionStatus` key shows nowhere until it is added there. `bash-jobs` is always shown.
 - Plan footer uses a 60s usage cache. Preferred window is `/settings` Plan usage window (`5h` | `weekly`); missing 5h falls back to weekly. In Customize, Plan usage hides the segment while Plan bar hides only the █░ fill. The TPS counter is its own toggle; feature statuses only gate plan/goal.
 - Injected-prompt collapse is render-only (`[DEEP RESEARCH]` / goal marker).
 
