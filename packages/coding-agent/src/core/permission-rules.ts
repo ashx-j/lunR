@@ -15,7 +15,7 @@
  * pattern's words (`git -C repo push`), and read a short-flag word as a set (`-rf` matches `-r -f`).
  * Rules stop a cooperating model from running something by accident; they are not a sandbox.
  *
- * Matching is linear in the command for each rule (see `bashMatcher`), and `MAX_RULES` /
+ * Matching is linear in the command for each rule (see `denyMatches`), and `MAX_RULES` /
  * `MAX_RULE_LENGTH` cap each list. A deny rule past a cap still blocks every call of its tool, so
  * dropping it fails closed, and settings load warns about it.
  */
@@ -54,7 +54,7 @@ interface CompiledRule {
 
 export interface DenyMatch {
 	rule: string;
-	/** The bash command nests or wraps too deeply to check, so every bash deny rule matches it. */
+	/** The bash command nests too deeply or costs too much to check, so every bash deny rule matches it. */
 	uncheckable: boolean;
 }
 
@@ -138,7 +138,14 @@ function segmentsMatchFrom(glob: readonly string[], path: readonly string[]): bo
 	return at(0, 0);
 }
 
-type PatternWord = { kind: "glob"; pieces: string[] } | { kind: "flags"; flags: string[] };
+/** Short flags as bit sets: `lower` for a to z, `upper` for A to Z. */
+interface FlagSet {
+	lower: number;
+	upper: number;
+}
+
+/** `plain`: the glob can't match an option word (it starts with neither `-` nor `*`). */
+type PatternWord = { kind: "glob"; pieces: string[]; plain: boolean } | ({ kind: "flags" } & FlagSet);
 
 interface DenyPattern {
 	/** The command word's glob, split on `*`. */
@@ -149,15 +156,69 @@ interface DenyPattern {
 	 * A starred last word (`push*`, `/*`), a glob over the rest of the line: `first` starts a word and
 	 * `middle` are the pieces between its stars. The pieces hold no spaces, so each lies inside one word.
 	 */
-	tail?: { first: string; middle: string[] };
+	tail?: { first: string; middle: string[]; plain: boolean };
 	/** A starred lone command word or last flag word (`sudo*`, `-rf*`): any text may follow. */
 	restAllowed: boolean;
 }
 
+function flagSet(word: string): FlagSet {
+	const set = { lower: 0, upper: 0 };
+	for (let i = 1; i < word.length; i++) {
+		const code = word.charCodeAt(i);
+		if (code >= 97) set.lower |= 1 << (code - 97);
+		else set.upper |= 1 << (code - 65);
+	}
+	return set;
+}
+
 function patternWord(word: string): PatternWord {
 	return SHORT_FLAGS.test(word) && word.length > 2
-		? { kind: "flags", flags: [...new Set(word.slice(1))] }
-		: { kind: "glob", pieces: word.split("*") };
+		? { kind: "flags", ...flagSet(word) }
+		: { kind: "glob", pieces: word.split("*"), plain: !/^[-*]/.test(word) };
+}
+
+const PLAIN = 0;
+const OPTION = 1;
+/** An option with `=`, so the word after it is not its value. */
+const VALUED_OPTION = 2;
+const SHORT_FLAG_WORD = 3;
+
+function wordKind(word: string): number {
+	if (!word.startsWith("-")) return PLAIN;
+	return word.includes("=") ? VALUED_OPTION : SHORT_FLAGS.test(word) ? SHORT_FLAG_WORD : OPTION;
+}
+
+/** A line longer than this gets `factsOf`; a shorter one is cheaper to read word by word. */
+const LONG_LINE = 32;
+
+/** Each word's kind and short flags, computed once per long segment's words and shared by every rule. */
+const wordFacts = new WeakMap<
+	readonly string[],
+	{ kind: number[]; lower: number[]; upper: number[]; nextPlain: number[] }
+>();
+
+function factsOf(words: readonly string[]) {
+	let facts = wordFacts.get(words);
+	if (!facts) {
+		facts = {
+			kind: words.map(wordKind),
+			lower: new Array<number>(words.length).fill(0),
+			upper: new Array<number>(words.length).fill(0),
+			/** Index of the first plain word at or after each index. */
+			nextPlain: new Array<number>(words.length + 1),
+		};
+		for (let i = 0; i < words.length; i++) {
+			if (facts.kind[i] !== SHORT_FLAG_WORD) continue;
+			const set = flagSet(words[i]);
+			facts.lower[i] = set.lower;
+			facts.upper[i] = set.upper;
+		}
+		facts.nextPlain[words.length] = words.length;
+		for (let i = words.length - 1; i >= 0; i--)
+			facts.nextPlain[i] = facts.kind[i] === PLAIN ? i : facts.nextPlain[i + 1];
+		wordFacts.set(words, facts);
+	}
+	return facts;
 }
 
 function compileDenyPattern(pattern: string): DenyPattern {
@@ -171,7 +232,12 @@ function compileDenyPattern(pattern: string): DenyPattern {
 		return { name, words: [...words, starred ? flags : last].map(patternWord), restAllowed: starred };
 	}
 	const [first, ...rest] = last.split("*");
-	return { name, words: words.map(patternWord), tail: { first, middle: rest.filter(Boolean) }, restAllowed: false };
+	return {
+		name,
+		words: words.map(patternWord),
+		tail: { first, middle: rest.filter(Boolean), plain: !/^[-*]/.test(last) },
+		restAllowed: false,
+	};
 }
 
 /** True when `pieces` occur in order in `words[w]` (from character `at`) up to `words[end - 1]`. */
@@ -198,50 +264,128 @@ function piecesFrom(pieces: readonly string[], words: readonly string[], w: numb
  * is fine for a guard against accidents. A flag word takes a run of short-flag words that together
  * hold its flags (`-rf` matches `-r -f`).
  */
-function denyLineMatch(pattern: DenyPattern, line: DeniedLine): boolean {
+function denyLineMatch(pattern: DenyPattern, line: DeniedLine, budget: { left: number }): boolean {
+	budget.left--;
 	if (!line.wildcard && !globMatch(pattern.name, line.name)) return false;
 	const { words, end } = line;
+	const facts = end - line.start > LONG_LINE ? factsOf(words) : undefined;
 	const { tail } = pattern;
 	let p = 0;
 	let afterOption = false;
-	for (let w = line.start + 1; ; w++) {
+	let matched = false;
+	let w = line.start + 1;
+	for (; ; w++) {
 		const want = pattern.words[p];
+		const plain = want === undefined ? tail?.plain : want.kind === "glob" && want.plain;
+		if (facts && plain && w < end && facts.kind[w] !== PLAIN) {
+			// Nothing in a run of options can match, so jump over it; the word after may be its value.
+			w = facts.nextPlain[w];
+			afterOption = facts.kind[w - 1] !== VALUED_OPTION;
+		}
 		if (want === undefined) {
-			if (pattern.restAllowed || (!tail && w === end)) return true;
-			if (tail && w === end) return tail.first === "" && tail.middle.length === 0;
+			if (pattern.restAllowed || (!tail && w === end)) {
+				matched = true;
+				break;
+			}
+			if (tail && w === end) {
+				matched = tail.first === "" && tail.middle.length === 0;
+				break;
+			}
 			// Later pieces only get harder to find further on, so the first word that starts the tail settles it.
-			if (tail && words[w].startsWith(tail.first)) return piecesFrom(tail.middle, words, w, tail.first.length, end);
-		} else if (w < end && want.kind === "glob" && globMatch(want.pieces, words[w])) {
+			if (tail && words[w].startsWith(tail.first)) {
+				matched = piecesFrom(tail.middle, words, w, tail.first.length, end);
+				w = end;
+				break;
+			}
+		} else if (
+			w < end &&
+			want.kind === "glob" &&
+			(want.pieces.length === 1 ? words[w] === want.pieces[0] : globMatch(want.pieces, words[w]))
+		) {
 			p++;
 			afterOption = false;
 			continue;
 		} else if (w < end && want.kind === "flags") {
 			// A run of short-flag words; a later start inside it holds fewer flags, so take or skip all of it.
-			const seen = new Set<string>();
-			const covered = () => want.flags.every((flag) => seen.has(flag));
+			let seenLower = 0;
+			let seenUpper = 0;
 			let k = w;
-			while (k < end && SHORT_FLAGS.test(words[k]) && !covered())
-				for (const flag of words[k++].slice(1)) seen.add(flag);
+			for (; k < end && (facts ? facts.kind[k] : wordKind(words[k])) === SHORT_FLAG_WORD; k++) {
+				if (facts) {
+					seenLower |= facts.lower[k];
+					seenUpper |= facts.upper[k];
+				} else {
+					const set = flagSet(words[k]);
+					seenLower |= set.lower;
+					seenUpper |= set.upper;
+				}
+				if ((seenLower & want.lower) === want.lower && (seenUpper & want.upper) === want.upper) {
+					k++;
+					break;
+				}
+			}
+			const covered = (seenLower & want.lower) === want.lower && (seenUpper & want.upper) === want.upper;
 			if (k > w) {
-				if (covered()) p++;
-				afterOption = !covered();
+				if (covered) p++;
+				afterOption = !covered;
 				w = k - 1;
 				continue;
 			}
 		}
-		if (w >= end) return false;
-		if (words[w].startsWith("-")) afterOption = !words[w].includes("=");
+		if (w >= end) break;
+		const kind = facts ? facts.kind[w] : wordKind(words[w]);
+		if (kind !== PLAIN) afterOption = kind !== VALUED_OPTION;
 		else if (afterOption) afterOption = false;
-		else return false;
+		else break;
 	}
+	budget.left -= w - line.start;
+	return matched;
+}
+
+/** Work units per input character and rule. The costliest realistic command measured 0.35 (a 325-line script through `bash -c`). */
+const WORK_PER_CHARACTER_RULE = 4;
+
+/**
+ * The work units one bash call may spend on deny rules: characters scanned plus words visited, by
+ * `deniedCommandLines` and every rule's `denyLineMatch`. Past it the call fails closed as too complex,
+ * so no input can hang or exhaust memory, whatever its shape.
+ */
+export function denyWorkBudget(length: number, rules: number): number {
+	return WORK_PER_CHARACTER_RULE * (length + 256) * (rules + 1);
 }
 
 /**
- * Bash deny matching costs at most (command length) x (number of deny rules) x a constant:
- * `deniedCommandLines` reads the text once, plus each queued `sh -c`/`eval` body at most `MAX_DEPTH`
- * times, and cuts at most `MAX_STAGES` lines from each segment; `denyLineMatch` makes one pass per
- * line, and its glob checks only move forward. A rule usually stops at the line's command word.
+ * True when `pattern` matches one of the lines, or the check is `uncheckable`. Costs at most
+ * (command length) x (number of deny rules) x a constant, and the budget enforces that: the lines
+ * hold at most (MAX_DEPTH + 1) x the input, `MAX_STAGES` lines per segment, and `denyLineMatch`
+ * makes one forward pass per line. A rule whose command word names no line skips them all.
  */
+function denyMatches(pattern: DenyPattern, commands: DeniedCommands): boolean {
+	const literal = pattern.name.length === 1 ? pattern.name[0] : undefined;
+	// With many lines, a rule whose literal command word names none of them skips them all.
+	if (literal !== undefined && commands.lines.length > 16 && !commands.wildcard) {
+		commands.names ??= new Set(commands.lines.map((line) => line.name));
+		if (!commands.names.has(literal)) return commands.uncheckable;
+	}
+	if (!commands.uncheckable) {
+		for (const line of commands.lines) {
+			if (commands.left < 0) break;
+			if (denyLineMatch(pattern, line, commands)) return true;
+		}
+	}
+	if (commands.left < 0) commands.uncheckable = true;
+	return commands.uncheckable;
+}
+
+/** The work a bash command costs against deny patterns (`git push*`, without `bash(...)`); for tests. */
+export function bashDenyWork(patterns: readonly string[], command: string): { used: number; limit: number } {
+	const compiled = patterns.map(compileDenyPattern);
+	const limit = denyWorkBudget(command.length, compiled.length);
+	const commands = deniedCommandLines(command, limit);
+	for (const pattern of compiled) denyMatches(pattern, commands);
+	return { used: limit - commands.left, limit };
+}
+
 function bashMatcher(pattern: string, kind: "allow" | "deny"): Matcher {
 	if (kind === "allow") {
 		const pieces = pattern.split("*");
@@ -251,10 +395,7 @@ function bashMatcher(pattern: string, kind: "allow" | "deny"): Matcher {
 		};
 	}
 	const compiled = compileDenyPattern(pattern);
-	return (call) => {
-		const { lines, uncheckable } = call.deniedLines();
-		return uncheckable || lines.some((line) => denyLineMatch(compiled, line));
-	};
+	return (call) => denyMatches(compiled, call.deniedLines());
 }
 
 function toSlashes(path: string): string {
@@ -379,9 +520,13 @@ function compileRule(source: string, cwd: string, kind: "allow" | "deny"): [stri
 function compileList(lists: readonly unknown[][], cwd: string, kind: "allow" | "deny"): Map<string, CompiledRule[]> {
 	const byTool = new Map<string, CompiledRule[]>();
 	const add = (tool: string, rule: CompiledRule) => byTool.set(tool, [...(byTool.get(tool) ?? []), rule]);
+	// A rule listed twice would only be matched twice.
+	const seen = new Set<string>();
 	for (const list of lists) {
 		const { kept, dropped } = capRules(list);
 		for (const source of kept) {
+			if (seen.has(source)) continue;
+			seen.add(source);
 			const compiled = compileRule(source, cwd, kind);
 			if (compiled) add(...compiled);
 		}
@@ -396,14 +541,15 @@ function compileList(lists: readonly unknown[][], cwd: string, kind: "allow" | "
 	return byTool;
 }
 
-function callView(input: Record<string, unknown>, cwd: string): CallView {
+function callView(input: Record<string, unknown>, cwd: string, bashDenyRules: number): CallView {
 	let lines: DeniedCommands | undefined;
 	let paths: { target: string[]; real: string[] | undefined } | undefined | null = null;
 	const command = () => (typeof input.command === "string" ? input.command.trim() : undefined);
 	return {
 		command,
 		deniedLines: () => {
-			lines ??= deniedCommandLines(command() ?? "");
+			const text = command() ?? "";
+			lines ??= deniedCommandLines(text, denyWorkBudget(text.length, bashDenyRules));
 			return lines;
 		},
 		paths: () => {
@@ -453,12 +599,13 @@ export function compilePermissionRules(
 	if (cached?.key.every((part, i) => part === key[i])) return cached.rules;
 	const allow = compileList([asList(global?.allow), projectTrusted ? asList(project?.allow) : []], cwd, "allow");
 	const deny = compileList([asList(global?.deny), asList(project?.deny)], cwd, "deny");
+	const bashDenyRules = deny.get("bash")?.filter((rule) => rule.matches).length ?? 0;
 	// The gate asks deny, then allow, about the same arguments object; both share one view of it.
 	const views = new WeakMap<Record<string, unknown>, CallView>();
 	const view = (input: Record<string, unknown>) => () => {
 		let call = views.get(input);
 		if (!call) {
-			call = callView(input, cwd);
+			call = callView(input, cwd, bashDenyRules);
 			views.set(input, call);
 		}
 		return call;

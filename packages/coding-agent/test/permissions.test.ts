@@ -270,6 +270,14 @@ describe("ask mode", () => {
 		await gateToolCall("subagent", { tasks: [inspect], output: "README.md" }, "/cwd");
 		expect(asked).toMatchObject([{ toolName: "subagent", detail: "Inspector" }]);
 		expect(asked[0]?.title).toContain("saves its result to a file");
+		asked.length = 0;
+		const three = [1, 2, 3].map((i) => ({ ...inspect, task: `inspect ${i}` }));
+		await gateToolCall("subagent", { tasks: three, output: "notes.md" }, "/cwd", undefined, {
+			confirmLargeSubagentLaunches: true,
+		});
+		expect(asked.map((req) => req.title)).toEqual([
+			"Launch read-only subagents that save their results to files? lunR writes the files, replacing any files there.",
+		]);
 	});
 
 	it("remembers a session answer for the exact command only", async () => {

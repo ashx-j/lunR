@@ -8,7 +8,10 @@
  * at every command start: after assignments, `!`, `{`, `if`/`then`/`do` and `function name`, at
  * every wrapper stage (`sudo`, `env`, `timeout 5`, `xargs`, ...) and for each `find -exec`. Bodies of
  * `sh -c`, `eval`, `env -S` and a here-document fed to a shell are queued and scanned the same way.
- * Past `MAX_DEPTH` queued levels or `MAX_STAGES` lines in one segment the result is `uncheckable`.
+ * Each word and each segment's here-documents are queued at most once, so the text queued at one
+ * level adds up to at most the text above it, and all queued text to (MAX_DEPTH + 1) x the input.
+ * Past `MAX_DEPTH` levels, `MAX_STAGES` lines in one segment or the work budget (`left`) the result
+ * is `uncheckable`.
  *
  * It does not see commands built while the shell runs (`$T`, `$(echo touch)`), text piped or
  * redirected into a shell, interpreters (`python -c`), `ssh`, `docker`, `su -c` or sourced files. A
@@ -29,15 +32,23 @@ export interface DeniedLine {
 
 export interface DeniedCommands {
 	lines: DeniedLine[];
-	/** Nested or wrapped past the limits, so the text may run commands not in `lines`. */
+	/** Nested, wrapped or costly past the limits, so the text may run commands not in `lines`. */
 	uncheckable: boolean;
+	/** Some line's command word is a `wildcard`. */
+	wildcard: boolean;
+	/** Command names of `lines`, built by the matcher when there are many. */
+	names?: Set<string>;
+	/** Characters scanned: the input plus every queued body. */
+	queued: number;
+	/** Work units left: characters queued and words visited, here and by the matcher. Below 0 is `uncheckable`. */
+	left: number;
 }
 
 interface Segment {
 	words: string[];
 	/** Per word: bash expands it (brace list or `$'...'`), so its text is not what runs. */
 	expanded: boolean[];
-	heredocBodies: string[];
+	heredocBodies?: string[];
 }
 
 /** One open level of the scan: the top level, or a `$(...)`/backtick/`<(...)` body. */
@@ -46,7 +57,8 @@ interface Frame {
 	/** Plain `(` open inside this body, so `$( (a) )` closes at the right `)`. */
 	parens: number;
 	quote?: "'" | '"';
-	segment: Segment;
+	/** Made when the first word or here-document lands in it, so an empty `$(` costs little. */
+	segment?: Segment;
 	word: string;
 	inWord: boolean;
 	expanded: boolean;
@@ -99,7 +111,6 @@ function scan(text: string, segments: Segment[]): void {
 	const newFrame = (closer?: ")" | "`"): Frame => ({
 		closer,
 		parens: 0,
-		segment: { words: [], expanded: [], heredocBodies: [] },
 		word: "",
 		inWord: false,
 		expanded: false,
@@ -110,11 +121,15 @@ function scan(text: string, segments: Segment[]): void {
 	let f = stack[0];
 	const heredocs: Array<{ delimiter: string; stripTabs: boolean; segment: Segment }> = [];
 
+	const segment = () => {
+		f.segment ??= { words: [], expanded: [] };
+		return f.segment;
+	};
 	const endWord = () => {
 		if (f.inWord && f.skipWord) f.skipWord = false;
 		else if (f.inWord) {
-			f.segment.words.push(f.word);
-			f.segment.expanded.push(f.expanded);
+			segment().words.push(f.word);
+			segment().expanded.push(f.expanded);
 		}
 		f.word = "";
 		f.inWord = false;
@@ -124,8 +139,8 @@ function scan(text: string, segments: Segment[]): void {
 	const endSegment = () => {
 		endWord();
 		f.skipWord = false;
-		if (f.segment.words.length > 0) segments.push(f.segment);
-		f.segment = { words: [], expanded: [], heredocBodies: [] };
+		if (f.segment && f.segment.words.length > 0) segments.push(f.segment);
+		f.segment = undefined;
 	};
 	/** Opens a substitution body; `$(...)` and backticks leave a placeholder in the current word. */
 	const open = (closer: ")" | "`", inWord: boolean) => {
@@ -153,6 +168,7 @@ function scan(text: string, segments: Segment[]): void {
 				if ((heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter) break;
 				body.push(line);
 			}
+			heredoc.segment.heredocBodies ??= [];
 			heredoc.segment.heredocBodies.push(body.join("\n"));
 		}
 		return i;
@@ -209,7 +225,7 @@ function scan(text: string, segments: Segment[]): void {
 				while (text[i] === " " || text[i] === "\t") i++;
 				HEREDOC_DELIMITER.lastIndex = i;
 				const match = HEREDOC_DELIMITER.exec(text);
-				heredocs.push({ delimiter: match?.[1] ?? match?.[2] ?? match?.[3] ?? "", stripTabs, segment: f.segment });
+				heredocs.push({ delimiter: match?.[1] ?? match?.[2] ?? match?.[3] ?? "", stripTabs, segment: segment() });
 				i = HEREDOC_DELIMITER.lastIndex - 1;
 				continue;
 			}
@@ -236,6 +252,7 @@ function scan(text: string, segments: Segment[]): void {
 }
 
 function basenameOf(word: string): string {
+	if (!word.includes("/") && !word.includes("\\")) return word;
 	return word.slice(Math.max(word.lastIndexOf("/"), word.lastIndexOf("\\")) + 1);
 }
 
@@ -254,13 +271,22 @@ function segmentLines(
 	queue: Array<{ text: string; depth: number }>,
 ): void {
 	const { words, expanded } = segment;
-	const nested = (text: string | undefined) => {
-		if (text !== undefined) queue.push({ text, depth: depth + 1 });
+	// A word, and the segment's here-documents (key -1), are queued at most once.
+	let queued: Set<number> | undefined;
+	const nested = (key: number, text: string | undefined) => {
+		if (text === undefined || queued?.has(key)) return;
+		queued ??= new Set();
+		queued.add(key);
+		if (depth >= MAX_DEPTH) result.uncheckable = true;
+		result.queued += text.length;
+		result.left -= text.length;
+		queue.push({ text, depth: depth + 1 });
 	};
 	// `find -exec` adds ranges while the loop runs.
 	const ranges: Array<[start: number, end: number]> = [[0, words.length]];
 	let stages = 0;
 	for (const [start, end] of ranges) {
+		result.left -= end - start;
 		let i = start;
 		let command: string | undefined;
 		while (i < end) {
@@ -279,6 +305,7 @@ function segmentLines(
 			}
 			const name = basenameOf(word);
 			result.lines.push({ words, start: i, end, name, wildcard: expanded[i] === true });
+			result.wildcard ||= expanded[i] === true;
 			const wrapper = WRAPPERS.get(name);
 			if (!wrapper) {
 				command = name;
@@ -289,7 +316,11 @@ function segmentLines(
 					i++;
 					break;
 				}
-				if (name === "env") nested(envSplitString(words[i], words[i + 1]));
+				if (name === "env") {
+					const glued = envSplitString(words[i], undefined);
+					if (glued !== undefined) nested(i, glued);
+					else if (words[i] === "-S" || words[i] === "--split-string") nested(i + 1, words[i + 1]);
+				}
 				i += wrapper.valued.has(words[i]) ? 2 : 1;
 			}
 			i += wrapper.positionals;
@@ -300,14 +331,15 @@ function segmentLines(
 			// Only options before the first other word: `bash run.sh -c x` passes `-c` to run.sh.
 			for (let k = i + 1; k < end && /^[-+]/.test(words[k]); k++) {
 				if (C_FLAG.test(words[k])) {
-					nested(arg(k + 1) === "--" ? arg(k + 2) : arg(k + 1));
+					const body = arg(k + 1) === "--" ? k + 2 : k + 1;
+					nested(body, arg(body));
 					break;
 				}
 				if (VALUED_SHELL_OPTION.test(words[k])) k++;
 			}
 		}
-		if (SHELLS.has(command)) for (const body of segment.heredocBodies) nested(body);
-		if (command === "eval") nested(words.slice(i + 1, end).join(" "));
+		if (SHELLS.has(command) && segment.heredocBodies) nested(-1, segment.heredocBodies.join("\n"));
+		if (command === "eval") nested(i, words.slice(i + 1, end).join(" "));
 		if (command === "find") {
 			let exec = -1;
 			for (let k = i + 1; k < end; k++) {
@@ -322,16 +354,26 @@ function segmentLines(
 	}
 }
 
-/** The commands `command` can run, normalized for deny rules (see the module comment). */
-export function deniedCommandLines(command: string): DeniedCommands {
-	const result: DeniedCommands = { lines: [], uncheckable: false };
+/**
+ * The commands `command` can run, normalized for deny rules (see the module comment). `budget` is
+ * the work units the whole check may spend; the matcher spends from the same `left`.
+ */
+export function deniedCommandLines(command: string, budget = Number.POSITIVE_INFINITY): DeniedCommands {
+	const result: DeniedCommands = {
+		lines: [],
+		uncheckable: false,
+		wildcard: false,
+		queued: command.length,
+		left: budget - command.length,
+	};
 	const queue = [{ text: command, depth: 0 }];
 	for (const { text, depth } of queue) {
-		if (depth > MAX_DEPTH) result.uncheckable = true;
+		if (result.left < 0) result.uncheckable = true;
 		if (result.uncheckable) break;
 		const segments: Segment[] = [];
 		scan(text, segments);
 		for (const segment of segments) segmentLines(segment, depth, result, queue);
 	}
+	if (result.left < 0) result.uncheckable = true;
 	return result;
 }
