@@ -193,6 +193,11 @@ describe("isMutatingBashCommand", () => {
 		"cd /abs/path; rg foo",
 		"cd 'dir with space' && ls 2>/dev/null",
 		"ls # list files",
+		"grep h <<< hi",
+		"ls\\\n -la",
+		"cat f |\\\n head",
+		"ls 2>&\\\n1",
+		"cat <<<'a b' | wc -w",
 		'echo "a # b"; ls',
 	])("allows %s, which only discards output, duplicates a descriptor or changes directory", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(false);
@@ -244,6 +249,26 @@ describe("isMutatingBashCommand", () => {
 		"true\u3000#; touch x",
 		"cat f\u00a0#|| touch x",
 		"echo hi >&1\u00a0x",
+		// bash splits words only on space, tab and newline: these assign "1<NBSP>ls" and expand a brace list
+		"A=1\u00a0ls touch x",
+		"A=1\rls touch x",
+		"sort {-o,x\u00a0} f",
+		"find . {-fprint,x\r}",
+		// a quote in a here-document body must not hide the lines after its delimiter
+		"cat <<EOF\nls '\nEOF\ntouch x\n#'",
+		"cat <<'EOF'\nls '\nEOF\ntouch x\n#'",
+		'cat <<-EOF\nls "\nEOF\ntouch x\n#"',
+		// bash deletes backslash-newline before it tokenizes, so these are `<<`, `$(`, `&&`, `>>` and `touch`
+		"cat <\\\n<EOF\nls '\nEOF\ntouch x\n#'",
+		"cat <\\\n<-EOF\nls '\nEOF\ntouch x\n#'",
+		"cat <\\\n<'EOF'\nls '\nEOF\ntouch x\n#'",
+		"echo $\\\n(touch x)",
+		'echo "$\\\n(touch x)"',
+		"true &\\\n& touch x",
+		"ls >\\\n>x",
+		"to\\\nuch x",
+		// a comment ends at the newline even after a backslash
+		"ls #\\\ntouch x",
 	])("still blocks %s", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(true);
 	});
