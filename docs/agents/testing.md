@@ -12,6 +12,7 @@ Read before writing or debugging tests. Commands are in [build-and-release.md](b
 - Orchestrator tests run in `npm test` and import coding-agent source through the alias in `packages/orchestrator/vitest.config.ts`, so they need no coding-agent build.
 - Rollback fixtures keep their failure-injection tests and one disposable-home strategy. Memory restoration follows `dirname(getAgentDir())/simple-memory`.
 - Gateway fixtures must isolate `PI_CODING_AGENT_DIR` and save configuration because callbacks recheck persisted authorization. The compiled local gateway check uses an OS-temp fixture; never commit `.artifacts/`.
+- A successful cron run is delivered before `markJobRun` records it, on purpose: `activeRun` stays held during delivery, so a crash there is recovered as interrupted instead of marked ok. Tests that wait for a delivered message must also wait for `lastStatus` before reading it.
 - Offline real-binary Claude Code checks need a disposable `HOME` with fake `.claude/.credentials.json`, a loopback upstream, and `HTTPS_PROXY` at a dead port with `NO_PROXY=127.0.0.1`. Login test fakes must answer `--version` with `CLAUDE_CODE_VERSION`.
 - Computer install/staging tests use inert payloads with test-only checksums; they validate packaging, not runtime acceptance.
 - Intercom fixtures must stop their broker before removing its profile.

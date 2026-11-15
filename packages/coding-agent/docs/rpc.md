@@ -192,7 +192,7 @@ Response:
 
 The `model` field is a full [Model](#model-object) object, or omitted when no model is selected. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set.
 
-`permissionMode` reports `yolo`, `auto` or `read-only`. ACP-managed workers also
+`permissionMode` reports `yolo`, `auto`, `ask` or `read-only`. ACP-managed workers also
 report `pendingSubagents`, which includes owned child work awaiting completion
 delivery. Ordinary RPC clients do not receive this field.
 

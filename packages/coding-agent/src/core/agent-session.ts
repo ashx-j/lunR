@@ -121,6 +121,7 @@ import { convertToLlm } from "./messages.ts";
 import { isUserInstructionsPath, loadSelectedUserInstructions } from "./model-instructions.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import { type CompiledPermissionRules, compilePermissionRules } from "./permission-rules.ts";
 import {
 	AUTONOMOUS_ADDENDUM,
 	deletePermissionContext,
@@ -660,6 +661,7 @@ export class AgentSession {
 		this.agent.toolCallMutates = (toolCall, args) => readOnlyModeBlockReason(toolCall.name, args) !== undefined;
 		this.agent.beforeToolCall = async ({ toolCall, args, assistantMessage }) => {
 			// lunr: the permission gate runs before host gates and may request approval.
+			const rules = this._permissionRules();
 			const permBlock = await gateToolCall(
 				toolCall.name,
 				args as Record<string, unknown>,
@@ -668,6 +670,8 @@ export class AgentSession {
 				{
 					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
 					assistantMessage,
+					rules,
+					saveAllowRule: (rule) => this.settingsManager.addPermissionAllowRule(rule),
 				},
 			);
 			if (permBlock) {
@@ -676,7 +680,8 @@ export class AgentSession {
 			if (
 				this.permissionMode === "auto" &&
 				this._autoReviewEnabled &&
-				needsAutoReview(toolCall.name, args as Record<string, unknown>, this._cwd)
+				needsAutoReview(toolCall.name, args as Record<string, unknown>, this._cwd) &&
+				!rules.allowed(toolCall.name, args as Record<string, unknown>)
 			) {
 				const reviewBlock = await this._reviewAutoAction(toolCall.name, args, toolCall.id);
 				if (reviewBlock) return { block: true, reason: reviewBlock };
@@ -1299,6 +1304,12 @@ export class AgentSession {
 		this.agent.state.systemPrompt = this._withSystemPromptAppend(
 			this._systemPromptOverride ?? this._baseSystemPrompt,
 		);
+	}
+
+	/** Settings allow and deny rules, compiled once per settings change. */
+	private _permissionRules(): CompiledPermissionRules {
+		const { global, project, projectTrusted } = this.settingsManager.getPermissionRuleSettings();
+		return compilePermissionRules(global, project, projectTrusted, this._cwd);
 	}
 
 	/** ACP clients approve each tool themselves, so their workers turn auto review off. */

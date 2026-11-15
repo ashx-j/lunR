@@ -1,12 +1,13 @@
-import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync, rmSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
-import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
+import { CLAUDE_CODE_HISTORY_REPLAYED, CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
-import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
+import { type AssistantMessageEventStream, createAssistantMessageEventStream } from "../utils/event-stream.ts";
 import { stream as streamMessages, streamSimple as streamSimpleMessages } from "./anthropic-messages.ts";
 import { ClaudeCodeLoopback, type ClaudeCodeTool } from "./claude-code-loopback.ts";
 import {
@@ -41,8 +42,12 @@ const REQUEST_ENV = {
 	DISABLE_COMPACT: "1",
 	// lunR owns token budgets; Claude Code's replayed reminder would invalidate cached history.
 	CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
-	// Empty --setting-sources does not stop Claude Code adding the user's auto-memory MEMORY.md to the request.
+	// Each request is a new process, so this startup work repeats per request: git status, log and user name
+	// for a git note, and memory and CLAUDE.md files. lunR's history replaces all of it; on the replay route
+	// it is context lunR did not ask for.
+	CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
 	CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+	CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
 } as const;
 const NOT_SIGNED_IN = "Claude Code is not signed in to a Claude subscription. Run /login anthropic.";
 /** Anthropic's error type for each HTTP status, used when rebuilding an error Claude Code reported. */
@@ -393,6 +398,20 @@ function localFailure(message: string): Response {
 	});
 }
 
+/** Request directories not yet removed. An exit mid-request skips `finish`, so the exit hook removes them. */
+const liveDirectories = new Set<string>();
+let exitHookArmed = false;
+function removeOnExit(directory: string): () => void {
+	if (!exitHookArmed) {
+		exitHookArmed = true;
+		process.on("exit", () => {
+			for (const path of liveDirectories) rmSync(path, { recursive: true, force: true });
+		});
+	}
+	liveDirectories.add(directory);
+	return () => liveDirectories.delete(directory);
+}
+
 async function runClaudeCode(
 	connection: ExternalClaudeCodeCredential,
 	request: ClaudeCodeRequest,
@@ -407,6 +426,7 @@ async function runClaudeCode(
 		loopback.close();
 		throw error;
 	});
+	const forgetDirectory = removeOnExit(directory);
 	let pid: number | undefined;
 	let cleanup: Promise<void> | undefined;
 	let exited: Promise<void> | undefined;
@@ -429,6 +449,7 @@ async function runClaudeCode(
 			await stopProcessTree(pid);
 			// Windows can hold the working directory briefly after the process tree ends.
 			await rm(directory, { recursive: true, force: true }).catch(() => {});
+			forgetDirectory();
 		})();
 		return cleanup;
 	};
@@ -454,10 +475,15 @@ async function runClaudeCode(
 			...(upstream ? { ANTHROPIC_BASE_URL: upstream } : {}),
 			...(request.maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(request.maxTokens) } : {}),
 		};
+		// The replay route keeps Claude Code's environment note, which names the working directory, so it runs in
+		// lunR's own directory there. lunR's history replaces that note otherwise, and an empty directory skips
+		// Claude Code's per-start git checks and file listing of the project. Empty setting sources keep the
+		// directory's CLAUDE.md and settings out.
+		const historyInBody = "messages" in request.extraBody;
+		const cwd = historyInBody ? join(directory, "cwd") : process.cwd();
+		if (historyInBody) await mkdir(cwd);
 		// Cleanup that already ran during the writes above had no process to stop, so never start one.
 		if (signal?.aborted) throw new Error("Claude Code request cancelled");
-		// Claude Code tells the model its working directory in an environment note it adds to every request,
-		// so it runs in lunR's own directory. Empty setting sources keep that directory's CLAUDE.md and settings out.
 		const child = spawnClaudeCode(
 			connection.command,
 			[
@@ -490,7 +516,7 @@ async function runClaudeCode(
 				"--no-session-persistence",
 			],
 			env,
-			process.cwd(),
+			cwd,
 		);
 		pid = child.pid;
 		// Output already written stays readable after the process closes, so cleanup is safe here too.
@@ -563,12 +589,16 @@ export function claudeCodeFetch(
 	connection: ExternalClaudeCodeCredential,
 	idleMs: number,
 	upstream?: string,
+	/** Called when a request's history is too large for the body and is replayed uncached. */
+	onHistoryReplay?: () => void,
 ): (input: string | URL | Request, init?: RequestInit) => Promise<Response> {
 	return async (_input, init) => {
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			return await runClaudeCode(connection, claudeCodeRequest(body, connection), signal, idleMs, upstream);
+			const request = claudeCodeRequest(body, connection);
+			if (!("messages" in request.extraBody)) onHistoryReplay?.();
+			return await runClaudeCode(connection, request, signal, idleMs, upstream);
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));
@@ -636,11 +666,14 @@ export function streamClaudeCode(
 	if (!connection) throw new Error("Claude Code subscription setup is required. Run /login anthropic.");
 	if (connection.version !== 3) throw new Error(CLAUDE_CODE_UPDATE_REQUIRED);
 	const idleMs = Math.min(300_000, Math.max(1000, options.timeoutMs ?? 180_000));
+	let replayed = false;
 	const client = new Anthropic({
 		// Never sent anywhere: the fetch override replaces HTTP, and Claude Code supplies its own sign-in.
 		apiKey: "claude-code-subscription",
 		maxRetries: 0,
-		fetch: claudeCodeFetch(connection, idleMs, upstream),
+		fetch: claudeCodeFetch(connection, idleMs, upstream, () => {
+			replayed = true;
+		}),
 	});
 	const transportModel: Model<"anthropic-messages"> = {
 		...model,
@@ -657,7 +690,21 @@ export function streamClaudeCode(
 		client,
 		cacheRetention: "none" as const,
 	};
-	return simple
+	const source = simple
 		? streamSimpleMessages(transportModel, context, transportOptions)
 		: streamMessages(transportModel, context, transportOptions);
+	// The final message records an uncached replay, so lunR can tell the user once and show it in /context.
+	const output = createAssistantMessageEventStream();
+	void (async () => {
+		for await (const event of source) {
+			if (replayed && (event.type === "done" || event.type === "error"))
+				appendAssistantMessageDiagnostic(event.type === "done" ? event.message : event.error, {
+					type: CLAUDE_CODE_HISTORY_REPLAYED,
+					timestamp: Date.now(),
+				});
+			output.push(event);
+		}
+		output.end();
+	})();
+	return output;
 }

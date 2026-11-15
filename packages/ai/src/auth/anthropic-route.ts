@@ -1,5 +1,5 @@
 import type { ModelsStreamTransforms } from "../models.ts";
-import type { StreamOptions } from "../types.ts";
+import type { AssistantMessage, StreamOptions } from "../types.ts";
 import { ModelsError } from "./resolve.ts";
 import type { AuthResult, Credential } from "./types.ts";
 
@@ -56,6 +56,20 @@ export function claudeModelsNewerThanLogin(
 		const listed = model && newest.get(model.family);
 		return model && listed !== undefined && model.version > listed ? [id] : [];
 	});
+}
+
+/**
+ * Diagnostic type the subscription bridge adds to an assistant message whose history was too large for
+ * Claude Code's settings file. Such requests replay the history through stdin, which is not prompt-cached.
+ */
+export const CLAUDE_CODE_HISTORY_REPLAYED = "claude_code_history_replayed";
+
+export const CLAUDE_CODE_HISTORY_REPLAYED_NOTE =
+	"This conversation is over 2 MiB, so Claude Code can no longer read its history from the prompt cache. Each request now sends it uncached, which is slower and uses more of your plan. Run /compact to shrink it.";
+
+/** Whether the bridge sent this reply's history through the uncached replay. */
+export function claudeCodeHistoryReplayed(message: AssistantMessage | undefined): boolean {
+	return !!message?.diagnostics?.some((diagnostic) => diagnostic.type === CLAUDE_CODE_HISTORY_REPLAYED);
 }
 
 export function isAnthropicOAuthToken(value: string | undefined): boolean {

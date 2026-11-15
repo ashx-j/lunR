@@ -10,6 +10,7 @@ import {
 	AUTO_REVIEW_CONSECUTIVE_LIMIT,
 	AutoReviewTracker,
 	buildAutoReviewContext,
+	missingReviewerReason,
 	needsAutoReview,
 	parseAutoReviewVerdict,
 	resolveAutoReviewer,
@@ -154,6 +155,13 @@ describe("choosing the review model", () => {
 		const getOffered = (provider: string) => (provider === "openrouter" ? [session] : undefined);
 		const options = { sessionModel: session, getModel, getOffered, getCatalog: catalog };
 		expect(resolveAutoReviewer(options)).toEqual({ kind: "missing", provider: "openrouter" });
+		// Before a model is selected the session holds the agent's placeholder, which names no provider.
+		expect(resolveAutoReviewer({ ...options, sessionModel: model("unknown", "unknown") })).toEqual({
+			kind: "missing",
+		});
+		expect(missingReviewerReason({ kind: "missing" })).toBe(
+			"Auto mode has no review model: no model is selected yet. The user can pick one with /mode auto or in /settings.",
+		);
 		expect(resolveAutoReviewer({ ...options, configuredRef: "openrouter/some-model" })).toMatchObject({
 			kind: "ready",
 			source: "setting",

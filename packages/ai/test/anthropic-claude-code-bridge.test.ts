@@ -8,6 +8,7 @@ import {
 	CLAUDE_CODE_UPDATE_REQUIRED,
 	streamClaudeCode,
 } from "../src/api/anthropic-claude-code-bridge.ts";
+import { claudeCodeHistoryReplayed } from "../src/auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../src/auth/types.ts";
 import { ANTHROPIC_MODELS } from "../src/providers/anthropic.models.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
@@ -25,7 +26,7 @@ import { isRetryableAssistantError } from "../src/utils/retry.ts";
  * marker once the answer has been read.
  */
 const FAKE_CLAUDE_CODE = `#!/usr/bin/env node
-const { readFileSync, writeFileSync } = require("node:fs");
+const { readdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const argv = process.argv.slice(2);
 const flag = (name) => argv[argv.indexOf(name) + 1];
@@ -45,7 +46,7 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", async () => {
 	const extra = JSON.parse(JSON.parse(readFileSync(flag("--settings"), "utf8")).env.CLAUDE_CODE_EXTRA_BODY);
 	writeFileSync(join(__dirname, "pid"), String(process.pid));
-	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL, autoMemoryOff: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY }));
+	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL, autoMemoryOff: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, cwd: process.cwd(), cwdEntries: readdirSync(process.cwd()), env: process.env }));
 	if (__dirname.endsWith("signed-out") || !process.env.ANTHROPIC_BASE_URL) {
 		result({ is_error: true, result: "Not logged in. Please run /login and include this private detail" });
 		process.exit(1);
@@ -252,6 +253,7 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 
 		expect(result.errorMessage).toBeUndefined();
 		expect(result.stopReason).toBe("toolUse");
+		expect(claudeCodeHistoryReplayed(result)).toBe(false);
 		expect(result.content).toEqual([
 			{ type: "thinking", thinking: "Next file.", thinkingSignature: "sig-new" },
 			{ type: "toolCall", id: "toolu_2", name: "read", arguments: { path: "b.txt" } },
@@ -376,6 +378,28 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(record.extra.output_config).toEqual({ effort: "high" });
 	});
 
+	it("starts Claude Code without the per-start project and memory work lunR's history replaces", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		// An empty directory gives Claude Code no repository to run git in and no files to list.
+		expect(record.cwd).not.toBe(process.cwd());
+		expect(record.cwdEntries).toEqual([]);
+		expect(record.env).toMatchObject({
+			CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+			CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+			CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
+		});
+	});
+
 	it("replays a history too large for Claude Code's settings file through stdin", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
 		const large: Context = {
@@ -385,8 +409,12 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		const result = await streamClaudeCode(model, large, { externalClaudeCode: connection }, true, upstream).result();
 
 		expect(result.errorMessage).toBeUndefined();
+		// The reply records the uncached replay so lunR can tell the user to compact.
+		expect(claudeCodeHistoryReplayed(result)).toBe(true);
 		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
 		expect(record.extra.messages).toBeUndefined();
+		// Claude Code's replayed environment note names its working directory, so it must be lunR's.
+		expect(record.cwd).toBe(process.cwd());
 		expect(
 			record.frames.map((frame: { type: string; shouldQuery?: boolean }) => [frame.type, frame.shouldQuery]),
 		).toEqual([

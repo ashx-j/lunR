@@ -26,7 +26,7 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 | Hidden shell command | `!!command` runs without sending output to the model |
 | External editor | Ctrl+G opens `externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere |
 
-See [Keybindings](keybindings.md) for all shortcuts and customization. Shift+Tab cycles permission mode (`yolo` → `auto` → `read`). Ctrl+O cycles `/tree` filters; it does not expand tool cards. `app.tools.expand` is unbound.
+See [Keybindings](keybindings.md) for all shortcuts and customization. Shift+Tab cycles permission mode (`yolo` → `auto` → `ask` → `read`). Ctrl+O cycles `/tree` filters; it does not expand tool cards. `app.tools.expand` is unbound.
 
 ### Copyable response blocks
 
@@ -66,7 +66,7 @@ Built-in commands:
 | `/fast [on\|off\|status]` | Toggle Fast mode for OpenAI Codex subscriptions only |
 | `/context` | Estimated context-window breakdown |
 | `/plan` | Switch to read-only mode, or `/plan <task>` to plan a task |
-| `/mode` | Set permission mode: `yolo`, `auto`, or `read` |
+| `/mode` | Set permission mode: `yolo`, `auto`, `ask`, or `read` |
 | `/processes` | View and manage background processes started this session |
 | `/rollback` | Undo the last turn's file changes and rewind the conversation. Off by default; turn it on in `/settings` → Rollback |
 | `/help` | Show the commands and keys you need most |
@@ -87,7 +87,7 @@ Built-in commands:
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
 | `/quit` | Quit lunR |
 
-Hidden commands run when typed but stay out of the `/` list and the command lists sent to RPC and ACP clients: the aliases `/auth`, `/deauth`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, `/debug`, the `/thinking` aliases `/effort` and `/reasoning`, and `/websearch`, `/chain-workflows` and `/chain-prompts`, which moved into `/search` and `/chain`. Extensions can hide their own commands with `hidden: true` in `registerCommand`.
+Hidden commands run when typed but stay out of the `/` list and the command lists sent to RPC and ACP clients: the aliases `/auth`, `/deauth`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo`, `/auto` and `/ask`, `/debug`, the `/thinking` aliases `/effort` and `/reasoning`, and `/websearch`, `/chain-workflows` and `/chain-prompts`, which moved into `/search` and `/chain`. Extensions can hide their own commands with `hidden: true` in `registerCommand`.
 
 Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/cron`, `/goal`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/search`. See [Built-in features](features.md).
 

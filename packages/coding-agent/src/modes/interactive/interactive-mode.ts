@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { CLAUDE_CODE_HISTORY_REPLAYED_NOTE, claudeCodeHistoryReplayed } from "@earendil-works/pi-ai";
 import {
 	type Api,
 	type AssistantMessage,
@@ -97,7 +98,7 @@ import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
-import { type ApprovalResponse, registerApprovalHandler } from "../../core/permissions.ts";
+import { type ApprovalRequest, type ApprovalResponse, registerApprovalHandler } from "../../core/permissions.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import {
 	captureTreeChanges,
@@ -128,6 +129,7 @@ import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/subagent-cancellation.ts";
+import { sweepStaleTempFiles } from "../../core/temp-files.ts";
 import { time } from "../../core/timings.ts";
 import { notifyTodosEnabledChanged } from "../../core/todo-settings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
@@ -160,7 +162,16 @@ import { InjectedPromptMessageComponent } from "./components/injected-prompt-mes
 import { formatKeyText, keyDisplayText, keyText } from "./components/keybinding-hints.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import { type AuthSelectorProvider, formatAuthSelectorProviderType } from "./components/oauth-selector.ts";
-import { buildOnboardingOptions, OnboardingComponent, shouldShowOnboarding } from "./components/onboarding.ts";
+import {
+	buildOnboardingOptions,
+	OnboardingComponent,
+	PERMISSION_MODE_OPTIONS,
+	type PermissionModeChoice,
+	permissionModeStepText,
+	shouldAskPermissionMode,
+	shouldShowOnboarding,
+	WELCOME_TEXT,
+} from "./components/onboarding.ts";
 import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
@@ -479,6 +490,9 @@ export class InteractiveMode {
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
 	private signalCleanupHandlers: Array<() => void> = [];
+
+	// True after this launch showed onboarding, until the permission mode step has run.
+	private onboardingShown = false;
 
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
@@ -848,8 +862,8 @@ export class InteractiveMode {
 		// Plans and large subagent launches use distinct approval dialogs.
 		registerApprovalHandler(async (req) => {
 			this.notifyAttention("input");
-			if (req.kind === "large-subagent-launch") {
-				return this.showLargeSubagentLaunchApprovalDialog(req);
+			if (req.kind === "large-subagent-launch" || req.kind === "tool") {
+				return this.showToolApprovalDialog(req);
 			}
 			// Approval restores writing access before the model's next tool call.
 			if (req.kind === "plan") {
@@ -1045,6 +1059,7 @@ export class InteractiveMode {
 		}
 
 		await this.waitForStartupReady();
+		void sweepStaleTempFiles();
 
 		// Check tmux keyboard setup asynchronously
 		this.checkTmuxKeyboardSetup().then((warning) => {
@@ -1125,6 +1140,7 @@ export class InteractiveMode {
 			else await this.warnIfModelHasNoAuth();
 			return;
 		}
+		this.onboardingShown = true;
 		await this.waitForDeferredBuiltins();
 		await this.session.modelRuntime.getAvailable();
 		// Leave a selector or dialog the user opened in the meantime (such as /login) alone.
@@ -1147,7 +1163,7 @@ export class InteractiveMode {
 	private showOnboarding(): void {
 		const options = buildOnboardingOptions(getLoginProviderOptions(this.session.modelRuntime));
 		this.showSelector((done) => {
-			const onboarding = new OnboardingComponent(options, (choice) => {
+			const onboarding = new OnboardingComponent(options, WELCOME_TEXT, (choice) => {
 				done();
 				if (choice === "skip") {
 					this.showStatus("No provider yet. Run /login when you are ready.");
@@ -1161,6 +1177,42 @@ export class InteractiveMode {
 			});
 			return { component: onboarding, focus: onboarding };
 		});
+	}
+
+	/**
+	 * `onLoginSucceeded`: after the first successful login on a launch that showed onboarding, asks once
+	 * for the default permission mode and saves it once the session is in that mode (for auto, after the
+	 * review model picker). Escape saves nothing and keeps the current mode; the next launch has a
+	 * login, so it is not asked again. A failed write shows a warning.
+	 */
+	private async askDefaultPermissionModeAfterFirstLogin(): Promise<void> {
+		const savedDefault = this.settingsManager.getGlobalSettings().defaultPermissionMode;
+		if (!shouldAskPermissionMode({ onboardingShown: this.onboardingShown, savedDefault })) return;
+		this.onboardingShown = false;
+		const choice = await new Promise<PermissionModeChoice>((resolve) => {
+			this.showSelector((done) => {
+				const step = new OnboardingComponent<PermissionModeChoice>(
+					PERMISSION_MODE_OPTIONS,
+					permissionModeStepText(this.session.permissionMode),
+					(picked) => {
+						done();
+						resolve(picked);
+					},
+				);
+				return { component: step, focus: step };
+			});
+		});
+		if (choice === "keep") return;
+		// Auto may open the review model picker first; save only a mode the session actually entered.
+		const applied = await new Promise<boolean>((resolve) =>
+			this.permissions.applyPermissionMode(choice, { onSettled: resolve }),
+		);
+		if (!applied) return;
+		this.settingsManager.setDefaultPermissionMode(choice);
+		await this.settingsManager.flush();
+		for (const { error } of this.settingsManager.drainErrors()) {
+			this.showWarning(`Couldn't save ${choice} as the default mode: ${error.message}`);
+		}
 	}
 
 	/** After a login, opens /model when the session still has no model and there is one to pick. */
@@ -2550,7 +2602,7 @@ export class InteractiveMode {
 				text &&
 				!this.runtimeHost.isDetached &&
 				(!text.startsWith("/") ||
-					/^\/(?:model|thinking|effort|reasoning|mode|plan|read|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
+					/^\/(?:model|thinking|effort|reasoning|mode|plan|read|yolo|auto|ask|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
 						text,
 					))
 			) {
@@ -2925,6 +2977,7 @@ export class InteractiveMode {
 					updateThinkingRunTimings(this.thinkingRunTimings, this.streamingMessage.content, Date.now(), true);
 					this.thinkingTimingsByMessage.set(this.streamingMessage, this.thinkingRunTimings);
 					this.streamingComponent.updateContent(this.streamingMessage);
+					this.maybeShowHistoryReplayNotice(this.streamingMessage);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
@@ -3404,6 +3457,20 @@ export class InteractiveMode {
 		// Entries don't contain `message` yet: message_end fires before persistence.
 		const miss = detectCacheMiss(this.sessionManager.getEntries(), message, this.session.modelRuntime);
 		if (miss) this.addCacheMissNotice(miss);
+	}
+
+	/** Warns when a Claude subscription session first grows past what Claude Code can send prompt-cached. */
+	private maybeShowHistoryReplayNotice(message: AssistantMessage): void {
+		if (!claudeCodeHistoryReplayed(message)) return;
+		// Entries don't contain `message` yet: message_end fires before persistence.
+		const entries = this.sessionManager.getEntries();
+		for (let index = entries.length - 1; index >= 0; index--) {
+			const entry = entries[index];
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			if (claudeCodeHistoryReplayed(entry.message)) return;
+			break;
+		}
+		this.showWarning(CLAUDE_CODE_HISTORY_REPLAYED_NOTE);
 	}
 
 	private addCacheMissNotice(miss: CacheMiss): void {
@@ -5130,6 +5197,7 @@ export class InteractiveMode {
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
+			onLoginSucceeded: () => this.askDefaultPermissionModeAfterFirstLogin(),
 			openModelSelectorIfUnset: () => this.openModelSelectorIfUnset(),
 		};
 	}
@@ -5898,8 +5966,17 @@ export class InteractiveMode {
 			return;
 		}
 
+		const lastReply = [...this.session.messages].reverse().find((message) => message.role === "assistant");
 		const lines = renderContextBox(
-			{ breakdown, model: `${model.provider}/${model.id}`, compactionCeiling: this.session.getCompactionCeiling() },
+			{
+				breakdown,
+				model: `${model.provider}/${model.id}`,
+				compactionCeiling: this.session.getCompactionCeiling(),
+				notice:
+					lastReply?.role === "assistant" && claudeCodeHistoryReplayed(lastReply)
+						? CLAUDE_CODE_HISTORY_REPLAYED_NOTE
+						: undefined,
+			},
 			this.ui.terminal.columns,
 		);
 		this.chatContainer.addChild(new Spacer(1));
@@ -5922,26 +5999,31 @@ export class InteractiveMode {
 		if (this.session.isStreaming) this.notifyAttention("input");
 	}
 
-	// Approval dialog for one subagent call launching more than two children.
-	// "Reject with feedback" collects a one-line
+	// Approval dialog for one subagent call launching more than two children, and for ask mode's
+	// question before one call (`title`; no session answer when `allowSession` is false; "Always
+	// allow" when the request carries a `rule`). "Reject with feedback" collects a one-line
 	// reason that becomes the block reason the model sees, so it can adjust the plan.
-	private async showLargeSubagentLaunchApprovalDialog(req: {
-		toolName: string;
-		action: string;
-		detail: string;
-	}): Promise<ApprovalResponse> {
+	private async showToolApprovalDialog(req: ApprovalRequest): Promise<ApprovalResponse> {
+		const always = req.rule ? `Always allow in every project (saves ${req.rule} to global settings)` : undefined;
 		return new Promise((resolve) => {
 			this.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
-					"Approve large subagent launch?",
-					["Approve once", "Approve for this session", "Reject", "Reject with feedback"],
+					req.title ?? "Approve large subagent launch?",
+					[
+						"Approve once",
+						...(req.allowSession === false ? [] : ["Approve for this session"]),
+						...(always ? [always] : []),
+						"Reject",
+						"Reject with feedback",
+					],
 					(option) => {
 						done();
 						if (option === "Approve once") resolve("once");
 						else if (option === "Approve for this session") resolve("session");
+						else if (option === always) resolve("always");
 						else if (option === "Reject with feedback") {
 							void this.showExtensionInput(
-								"Reject large subagent launch",
+								req.kind === "tool" ? `Reject ${req.toolName}` : "Reject large subagent launch",
 								"feedback for the agent (optional)",
 							).then((feedback) => {
 								const trimmed = feedback?.trim();
