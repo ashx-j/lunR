@@ -57,6 +57,8 @@ export class LspClient {
   private connection: MessageConnection | null = null;
   private _serverCapabilities: ServerCapabilities | null = null;
   private _diagnostics: Map<string, Diagnostic[]> = new Map();
+  /** URIs changed since the server last published their diagnostics, with the waiters for that publish. */
+  private readonly unpublished = new Map<string, { opened: boolean; waiters: Set<() => void> }>();
   private _initialized = false;
   private _disposed = false;
   /** True if connected to a daemon socket (server init handled by daemon) */
@@ -94,6 +96,27 @@ export class LspClient {
   /** Get cached diagnostics for a URI */
   getDiagnostics(uri: string): Diagnostic[] {
     return this._diagnostics.get(uri) ?? [];
+  }
+
+  /**
+   * Resolves when the server publishes diagnostics for `uri` after its latest didOpen or didChange, or
+   * after the cap: `openTimeoutMs` while the file's first open is unanswered, else `changeTimeoutMs`.
+   * Resolves at once when nothing is outstanding for `uri`.
+   */
+  waitForDiagnostics(uri: string, changeTimeoutMs: number, openTimeoutMs: number): Promise<void> {
+    const pending = this.unpublished.get(uri);
+    if (!pending) return Promise.resolve();
+    const { waiters } = pending;
+    const timeoutMs = pending.opened ? openTimeoutMs : changeTimeoutMs;
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        waiters.delete(done);
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      waiters.add(done);
+    });
   }
 
   /** Get all cached diagnostics */
@@ -134,6 +157,9 @@ export class LspClient {
       "textDocument/publishDiagnostics",
       (params: PublishDiagnosticsParams) => {
         this._diagnostics.set(params.uri, params.diagnostics);
+        const pending = this.unpublished.get(params.uri);
+        this.unpublished.delete(params.uri);
+        for (const resolve of pending?.waiters ?? []) resolve();
       }
     );
 
@@ -384,6 +410,7 @@ export class LspClient {
 
   /** Notify server of a newly opened document */
   didOpen(uri: string, languageId: string, version: number, text: string): void {
+    if (!this.unpublished.has(uri)) this.unpublished.set(uri, { opened: true, waiters: new Set() });
     this.sendNotification("textDocument/didOpen", {
       textDocument: { uri, languageId, version, text },
     });
@@ -391,6 +418,7 @@ export class LspClient {
 
   /** Notify server of a document change (full content sync) */
   didChange(uri: string, version: number, text: string): void {
+    if (!this.unpublished.has(uri)) this.unpublished.set(uri, { opened: false, waiters: new Set() });
     this.sendNotification("textDocument/didChange", {
       textDocument: { uri, version },
       contentChanges: [{ text }],
@@ -399,6 +427,8 @@ export class LspClient {
 
   /** Notify server of a closed document */
   didClose(uri: string): void {
+    for (const resolve of this.unpublished.get(uri)?.waiters ?? []) resolve();
+    this.unpublished.delete(uri);
     this.sendNotification("textDocument/didClose", {
       textDocument: { uri },
     });

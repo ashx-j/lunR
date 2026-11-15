@@ -51,7 +51,7 @@ import { syntheticDotLocks } from "./tools/completions.js";
 import { relative } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DIAGNOSTIC_SETTLE_DELAY_MS } from "./shared/timing.js";
+import { DIAGNOSTIC_OPEN_WAIT_CAP_MS, DIAGNOSTIC_WAIT_CAP_MS } from "./shared/timing.js";
 
 /**
  * Project-level LSP config — loaded from `.pi-lsp.json` in the workspace root.
@@ -388,11 +388,11 @@ export default function lspExtension(pi: ExtensionAPI) {
       const client = manager.getRunningClient(languageId);
       if (!client) return;
 
-      // Wait briefly for the LSP to publish updated diagnostics
-      await new Promise((r) => setTimeout(r, DIAGNOSTIC_SETTLE_DELAY_MS));
+      // Return as soon as the server publishes diagnostics for this change.
+      const uri = manager.getFileUri(path);
+      await client.waitForDiagnostics(uri, DIAGNOSTIC_WAIT_CAP_MS, DIAGNOSTIC_OPEN_WAIT_CAP_MS);
       if (host.getGeneration() !== generation) return;
 
-      const uri = manager.getFileUri(path);
       const diagnostics = client.getDiagnostics(uri);
       const errors = diagnostics.filter((d) => d.severity === DiagnosticSeverity.Error);
 

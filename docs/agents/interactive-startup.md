@@ -38,6 +38,12 @@ Session replacement invalidates pending initialization. MCP cancels initializati
 and closes partially connected state. LSP drops stale write diagnostics. Web
 requests and curator callbacks cannot publish into a replacement session.
 
+After an edit or write, the LSP diagnostics hook waits for the server's next
+`publishDiagnostics` for that file, capped at 500 ms (1.5 s while the file's
+first open is unanswered). typescript-language-server publishes only when the
+diagnostics change, so an unchanged edit waits the whole cap. It needs a
+`typescript` with `lib/tsserver.js` (TypeScript 7 has none) in the workspace.
+
 The Node bundle does not automatically enable Node's compile cache. Reusing that
 cache was slower in the measured bundle. Node's explicit compile-cache environment
 settings remain available; the unbundled launch path keeps its existing policy.

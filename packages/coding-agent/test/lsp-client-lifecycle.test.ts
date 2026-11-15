@@ -273,3 +273,41 @@ describe("LSP owned client lifecycle", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 });
+
+describe("LSP diagnostics wait", () => {
+	it("returns on the next publish for the file, else at the change or first-open cap", async () => {
+		const { client, child } = setup();
+		await startDirect(client, child);
+		const publish = mocks.connection.onNotification.mock.calls.find(
+			([method]) => method === "textDocument/publishDiagnostics",
+		)?.[1];
+		const uri = "file:///test.ts";
+		const settled = (promise: Promise<void>) => {
+			let done = false;
+			void promise.then(() => {
+				done = true;
+			});
+			return () => done;
+		};
+
+		client.didOpen(uri, "typescript", 1, "");
+		const opened = settled(client.waitForDiagnostics(uri, 500, 1500));
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(opened()).toBe(false);
+		publish({ uri: "file:///other.ts", diagnostics: [] });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(opened()).toBe(false);
+		publish({ uri, diagnostics: [] });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(opened()).toBe(true);
+
+		client.didChange(uri, 2, "x");
+		const unchanged = settled(client.waitForDiagnostics(uri, 500, 1500));
+		await vi.advanceTimersByTimeAsync(499);
+		expect(unchanged()).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(unchanged()).toBe(true);
+		child.exit();
+		await client.shutdown();
+	});
+});

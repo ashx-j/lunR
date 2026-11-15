@@ -2,8 +2,15 @@
  * Shared timing constants for LSP operations.
  */
 
-/** Delay (ms) to wait for LSP to publish diagnostics after a file change */
-export const DIAGNOSTIC_SETTLE_DELAY_MS = 1500;
+/**
+ * Longest wait (ms) for a server to publish diagnostics after an edit. typescript-language-server publishes
+ * only when a file's diagnostics change (about 400 ms after the edit on a small project), so an edit that
+ * leaves them unchanged waits this long and then reads the cached diagnostics.
+ */
+export const DIAGNOSTIC_WAIT_CAP_MS = 500;
+
+/** Longest wait (ms) after a file's first didOpen, whose first publish waits for the server to load the project */
+export const DIAGNOSTIC_OPEN_WAIT_CAP_MS = 1500;
 
 /** Delay (ms) to wait for a daemon socket to start listening after spawn */
 export const DAEMON_SOCKET_READY_DELAY_MS = 500;
