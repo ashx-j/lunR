@@ -548,6 +548,11 @@ export function resolveCliModel(options: {
 			}
 		}
 
+		// A row only the provider's available list has, such as a model a Claude subscription offers before
+		// lunR's catalog does, already carries the provider's settings.
+		const offered = modelRuntime.getModel(provider, fallbackPattern);
+		if (offered) return { model: offered, thinkingLevel: fallbackThinking, warning, error: undefined };
+
 		const fallbackModel = buildFallbackModel(provider, fallbackPattern, availableModels);
 		if (fallbackModel) {
 			const requestedThinking = cliThinking ?? fallbackThinking;

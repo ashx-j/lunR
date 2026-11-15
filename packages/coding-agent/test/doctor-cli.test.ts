@@ -55,6 +55,35 @@ describe("lunr doctor", () => {
 		expect(formatDoctorReport(checks)).toContain("2 items need attention.");
 	});
 
+	it("names catalog Claude models newer than the saved subscription login", async () => {
+		const command = join(agentDir, "claude");
+		writeFileSync(command, "");
+		// The model list a 2.1.263 picker saved, before the 5.5 models existed.
+		writeFileSync(
+			join(agentDir, "auth.json"),
+			JSON.stringify({
+				anthropic: {
+					type: "external_claude_code",
+					version: 3,
+					manager: "claude-code",
+					command,
+					models: [
+						{ id: "claude-opus-5", route: "claude-opus-5" },
+						{ id: "claude-sonnet-5", route: "claude-sonnet-5" },
+					],
+				},
+			}),
+		);
+
+		const checks = await collectDoctorChecks(agentDir);
+
+		expect(checks.find((check) => check.label === "Claude subscription")).toMatchObject({
+			status: "warn",
+			detail: "the saved login predates claude-opus-5-5, claude-sonnet-5-5",
+			fix: "Run /login anthropic to refresh the models it offers. Until then, pick one by id, for example /model claude-opus-5-5.",
+		});
+	});
+
 	it("never prints saved API keys", async () => {
 		writeFileSync(
 			join(agentDir, "auth.json"),
