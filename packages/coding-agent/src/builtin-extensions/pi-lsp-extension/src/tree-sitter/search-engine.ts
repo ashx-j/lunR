@@ -17,6 +17,7 @@ import type {
   PatternNode,
 } from "./pattern-compiler.js";
 import { SKIP_DIRS, MAX_FILE_SIZE, MAX_INDEX_FILES } from "../shared/constants.js";
+import { credentialWalkFilter } from "../../../../core/credential-files.js";
 
 type SyntaxNode = Parser.SyntaxNode;
 
@@ -57,6 +58,8 @@ export async function searchFiles(
   options: {
     path?: string;
     maxResults?: number;
+    /** Called when lunR's saved logins under the search root were left out, so the tool can say so. */
+    onSkippedCredentials?: () => void;
   } = {},
 ): Promise<SearchMatch[]> {
   const searchRoot = options.path ? resolve(rootDir, options.path) : rootDir;
@@ -69,6 +72,11 @@ export async function searchFiles(
     files = [searchRoot];
   } else {
     files = await collectFilesByLanguage(searchRoot, pattern.languageId, treeSitter);
+  }
+  const isCredential = credentialWalkFilter(searchRoot);
+  if (isCredential && files.some(isCredential)) {
+    files = files.filter((file) => !isCredential(file));
+    options.onSkippedCredentials?.();
   }
 
   const matches: SearchMatch[] = [];

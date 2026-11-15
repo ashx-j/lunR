@@ -3794,6 +3794,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 
 		let sessionRoot: string;
 		if (effectiveParams.sessionDir) {
+			// Children write their session files there, so read-only runs keep lunR's own session directory.
+			if (parentPermissionMode === "read-only") {
+				return buildRequestedModeError(
+					effectiveParams,
+					`Read-only mode cannot put subagent session files in ${effectiveParams.sessionDir}. Leave sessionDir unset.`,
+				);
+			}
 			sessionRoot = path.resolve(deps.expandTilde(effectiveParams.sessionDir));
 		} else {
 			const baseSessionRoot = deps.config.defaultSessionDir
