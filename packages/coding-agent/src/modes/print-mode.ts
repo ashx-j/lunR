@@ -112,7 +112,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			if (reviewer.kind !== "ready" && !warnedAboutReviewer) {
 				warnedAboutReviewer = true;
 				console.error(
-					`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so risky actions will be blocked. Set one in /settings, Auto review model.`,
+					`Auto mode has no ${reviewer.kind === "missing" ? `review model${reviewer.provider ? ` for ${reviewer.provider}` : ""}` : `reachable review model (${reviewer.ref})`}, so risky actions will be blocked. Set one in /settings, Auto review model.`,
 				);
 			}
 		}

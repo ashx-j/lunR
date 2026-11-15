@@ -33,7 +33,8 @@ export const AUTO_REVIEW_TOTAL_LIMIT = 20;
 
 export type AutoReviewer =
 	| { kind: "ready"; model: Model<Api>; ref: string; source: "parent" | "setting" | "provider" | "session" }
-	| { kind: "missing"; provider: string }
+	/** No review model for the session's provider, or no session model yet (no `provider`). */
+	| { kind: "missing"; provider?: string }
 	| { kind: "unavailable"; ref: string };
 
 export { REVIEW_FREE_TOOLS };
@@ -93,7 +94,8 @@ export function resolveAutoReviewer(input: {
 	if (input.parentRef) return byRef(input.parentRef, "parent");
 	if (input.configuredRef) return byRef(input.configuredRef, "setting");
 	const session = input.sessionModel;
-	if (!session) return { kind: "missing", provider: "unknown" };
+	// The agent's placeholder model (provider "unknown") stands in until a real model is selected.
+	if (!session || session.provider === "unknown") return { kind: "missing" };
 	const supported = AUTO_REVIEW_PROVIDERS[session.provider];
 	if (!supported) return { kind: "missing", provider: session.provider };
 	const documented = supported.reviewerModelId

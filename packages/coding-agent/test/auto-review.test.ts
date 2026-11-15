@@ -115,6 +115,8 @@ describe("choosing the review model", () => {
 			kind: "missing",
 			provider: "openrouter",
 		});
+		// Before a model is selected the session holds the agent's placeholder, which names no provider.
+		expect(resolveAutoReviewer({ sessionModel: model("unknown", "unknown"), getModel })).toEqual({ kind: "missing" });
 		expect(
 			resolveAutoReviewer({ sessionModel: session, configuredRef: "openrouter/some-model", getModel }),
 		).toMatchObject({

@@ -243,10 +243,9 @@ export class PermissionModeController {
 		fromCycle?: boolean,
 		onSettled?: (applied: boolean) => void,
 	): void {
-		// Before any model is picked the session holds the "unknown" placeholder, which names no provider.
 		const note =
 			reviewer?.kind === "missing"
-				? reviewer.provider === "unknown"
+				? reviewer.provider === undefined
 					? "No model is selected yet, so auto mode needs a review model picked here."
 					: `${reviewer.provider}'s own coding agent has no review model, so auto mode needs one.`
 				: reviewer
@@ -305,7 +304,7 @@ export class PermissionModeController {
 		const reviewer = this.host.session.resolveAutoReviewer();
 		if (reviewer.kind === "ready") return;
 		this.host.showWarning(
-			`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /mode auto to pick one.`,
+			`Auto mode has no ${reviewer.kind === "missing" ? `review model${reviewer.provider ? ` for ${reviewer.provider}` : ""}` : `reachable review model (${reviewer.ref})`}, so lunR will ask you before risky actions. Run /mode auto to pick one.`,
 		);
 	}
 

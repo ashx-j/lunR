@@ -49,7 +49,7 @@ describe("PermissionModeController review model picker", () => {
 		};
 		const controller = new PermissionModeController(host as unknown as PermissionControllerHost);
 		pickerNotes.length = 0;
-		controller.showAutoReviewModelPicker({ kind: "missing", provider: "unknown" });
+		controller.showAutoReviewModelPicker({ kind: "missing" });
 		controller.showAutoReviewModelPicker({ kind: "missing", provider: "openrouter" });
 		expect(pickerNotes).toEqual([
 			"No model is selected yet, so auto mode needs a review model picked here.",

@@ -542,7 +542,11 @@ export async function handleMobileCommand(ctx: MobileContext, command: string, a
 function autoReviewerProblem(session: BridgeSession | null | undefined): string | undefined {
 	const reviewer = session?.resolveAutoReviewer?.();
 	if (!reviewer || reviewer.kind === "ready") return undefined;
-	return reviewer.kind === "missing"
-		? `Auto mode needs a review model, and ${reviewer.provider}'s own coding agent doesn't offer one. Pick one on your computer in /settings, Auto review model.`
-		: `Auto mode's review model ${reviewer.ref} isn't available. Pick another on your computer in /settings, Auto review model.`;
+	if (reviewer.kind === "missing") {
+		const why = reviewer.provider
+			? `${reviewer.provider}'s own coding agent doesn't offer one`
+			: "no model is selected yet";
+		return `Auto mode needs a review model, and ${why}. Pick one on your computer in /settings, Auto review model.`;
+	}
+	return `Auto mode's review model ${reviewer.ref} isn't available. Pick another on your computer in /settings, Auto review model.`;
 }
