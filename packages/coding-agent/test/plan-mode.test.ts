@@ -137,6 +137,9 @@ describe("isMutatingBashCommand", () => {
 		"cd 'dir with space' && ls 2>/dev/null",
 		"ls # list files",
 		"grep h <<< hi",
+		"ls\\\n -la",
+		"cat f |\\\n head",
+		"ls 2>&\\\n1",
 		"cat <<<'a b' | wc -w",
 		'echo "a # b"; ls',
 	])("allows %s, which only discards output, duplicates a descriptor or changes directory", (command) => {
@@ -198,6 +201,17 @@ describe("isMutatingBashCommand", () => {
 		"cat <<EOF\nls '\nEOF\ntouch x\n#'",
 		"cat <<'EOF'\nls '\nEOF\ntouch x\n#'",
 		'cat <<-EOF\nls "\nEOF\ntouch x\n#"',
+		// bash deletes backslash-newline before it tokenizes, so these are `<<`, `$(`, `&&`, `>>` and `touch`
+		"cat <\\\n<EOF\nls '\nEOF\ntouch x\n#'",
+		"cat <\\\n<-EOF\nls '\nEOF\ntouch x\n#'",
+		"cat <\\\n<'EOF'\nls '\nEOF\ntouch x\n#'",
+		"echo $\\\n(touch x)",
+		'echo "$\\\n(touch x)"',
+		"true &\\\n& touch x",
+		"ls >\\\n>x",
+		"to\\\nuch x",
+		// a comment ends at the newline even after a backslash
+		"ls #\\\ntouch x",
 	])("still blocks %s", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(true);
 	});

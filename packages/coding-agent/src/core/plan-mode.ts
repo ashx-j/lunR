@@ -189,7 +189,7 @@ export function isMutatingBashCommand(command: string): boolean {
 	if (!command.trim()) return false;
 
 	// Output redirects outside quotes can write a file, except to /dev/null or onto another descriptor.
-	const withoutRedirects = withoutHarmlessRedirects(command);
+	const withoutRedirects = withoutHarmlessRedirects(joinLineContinuations(command));
 	if (withoutRedirects === undefined) return true;
 
 	// Substitutions, parameter expansion, ANSI-C quoting and brace expansion change
@@ -211,6 +211,42 @@ export function isMutatingBashCommand(command: string): boolean {
 		if (changedDir && name && CWD_CONFIG_COMMANDS.has(basenameOf(name).toLowerCase())) return true;
 	}
 	return false;
+}
+
+/**
+ * The command without the backslash-newline pairs bash deletes before it tokenizes, so a
+ * continuation can't split `<<`, `>>`, `&&`, `$(` or a command name across lines. Bash keeps the
+ * pair inside single quotes and ends a comment at the newline even after a backslash, so those
+ * stay as written.
+ */
+function joinLineContinuations(command: string): string {
+	if (!command.includes("\\\n")) return command;
+	let out = "";
+	let quote: "'" | '"' | undefined;
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (quote === "'") {
+			if (ch === "'") quote = undefined;
+			out += ch;
+		} else if (ch === "\\") {
+			if (command[i + 1] !== "\n") out += ch + (command[i + 1] ?? "");
+			i++;
+		} else if (quote) {
+			if (ch === quote) quote = undefined;
+			out += ch;
+		} else if (ch === "'" || ch === '"') {
+			quote = ch;
+			out += ch;
+		} else if (ch === "#" && (out === "" || /[ \t\n;|&()<>]/.test(out[out.length - 1]))) {
+			const lineEnd = command.indexOf("\n", i);
+			const end = lineEnd < 0 ? command.length : lineEnd;
+			out += command.slice(i, end);
+			i = end - 1;
+		} else {
+			out += ch;
+		}
+	}
+	return out;
 }
 
 /** Allowed commands that load config, hooks or a program from the working directory. */
