@@ -274,39 +274,78 @@ describe("LSP owned client lifecycle", () => {
 	});
 });
 
-describe("LSP diagnostics wait", () => {
-	it("returns on the next publish for the file, else at the change or first-open cap", async () => {
+describe("LSP diagnostics for the sent version", () => {
+	const uri = "file:///test.ts";
+	const error = (message: string) => ({
+		range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+		message,
+		severity: 1,
+	});
+	const publisher = () =>
+		mocks.connection.onNotification.mock.calls.find(([method]) => method === "textDocument/publishDiagnostics")?.[1];
+	const track = (promise: Promise<unknown>) => {
+		const state: { value?: unknown; done: boolean } = { done: false };
+		void promise.then((value) => Object.assign(state, { value, done: true }));
+		return state;
+	};
+
+	it("ignores a late publish from an older version and resolves on the sent version's publish", async () => {
 		const { client, child } = setup();
 		await startDirect(client, child);
-		const publish = mocks.connection.onNotification.mock.calls.find(
-			([method]) => method === "textDocument/publishDiagnostics",
-		)?.[1];
-		const uri = "file:///test.ts";
-		const settled = (promise: Promise<void>) => {
-			let done = false;
-			void promise.then(() => {
-				done = true;
-			});
-			return () => done;
-		};
+		const publish = publisher();
 
 		client.didOpen(uri, "typescript", 1, "");
-		const opened = settled(client.waitForDiagnostics(uri, 500, 1500));
-		await vi.advanceTimersByTimeAsync(1000);
-		expect(opened()).toBe(false);
-		publish({ uri: "file:///other.ts", diagnostics: [] });
+		const opened = track(client.diagnosticsForSentVersion(uri));
+		client.didChange(uri, 2, "bad");
+		const changed = track(client.diagnosticsForSentVersion(uri));
 		await vi.advanceTimersByTimeAsync(0);
-		expect(opened()).toBe(false);
-		publish({ uri, diagnostics: [] });
-		await vi.advanceTimersByTimeAsync(0);
-		expect(opened()).toBe(true);
+		expect(opened).toEqual({ value: undefined, done: true });
 
-		client.didChange(uri, 2, "x");
-		const unchanged = settled(client.waitForDiagnostics(uri, 500, 1500));
-		await vi.advanceTimersByTimeAsync(499);
-		expect(unchanged()).toBe(false);
-		await vi.advanceTimersByTimeAsync(1);
-		expect(unchanged()).toBe(true);
+		// The open's publish arrives after the change: unversioned, then tagged with version 1.
+		publish({ uri, diagnostics: [] });
+		publish({ uri, version: 1, diagnostics: [] });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(changed.done).toBe(false);
+
+		publish({ uri, version: 2, diagnostics: [error("added")] });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(changed).toEqual({ value: [error("added")], done: true });
+		child.exit();
+		await client.shutdown();
+	});
+
+	it("asks tsserver for the sent version when the server forwards tsserver requests", async () => {
+		const { client, child } = setup();
+		const answers: Array<(body: unknown) => void> = [];
+		mocks.connection.sendRequest.mockImplementation((method: string) =>
+			method === "initialize"
+				? Promise.resolve({
+						capabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } },
+					})
+				: new Promise((resolve) => answers.push((body) => resolve({ body }))),
+		);
+		await startDirect(client, child);
+		expect(client.pullsDiagnostics).toBe(true);
+
+		client.didOpen(uri, "typescript", 1, "");
+		client.didChange(uri, 2, "bad");
+		const result = client.diagnosticsForSentVersion(uri);
+		expect(mocks.connection.sendRequest).toHaveBeenCalledWith("workspace/executeCommand", {
+			command: "typescript.tsserverRequest",
+			arguments: ["semanticDiagnosticsSync", { file: uri }],
+		});
+		answers[0]([]);
+		answers[1]([
+			{ start: { line: 1, offset: 1 }, end: { line: 1, offset: 2 }, text: "added", code: 2322, category: "error" },
+		]);
+		expect(await result).toEqual([{ ...error("added"), code: 2322, source: "typescript" }]);
+
+		// An answer that arrives after a newer change is not reported as that change's.
+		const superseded = client.diagnosticsForSentVersion(uri);
+		client.didChange(uri, 3, "fixed");
+		answers[2]([]);
+		answers[3]([]);
+		expect(await superseded).toBeUndefined();
 		child.exit();
 		await client.shutdown();
 	});

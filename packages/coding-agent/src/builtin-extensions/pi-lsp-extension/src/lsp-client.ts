@@ -11,6 +11,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { connect as netConnect, type Socket } from "node:net";
+import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   createMessageConnection,
@@ -27,6 +28,47 @@ import type {
   Diagnostic,
   PublishDiagnosticsParams,
 } from "vscode-languageserver-protocol";
+import { DiagnosticSeverity } from "vscode-languageserver-protocol";
+
+/** typescript-language-server's command that forwards a raw request to tsserver. */
+const TSSERVER_REQUEST = "typescript.tsserverRequest";
+
+interface SentVersion {
+  version: number;
+  /** Set once the server publishes diagnostics for this version. */
+  diagnostics?: Diagnostic[];
+  waiters: Set<(diagnostics: Diagnostic[] | undefined) => void>;
+}
+
+/** The fields of a tsserver diagnostic that lunR reads. Lines and offsets are 1-based. */
+interface TsserverDiagnostic {
+  start: { line: number; offset: number };
+  end: { line: number; offset: number };
+  text: string;
+  code?: number;
+  category: string;
+  source?: string;
+}
+
+const TSSERVER_SEVERITY: Record<string, DiagnosticSeverity> = {
+  error: DiagnosticSeverity.Error,
+  warning: DiagnosticSeverity.Warning,
+  suggestion: DiagnosticSeverity.Hint,
+};
+
+/** Converts a tsserver diagnostic to the LSP shape typescript-language-server publishes. */
+function fromTsserver(d: TsserverDiagnostic): Diagnostic {
+  return {
+    range: {
+      start: { line: d.start.line - 1, character: d.start.offset - 1 },
+      end: { line: d.end.line - 1, character: d.end.offset - 1 },
+    },
+    message: d.text,
+    code: d.code,
+    severity: TSSERVER_SEVERITY[d.category] ?? DiagnosticSeverity.Information,
+    source: d.source ?? "typescript",
+  };
+}
 
 export interface LspClientOptions {
   /** Command to start the LSP server */
@@ -57,8 +99,8 @@ export class LspClient {
   private connection: MessageConnection | null = null;
   private _serverCapabilities: ServerCapabilities | null = null;
   private _diagnostics: Map<string, Diagnostic[]> = new Map();
-  /** URIs changed since the server last published their diagnostics, with the waiters for that publish. */
-  private readonly unpublished = new Map<string, { opened: boolean; waiters: Set<() => void> }>();
+  /** The version lunR last sent for each open URI, with the callers waiting for that version's diagnostics. */
+  private readonly sent = new Map<string, SentVersion>();
   private _initialized = false;
   private _disposed = false;
   /** True if connected to a daemon socket (server init handled by daemon) */
@@ -98,25 +140,43 @@ export class LspClient {
     return this._diagnostics.get(uri) ?? [];
   }
 
+  /** True when the server answers `typescript.tsserverRequest`, which `diagnosticsForSentVersion` uses. */
+  get pullsDiagnostics(): boolean {
+    const capabilities = this._serverCapabilities;
+    // A daemon client gets no capabilities, so fall back to the server command.
+    if (!capabilities) return basename(this.options.command).startsWith("typescript-language-server");
+    return capabilities.executeCommandProvider?.commands.includes(TSSERVER_REQUEST) ?? false;
+  }
+
   /**
-   * Resolves when the server publishes diagnostics for `uri` after its latest didOpen or didChange, or
-   * after the cap: `openTimeoutMs` while the file's first open is unanswered, else `changeTimeoutMs`.
-   * Resolves at once when nothing is outstanding for `uri`.
+   * Diagnostics for the version of `uri` that lunR last sent. Resolves undefined when a newer version, a
+   * close or shutdown supersedes that version first, or the request fails. typescript-language-server
+   * publishes without a version, so for it this asks tsserver directly: its request queue never moves a
+   * request ahead of an earlier change, so the answer is for the sent version. Other servers count only a
+   * publish that carries the sent version.
    */
-  waitForDiagnostics(uri: string, changeTimeoutMs: number, openTimeoutMs: number): Promise<void> {
-    const pending = this.unpublished.get(uri);
-    if (!pending) return Promise.resolve();
-    const { waiters } = pending;
-    const timeoutMs = pending.opened ? openTimeoutMs : changeTimeoutMs;
-    return new Promise<void>((resolve) => {
-      const done = () => {
-        clearTimeout(timer);
-        waiters.delete(done);
-        resolve();
-      };
-      const timer = setTimeout(done, timeoutMs);
-      waiters.add(done);
-    });
+  diagnosticsForSentVersion(uri: string): Promise<Diagnostic[] | undefined> {
+    const sent = this.sent.get(uri);
+    if (!sent) return Promise.resolve(undefined);
+    if (sent.diagnostics) return Promise.resolve(sent.diagnostics);
+    if (!this.pullsDiagnostics) return new Promise((resolve) => sent.waiters.add(resolve));
+    const ask = (command: string) =>
+      this.sendRequest<{ body?: TsserverDiagnostic[] } | undefined>("workspace/executeCommand", {
+        command: TSSERVER_REQUEST,
+        arguments: [command, { file: uri }],
+      });
+    return Promise.all([ask("syntacticDiagnosticsSync"), ask("semanticDiagnosticsSync")]).then(
+      ([syntactic, semantic]) =>
+        this.sent.get(uri) === sent ? [...(syntactic?.body ?? []), ...(semantic?.body ?? [])].map(fromTsserver) : undefined,
+      () => undefined,
+    );
+  }
+
+  /** Records `version` as the latest sent for `uri` and resolves the waiters for the version it replaces. */
+  private markSent(uri: string, version: number | undefined): void {
+    for (const resolve of this.sent.get(uri)?.waiters ?? []) resolve(undefined);
+    if (version === undefined) this.sent.delete(uri);
+    else this.sent.set(uri, { version, waiters: new Set() });
   }
 
   /** Get all cached diagnostics */
@@ -157,9 +217,11 @@ export class LspClient {
       "textDocument/publishDiagnostics",
       (params: PublishDiagnosticsParams) => {
         this._diagnostics.set(params.uri, params.diagnostics);
-        const pending = this.unpublished.get(params.uri);
-        this.unpublished.delete(params.uri);
-        for (const resolve of pending?.waiters ?? []) resolve();
+        const sent = this.sent.get(params.uri);
+        if (!sent || params.version !== sent.version) return;
+        sent.diagnostics = params.diagnostics;
+        for (const resolve of sent.waiters) resolve(params.diagnostics);
+        sent.waiters.clear();
       }
     );
 
@@ -410,7 +472,7 @@ export class LspClient {
 
   /** Notify server of a newly opened document */
   didOpen(uri: string, languageId: string, version: number, text: string): void {
-    if (!this.unpublished.has(uri)) this.unpublished.set(uri, { opened: true, waiters: new Set() });
+    this.markSent(uri, version);
     this.sendNotification("textDocument/didOpen", {
       textDocument: { uri, languageId, version, text },
     });
@@ -418,7 +480,7 @@ export class LspClient {
 
   /** Notify server of a document change (full content sync) */
   didChange(uri: string, version: number, text: string): void {
-    if (!this.unpublished.has(uri)) this.unpublished.set(uri, { opened: false, waiters: new Set() });
+    this.markSent(uri, version);
     this.sendNotification("textDocument/didChange", {
       textDocument: { uri, version },
       contentChanges: [{ text }],
@@ -427,8 +489,7 @@ export class LspClient {
 
   /** Notify server of a closed document */
   didClose(uri: string): void {
-    for (const resolve of this.unpublished.get(uri)?.waiters ?? []) resolve();
-    this.unpublished.delete(uri);
+    this.markSent(uri, undefined);
     this.sendNotification("textDocument/didClose", {
       textDocument: { uri },
     });
@@ -441,6 +502,7 @@ export class LspClient {
     this._disposed = true;
     this._initialized = false;
     this.stop.abort(new Error("LSP client shut down"));
+    for (const uri of [...this.sent.keys()]) this.markSent(uri, undefined);
     this.shutdownPromise = this.shutdownOwnedTransport(initialized);
     return this.shutdownPromise;
   }

@@ -32,7 +32,7 @@ import {
   isWriteToolResult,
   isEditToolResult,
 } from "../../../core/extensions/types.js";
-import { DiagnosticSeverity } from "vscode-languageserver-protocol";
+import { DiagnosticSeverity, type Diagnostic } from "vscode-languageserver-protocol";
 
 import type { WorkspaceProvider } from "./workspace-provider.js";
 import { LspRuntimeHost, type LspRuntimeBindOptions, type LspRuntimeCallbacks } from "./runtime.js";
@@ -51,7 +51,7 @@ import { syntheticDotLocks } from "./tools/completions.js";
 import { relative } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DIAGNOSTIC_OPEN_WAIT_CAP_MS, DIAGNOSTIC_WAIT_CAP_MS } from "./shared/timing.js";
+import { DIAGNOSTIC_PUBLISH_CAP_MS, DIAGNOSTIC_PULL_CAP_MS } from "./shared/timing.js";
 
 /**
  * Project-level LSP config — loaded from `.pi-lsp.json` in the workspace root.
@@ -139,8 +139,33 @@ function registerToolWithRuntime<T extends TSchema, D>(pi: ExtensionAPI, tool: T
   });
 }
 
+/** Diagnostics for an edit that arrived after its tool result. `diagnostics` is set once they arrive. */
+interface LateDiagnostics {
+  generation: number;
+  relPath: string;
+  diagnostics?: Diagnostic[];
+}
+
+/** Compact summary of a file's errors (at most 10 lines), or undefined when it has none. */
+function formatErrors(relPath: string, diagnostics: Diagnostic[]): string | undefined {
+  const errors = diagnostics.filter((d) => d.severity === DiagnosticSeverity.Error);
+  if (errors.length === 0) return undefined;
+  const lines = errors.slice(0, 10).map((d) => {
+    const line = d.range.start.line + 1;
+    const col = d.range.start.character + 1;
+    const source = d.source ? ` [${d.source}]` : "";
+    return `${relPath}:${line}:${col} error: ${d.message}${source}`;
+  });
+  if (errors.length > 10) {
+    lines.push(`... and ${errors.length - 10} more error(s)`);
+  }
+  return `\n\n⚠ LSP: ${errors.length} error(s) in ${relPath}:\n${lines.join("\n")}`;
+}
+
 export default function lspExtension(pi: ExtensionAPI) {
   const host = new LspRuntimeHost();
+  // Edit diagnostics that missed their wait, by URI. The next tool result carries them.
+  const lateDiagnostics = new Map<string, LateDiagnostics>();
   let pendingProvider: WorkspaceProvider | null = null;
   let latestCtx: any = null;
   let projectConfig: ProjectLspConfig | null = null;
@@ -370,55 +395,63 @@ export default function lspExtension(pi: ExtensionAPI) {
     }
 
     if (host.getGeneration() !== generation) return;
+    const notes: string[] = [];
     // Auto-append diagnostics for the changed file (write/edit only)
     const services = host.getServicesIfReady();
-    if ((isWriteToolResult(event) || isEditToolResult(event)) && !event.isError && services) {
-      const path = (event.input as any)?.path;
-      if (!path) return;
+    const input = (isWriteToolResult(event) || isEditToolResult(event)) && !event.isError ? event.input.path : undefined;
+    const path = typeof input === "string" && input ? input : undefined;
+    const manager = services?.manager;
+    const languageId = path ? manager?.getLanguageId(path) : undefined;
+    const inject = projectConfig?.autoInjectDiagnostics;
+    const client = manager && languageId && inject !== false && (!Array.isArray(inject) || inject.includes(languageId))
+      ? manager.getRunningClient(languageId)
+      : undefined;
+    const uri = manager && path ? manager.getFileUri(path) : undefined;
+    // This edit supersedes the file's late diagnostics.
+    if (uri) lateDiagnostics.delete(uri);
+    for (const [lateUri, late] of lateDiagnostics) {
+      if (late.generation === generation && !late.diagnostics) continue;
+      lateDiagnostics.delete(lateUri);
+      if (late.generation !== generation || !late.diagnostics) continue;
+      const summary = formatErrors(late.relPath, late.diagnostics);
+      if (summary) notes.push(summary);
+    }
 
-      const manager = services.manager;
-      const languageId = manager.getLanguageId(path);
-      if (!languageId) return;
-
-      // Check autoInjectDiagnostics config
-      const inject = projectConfig?.autoInjectDiagnostics;
-      if (inject === false) return;
-      if (Array.isArray(inject) && !inject.includes(languageId)) return;
-
-      const client = manager.getRunningClient(languageId);
-      if (!client) return;
-
-      // Return as soon as the server publishes diagnostics for this change.
-      const uri = manager.getFileUri(path);
-      await client.waitForDiagnostics(uri, DIAGNOSTIC_WAIT_CAP_MS, DIAGNOSTIC_OPEN_WAIT_CAP_MS);
+    if (manager && client && path && uri) {
+      // Wait for the diagnostics of the version this edit sent, never an older version's.
+      const settled = client.diagnosticsForSentVersion(uri);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const cap = client.pullsDiagnostics ? DIAGNOSTIC_PULL_CAP_MS : DIAGNOSTIC_PUBLISH_CAP_MS;
+      const diagnostics = await Promise.race([
+        settled,
+        new Promise<"pending">((resolve) => (timer = setTimeout(resolve, cap, "pending"))),
+      ]);
+      clearTimeout(timer);
       if (host.getGeneration() !== generation) return;
 
-      const diagnostics = client.getDiagnostics(uri);
-      const errors = diagnostics.filter((d) => d.severity === DiagnosticSeverity.Error);
-
-      if (errors.length === 0) return;
-
-      // Build a compact summary — just errors, max 10 lines
       const relPath = relative(manager.resolvePath("."), manager.resolvePath(path));
-      const lines = errors.slice(0, 10).map((d) => {
-        const line = d.range.start.line + 1;
-        const col = d.range.start.character + 1;
-        const source = d.source ? ` [${d.source}]` : "";
-        return `${relPath}:${line}:${col} error: ${d.message}${source}`;
-      });
-      if (errors.length > 10) {
-        lines.push(`... and ${errors.length - 10} more error(s)`);
+      if (diagnostics === "pending") {
+        const late: LateDiagnostics = { generation, relPath };
+        lateDiagnostics.set(uri, late);
+        void settled.then((result) => {
+          if (lateDiagnostics.get(uri) !== late) return;
+          if (result) late.diagnostics = result;
+          else lateDiagnostics.delete(uri);
+        });
+        notes.push(`\n\nLSP: diagnostics for ${relPath} are not ready yet. Errors, if any, follow with a later tool result.`);
+      } else if (diagnostics) {
+        const summary = formatErrors(relPath, diagnostics);
+        if (summary) notes.push(summary);
       }
-
-      const summary = `\n\n⚠ LSP: ${errors.length} error(s) in ${relPath}:\n${lines.join("\n")}`;
-
-      return {
-        content: [
-          ...event.content,
-          { type: "text" as const, text: summary },
-        ],
-      };
     }
+
+    if (notes.length === 0) return;
+    return {
+      content: [
+        ...event.content,
+        { type: "text" as const, text: notes.join("") },
+      ],
+    };
   });
 
   // Update status after tool execution ends

@@ -3,14 +3,13 @@
  */
 
 /**
- * Longest wait (ms) for a server to publish diagnostics after an edit. typescript-language-server publishes
- * only when a file's diagnostics change (about 400 ms after the edit on a small project), so an edit that
- * leaves them unchanged waits this long and then reads the cached diagnostics.
+ * Longest wait (ms) for tsserver's diagnostics after an edit. lunR asks tsserver directly, which answers in
+ * 5 to 330 ms once the project is loaded. A slower answer goes out with a later tool result.
  */
-export const DIAGNOSTIC_WAIT_CAP_MS = 500;
+export const DIAGNOSTIC_PULL_CAP_MS = 500;
 
-/** Longest wait (ms) after a file's first didOpen, whose first publish waits for the server to load the project */
-export const DIAGNOSTIC_OPEN_WAIT_CAP_MS = 1500;
+/** Longest wait (ms) for a server without that request to publish diagnostics for the edit's version */
+export const DIAGNOSTIC_PUBLISH_CAP_MS = 1500;
 
 /** Delay (ms) to wait for a daemon socket to start listening after spawn */
 export const DAEMON_SOCKET_READY_DELAY_MS = 500;
