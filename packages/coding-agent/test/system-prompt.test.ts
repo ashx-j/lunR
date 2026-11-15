@@ -97,10 +97,6 @@ describe("buildSystemPrompt", () => {
 			expect(none, tool).not.toContain(line);
 			expect(buildSystemPrompt({ ...options, selectedTools: [tool] }), tool).toContain(line);
 		}
-		// A tool that starts unloaded is still registered, so loading it later doesn't change the prompt.
-		expect(
-			buildSystemPrompt({ ...options, selectedTools: ["read"], registeredTools: ["read", "subagent"] }),
-		).toContain("Resume a subagent only");
 	});
 
 	test("states the working directory, git state, OS and the date the session started", () => {

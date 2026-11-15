@@ -17,11 +17,6 @@ export interface BuildSystemPromptOptions {
 	automaticSubagentDelegation?: boolean;
 	/** Active tools; used to decide whether read-dependent skill metadata is visible. */
 	selectedTools?: string[];
-	/**
-	 * Every tool the session can use, loaded or not. Lines for extension tools check this list, so a
-	 * tool that starts unloaded and loads later does not change the prompt. Defaults to `selectedTools`.
-	 */
-	registeredTools?: string[];
 	/** Legacy extension metadata retained for API compatibility; tool definitions are sent separately. */
 	toolSnippets?: Record<string, string>;
 	/** Legacy extension metadata retained for API compatibility; not appended to the default prompt. */
@@ -43,7 +38,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		modelSlug,
 		automaticSubagentDelegation = true,
 		selectedTools,
-		registeredTools = selectedTools,
 		appendSystemPrompt,
 		cwd,
 		contextFiles: providedContextFiles,
@@ -90,7 +84,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	const currentModel = modelSlug?.trim() || "no model selected";
 	const has = (tool: string) => !selectedTools || selectedTools.includes(tool);
-	const registered = (tool: string) => !registeredTools || registeredTools.includes(tool);
 	const hasRead = has("read");
 	const delegationBehavior = automaticSubagentDelegation
 		? "- Orchestrate subagents with intent! Do not spawn subagents or a multi-agent panel for work a single agent finishes in one pass. Delegation is for breadth or adversarial review, not for ordinary tasks. Use subagents as a tool when there is genuine benefit to it or the user explicitly asks for it."
@@ -102,22 +95,21 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		has("todo") &&
 			"Use todo for meaningful multi-step work. Every update must send the complete list, with exactly one item in progress at a time.",
 		automaticSubagentDelegation &&
-			registered("subagent") &&
+			has("subagent") &&
 			"Use subagents for independent parallel work, specialist analysis, or substantial research. Subagents start with fresh sessions.",
-		registered("intercom") && "Use intercom to coordinate with an existing lunR session.",
-		registered("subagent") &&
+		has("intercom") && "Use intercom to coordinate with an existing lunR session.",
+		has("subagent") &&
 			"Resume a subagent only when its work is unfinished or the next task genuinely needs the context it built up. Otherwise launch a new subagent.",
-		registered("ast_search") && "Use ast_search for structural code matches.",
+		has("ast_search") && "Use ast_search for structural code matches.",
 		has("cron") && "Use cron only when the user asks to schedule or manage unattended prompts.",
 		has("bash") &&
 			`For gateway work, inspect with \`lunr gateway status\` or \`lunr gateway doctor\`, configure with \`lunr gateway setup\`, and run \`lunr gateway start\` or \`lunr gateway stop\` only with user approval. Test by asking the user to send \`/whoami\` or a normal message to the bot; there is no arbitrary outbound send command. Keep bot tokens out of commands and output. See ${docsPath}/features.md for pairing, logs, and service details.`,
-		registered("memory_add") &&
+		has("memory_add") &&
 			"Memory stores established, durable facts and stable preferences. Do not store behavior instructions, transient task details, transcripts, guesses, or secrets. Change memory only with the memory tools.",
 		"~/.lunr/agent/agents/ contains optional global and per-model AGENTS.md instructions written by the user. Never modify this tree, including through shell commands.",
-		registered("web_search") &&
+		has("web_search") &&
 			"Use web search when information is current, uncertain, externally referenced, or research-heavy, and cite the sources used.",
-		registered("mcp") &&
-			"Use MCP only for capabilities exposed by configured MCP servers. Call native lunR tools directly.",
+		has("mcp") && "Use MCP only for capabilities exposed by configured MCP servers. Call native lunR tools directly.",
 	]
 		.filter((line) => typeof line === "string")
 		.map((line) => `- ${line}`)

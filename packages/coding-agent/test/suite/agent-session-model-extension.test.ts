@@ -72,6 +72,26 @@ describe("AgentSession model and extension characterization", () => {
 		expect(harness.session.systemPrompt).toContain(`currently running ${modelOne.provider}/${modelOne.id},`);
 	});
 
+	it("drops a tool's prompt line when an extension deactivates the tool", async () => {
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.registerTool({
+						name: "ast_search",
+						label: "AST search",
+						description: "Structural search",
+						parameters: Type.Object({}),
+						execute: async () => ({ content: [{ type: "text", text: "none" }], details: {} }),
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		expect(harness.session.systemPrompt).toContain("Use ast_search");
+		harness.session.setActiveToolsByName(["read"]);
+		expect(harness.session.systemPrompt).not.toContain("Use ast_search");
+	});
+
 	it("clamps thinking levels to model capabilities and cycles available levels", async () => {
 		const harness = await createHarness({ models: [{ id: "faux-1", reasoning: false }] });
 		harnesses.push(harness);

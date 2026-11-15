@@ -1578,7 +1578,6 @@ export class AgentSession {
 			customPrompt: loaderSystemPrompt,
 			appendSystemPrompt,
 			selectedTools: validToolNames,
-			registeredTools: [...this._toolRegistry.keys()],
 			toolSnippets,
 			promptGuidelines,
 		};
