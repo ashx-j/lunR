@@ -479,8 +479,13 @@ async function runClaudeCode(
 				);
 			if (!error) throw new Error(stoppedBeforeRequest(first));
 			await finish(true);
-			// Claude Code's own refusal text points at its --model flag, which lunR users do not have.
-			if (!request.listed && (error.status === 403 || error.status === 404))
+			// Claude Code's own 404 text points at its --model flag, which lunR users do not have. Its result
+			// carries Anthropic's message but not the error type, so a 403 counts as a model refusal only when
+			// the message names the model; any other 403 (a disabled organization, a policy block) keeps it.
+			const refusedModel =
+				error.status === 404 ||
+				(error.status === 403 && typeof first.result === "string" && first.result.includes(request.route));
+			if (!request.listed && refusedModel)
 				return localFailure(
 					`Claude ${request.route} is not available on this subscription, or the saved login predates it. Run /login anthropic to refresh the models it offers.`,
 				);
