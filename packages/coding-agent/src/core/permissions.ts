@@ -474,7 +474,10 @@ function askQuestion(toolName: string, input: Record<string, unknown>): { title:
 		const writers = launches.filter((child) => child.writesOutput);
 		if (children.length === 0 && writers.length > 0) {
 			return {
-				title: "Launch a read-only subagent that saves its result to a file? lunR writes the file, replacing any file there.",
+				title:
+					launches.length === 1
+						? "Launch a read-only subagent that saves its result to a file? lunR writes the file, replacing any file there."
+						: "Launch read-only subagents that save their results to files? lunR writes the files, replacing any files there.",
 				detail: sanitizeDetail(writers.map((child) => child.description).join("\n")),
 			};
 		}
@@ -513,6 +516,16 @@ function askUnansweredReason(toolName: string, why: string, rule: string | undef
  * mode, cron, a subagent, an RPC or SDK session without a handler) it is blocked with a reason
  * that says how to proceed. lunR's bookkeeping tools never ask.
  */
+/**
+ * True when ask mode asks before this call: whatever read-only mode would block, and a launch whose
+ * read-only child saves `output`, a write lunR makes for it.
+ */
+function askModeAsks(toolName: string, input: Record<string, unknown>): boolean {
+	if (REVIEW_FREE_TOOLS.has(toolName)) return false;
+	if (readOnlyModeBlock(toolName, input)) return true;
+	return toolName === "subagent" && getRequestedChildLaunches(input).some((child) => child.writesOutput);
+}
+
 async function gateAskMode(
 	toolName: string,
 	input: Record<string, unknown>,
@@ -520,9 +533,7 @@ async function gateAskMode(
 	ctx: PermissionContext,
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
-	// A read-only child's output file is a write lunR makes for it, so it asks like `write` does.
-	const savesOutput = toolName === "subagent" && getRequestedChildLaunches(input).some((child) => child.writesOutput);
-	if (REVIEW_FREE_TOOLS.has(toolName) || (!readOnlyModeBlock(toolName, input) && !savesOutput)) return undefined;
+	if (!askModeAsks(toolName, input)) return undefined;
 	if (options?.rules?.allowed(toolName, input)) return undefined;
 	const key = askApprovalKey(toolName, input, cwd);
 	if (key && ctx.approvals.has(key)) return undefined;
@@ -597,7 +608,7 @@ export async function gateToolCall(
 		return {
 			block: true,
 			reason: denial.uncheckable
-				? `This command nests shells or wrappers too deeply to check against the deny rule "${denial.rule}" in settings, so the rule blocks it. Run its parts as simpler commands.`
+				? `This command is too complex to check against the deny rule "${denial.rule}" in settings (it nests shells or wrappers too deeply, or costs too much to match), so the rule blocks it. Run its parts as simpler commands.`
 				: `The deny rule "${denial.rule}" in settings blocks this call. Don't reach the same result another way; tell the user what you need.`,
 		};
 	}
@@ -607,8 +618,8 @@ export async function gateToolCall(
 	if (ctx.mode === "ask") {
 		const askBlock = await gateAskMode(toolName, input, cwd, ctx, options);
 		if (askBlock) return askBlock;
-		// The ask question already named every full-access child, so a large launch asks only once.
-		if (toolName === "subagent" && readOnlyModeBlock(toolName, input)) return undefined;
+		// The ask question already named the children, so a large launch asks only once.
+		if (toolName === "subagent" && askModeAsks(toolName, input)) return undefined;
 	}
 	if (toolName === "subagent") {
 		const launchResult = await gateLargeSubagentLaunch(input, ctx, options);

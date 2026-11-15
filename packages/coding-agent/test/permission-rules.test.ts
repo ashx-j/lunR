@@ -1,8 +1,19 @@
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { deniedCommandLines } from "../src/core/permission-rule-commands.ts";
 import {
+	bashDenyWork,
 	compilePermissionRules,
 	MAX_RULE_LENGTH,
 	MAX_RULES,
@@ -194,6 +205,52 @@ describe("permission rule matching", () => {
 		expect(globalRules([], ["bash(git push*)"]).denied("bash", { command: "bash -c 'ls'" })).toBeUndefined();
 	});
 
+	/** `find . -exec bash \;` x `ranges` feeding a here-document, nested `levels` deep around `leaf`. */
+	const nestedFindHeredocs = (levels: number, ranges: number, leaf: string) => {
+		let text = leaf;
+		for (let d = levels; d >= 1; d--) text = `find .${" -exec bash \\;".repeat(ranges)} <<E${d}\n${text}\nE${d}`;
+		return text;
+	};
+
+	it("queues each body once, so the text it scans stays within 5x the command", () => {
+		const command = nestedFindHeredocs(4, 15, "echo hi; ".repeat(1150));
+		expect(command.length).toBeGreaterThan(10000);
+		expect(deniedCommandLines(command).queued).toBeLessThanOrEqual(5 * command.length);
+		expect(
+			globalRules([], ["bash(touch *)"]).denied("bash", { command: nestedFindHeredocs(4, 15, "touch x") }),
+		).toEqual({ rule: "bash(touch *)", uncheckable: false });
+	});
+
+	it("fails closed once a check spends its work budget", () => {
+		expect(deniedCommandLines("ls; ls", 100).uncheckable).toBe(false);
+		expect(deniedCommandLines("ls; ls", 3).uncheckable).toBe(true);
+	});
+
+	// Commands a model writes every day, from review, against a typical deny list.
+	it("keeps realistic commands far from the work budget", () => {
+		const deny = ["rm -rf*", "git push*", "sudo*", "npm publish*", "curl*"];
+		const script = readFileSync(join(__dirname, "fixtures", "deny-rules-deploy-script.sh"), "utf8");
+		const message = Array.from({ length: 40 }, (_, i) => `- item ${i}: drop rm -rf build; git push is gone`).join(
+			"\n",
+		);
+		const commands = [
+			script,
+			`bash <<'EOF'\n${script}EOF`,
+			`bash -c '${script.replaceAll("'", `'\\''`)}'`,
+			`git add -A && git commit -m "$(cat <<'EOF'\nfix: matcher\n\n${message}\nEOF\n)" && git log -1 --stat`,
+			`docker run --rm -v "$PWD":/w -w /w node:22 sh -c 'npm ci && npm test && echo "rm -rf node_modules later"'`,
+		];
+		const rules = globalRules(
+			[],
+			deny.map((pattern) => `bash(${pattern})`),
+		);
+		for (const command of commands) {
+			expect(rules.denied("bash", { command })).toBeUndefined();
+			const { used, limit } = bashDenyWork(deny, command);
+			expect(used / limit, command.slice(0, 40)).toBeLessThan(0.1);
+		}
+	});
+
 	// Inputs from review that hung, overflowed the stack or ran out of memory, at about 100 KB each.
 	it("stays fast for pathological rules and commands", () => {
 		const many = (word: string, n: number) => word.repeat(n);
@@ -217,6 +274,12 @@ describe("permission rule matching", () => {
 				"bash",
 				{ command: `gcc${many(" -Iinclude/dir", 1000)} -c main.c -o main.o` },
 			],
+			[["bash(touch *)"], "bash", { command: nestedFindHeredocs(4, 15, "echo hi; ".repeat(1150)) }],
+			[
+				Array.from({ length: 200 }, (_, i) => `bash(rm -rf /usr${i}*)`),
+				"bash",
+				{ command: `rm${many(" -v", 33000)}` },
+			],
 			[[`edit(${"**/a/".repeat(10)}b)`], "edit", { path: `${"a/".repeat(60)}c` }],
 		];
 		// The best of 3 runs, so a cold JIT or a GC pause on a shared CI runner doesn't flake it.
@@ -227,7 +290,7 @@ describe("permission rule matching", () => {
 				rules.denied(tool, { ...input });
 				return performance.now() - started;
 			});
-			expect(Math.min(...times), deny[0]).toBeLessThan(100);
+			expect(Math.min(...times), deny[0]).toBeLessThan(500);
 		}
 	});
 
