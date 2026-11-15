@@ -220,7 +220,7 @@ export class UserModelsStore {
 		try {
 			writeUserModels(this.file, this.path);
 		} catch {
-			// Persist is best-effort in test / in-memory runtimes.
+			// The in-memory list stays current; the next change rewrites the whole file.
 		}
 	}
 }

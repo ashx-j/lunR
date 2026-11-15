@@ -3634,7 +3634,9 @@ export class InteractiveMode {
 			await this.ui.terminal.drainInput(1000);
 			try {
 				processRegistry.killAll();
-			} catch {}
+			} catch {
+				// Shutdown continues even if a tracked process cannot be signalled.
+			}
 			this.stop();
 			process.exit(0);
 		}
@@ -3671,7 +3673,9 @@ export class InteractiveMode {
 		killTrackedDetachedChildren();
 		try {
 			processRegistry.killAll();
-		} catch {}
+		} catch {
+			// The terminal is gone; nothing can report this, and exit must go on.
+		}
 		// The terminal is gone. Do not run normal shutdown because TUI and
 		// extension cleanup can write restore sequences and re-trigger EIO.
 		process.exit(129);
@@ -3695,13 +3699,19 @@ export class InteractiveMode {
 		this.isShuttingDown = true;
 		try {
 			this.unregisterSignalHandlers();
-		} catch {}
+		} catch {
+			// Crash path: keep going so the original error is printed.
+		}
 		try {
 			killTrackedDetachedChildren();
-		} catch {}
+		} catch {
+			// Crash path: keep going so the original error is printed.
+		}
 		try {
 			this.ui.stop();
-		} catch {}
+		} catch {
+			// Crash path: keep going so the original error is printed.
+		}
 		console.error(`${APP_NAME} exiting due to uncaughtException:`);
 		console.error(error);
 		process.exit(1);

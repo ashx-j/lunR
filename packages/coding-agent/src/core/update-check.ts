@@ -144,6 +144,6 @@ export function markUpdateNotified(agentDir: string, latest: string, packageName
 	try {
 		writeRecord(path, record);
 	} catch {
-		// ignore
+		// Unwritable cache: the same update is announced again next time.
 	}
 }

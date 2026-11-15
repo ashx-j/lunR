@@ -1,6 +1,6 @@
 import { Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ToolRenderContext } from "../core/extensions/types.ts";
-import { toolStatusDotFromContext } from "../core/tools/render-utils.ts";
+import { toolStatusDotFromContext } from "../modes/interactive/tool-renderers/render-utils.ts";
 import { onBrowserEnabledChange, readBrowserSettings } from "../core/browser/settings.ts";
 import { BROWSER_DESCRIPTION, type BrowserInput, BrowserParams } from "../core/browser/schema.ts";
 import type { BrowserSession } from "../core/browser/runtime.ts";

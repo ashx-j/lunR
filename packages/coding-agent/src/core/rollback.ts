@@ -87,6 +87,7 @@ interface RollbackContext {
 	currentTurnIndex: number;
 	repoWarningShown: boolean;
 	externalModWarningShown: boolean;
+	persistWarningShown: boolean;
 	/** Last cwd seen by beginTurn — reused by auto-started turns (mid-turn enable). */
 	lastCwd?: string;
 }
@@ -110,6 +111,7 @@ function createContext(sessionId: string): RollbackContext {
 		currentTurnIndex: -1,
 		repoWarningShown: false,
 		externalModWarningShown: false,
+		persistWarningShown: false,
 	};
 }
 
@@ -374,8 +376,18 @@ function persistSnapshot(ctx: RollbackContext, turn: TurnSnapshots, absPath: str
 		manifest.files[absPath] = entry;
 		if (turn.cwd) manifest.cwd = turn.cwd;
 		writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-	} catch {
-		// disk persistence failures are non-fatal
+	} catch (error) {
+		// The in-memory snapshot still serves /rollback in this process, so the tool call goes on.
+		if (ctx.persistWarningShown) return;
+		ctx.persistWarningShown = true;
+		const reason = error instanceof Error ? error.message : String(error);
+		try {
+			warningHandler?.(
+				`Rollback snapshots could not be saved to disk (${reason}). /rollback works until lunR exits.`,
+			);
+		} catch {
+			// warning delivery is best-effort
+		}
 	}
 }
 
@@ -479,7 +491,7 @@ function cleanupTurnFiles(ctx: RollbackContext, turn: TurnSnapshots): void {
 		const dir = getTurnDir(ctx, turn.turnIndex);
 		if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
 	} catch {
-		// ignore
+		// A turn dir that cannot be removed only costs disk; the in-memory turn is dropped.
 	}
 }
 
@@ -731,7 +743,7 @@ export function clearRollback(sessionId?: string): void {
 				const sessionDir = join(ROLLBACK_BASE, ctx.sessionId);
 				if (existsSync(sessionDir)) rmSync(sessionDir, { recursive: true, force: true });
 			} catch {
-				// ignore
+				// A session dir that cannot be removed only costs disk.
 			}
 		}
 		contexts.clear();
@@ -747,7 +759,7 @@ export function clearRollback(sessionId?: string): void {
 		const sessionDir = join(ROLLBACK_BASE, sessionId);
 		if (existsSync(sessionDir)) rmSync(sessionDir, { recursive: true, force: true });
 	} catch {
-		// ignore
+		// A session dir that cannot be removed only costs disk.
 	}
 	contexts.delete(sessionId);
 }

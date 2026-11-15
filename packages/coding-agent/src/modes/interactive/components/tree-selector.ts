@@ -13,8 +13,8 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { SessionTreeNode } from "../../../core/session-manager.ts";
-import { shortenPath } from "../../../core/tools/render-utils.ts";
 import { theme } from "../theme/theme.ts";
+import { shortenPath } from "../tool-renderers/render-utils.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { formatKeyText, keyHint } from "./keybinding-hints.ts";
 

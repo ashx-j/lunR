@@ -59,7 +59,9 @@ function killJob(job: BashJob): void {
 	if (!groupAlive(job.pid)) return;
 	try {
 		process.kill(-job.pid, "SIGKILL");
-	} catch {}
+	} catch {
+		// The group exited between the liveness check and the signal.
+	}
 }
 
 /** The exit hook. Exported for tests. */
@@ -69,7 +71,9 @@ export function stopLiveJobs(): void {
 	for (const dir of liveLogDirs) {
 		try {
 			rmSync(dir, { recursive: true, force: true });
-		} catch {}
+		} catch {
+			// Exit cleanup: a log dir that cannot be removed stays for the next sweep.
+		}
 	}
 	liveLogDirs.clear();
 }
@@ -136,7 +140,9 @@ function removeOrphanedLogDirs(): void {
 			const changed = [dir, ...readdirSync(dir).map((log) => join(dir, log))].map((path) => statSync(path).mtimeMs);
 			if (Math.max(...changed) > cutoff) continue;
 			rmSync(dir, { recursive: true, force: true });
-		} catch {}
+		} catch {
+			// Another lunR removed or is writing this dir; try again next sweep.
+		}
 	}
 }
 let orphanedLogDirsRemoved = false;
@@ -301,7 +307,9 @@ export class BashJobs {
 function appendLog(path: string, text: string): void {
 	try {
 		appendFileSync(path, text);
-	} catch {}
+	} catch {
+		// The log dir is gone (session cleanup), so the spawn error has nowhere to go.
+	}
 }
 
 /** Whether the job still runs. Clears childrenRunning once the exited shell's group is gone. */
@@ -404,6 +412,8 @@ export function noteLeftoverProcesses(pid: number, command: string): void {
 		const lines = alive.map(([groupPid, cmd]) => `  ${firstLine(cmd)}  (kill -- -${groupPid})`);
 		try {
 			writeSync(2, `lunr: processes these commands started with & are still running:\n${lines.join("\n")}\n`);
-		} catch {}
+		} catch {
+			// stderr is closed at exit; the leftover note is informational.
+		}
 	});
 }

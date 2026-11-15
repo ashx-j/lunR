@@ -60,7 +60,9 @@ function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
 			if (patterns.length > 0) {
 				ig.add(patterns);
 			}
-		} catch {}
+		} catch {
+			// An unreadable ignore file only widens the scan; the skill files themselves still report errors.
+		}
 	}
 }
 
@@ -269,7 +271,13 @@ function loadSkillsFromDirInternal(
 			}
 			diagnostics.push(...result.diagnostics);
 		}
-	} catch {}
+	} catch (error) {
+		// ENOENT: the directory went away after the existsSync check. Anything else hides skills the user installed.
+		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+			const message = error instanceof Error ? error.message : String(error);
+			diagnostics.push({ type: "warning", message: `could not read skills directory: ${message}`, path: dir });
+		}
+	}
 
 	return { skills, diagnostics };
 }

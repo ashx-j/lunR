@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { shortenPath } from "../src/core/tools/render-utils.ts";
+import { shortenPath } from "../src/modes/interactive/tool-renderers/render-utils.ts";
 
 describe("shortenPath", () => {
 	const home = homedir();

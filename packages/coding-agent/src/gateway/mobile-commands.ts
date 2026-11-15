@@ -132,13 +132,17 @@ async function browseProject(ctx: MobileContext, initialPath?: string): Promise<
 		try {
 			const up = resolveWithinRoots(dirname(current), roots);
 			if (up !== current) items.push({ label: "Up", value: up });
-		} catch {}
+		} catch {
+			// The parent is outside the approved roots: no Up entry.
+		}
 		for (const item of readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
 			if (!item.isDirectory() && !item.isSymbolicLink()) continue;
 			try {
 				const path = resolveWithinRoots(join(current, item.name), roots);
 				if (statSync(path).isDirectory()) items.push({ label: item.name, value: path });
-			} catch {}
+			} catch {
+				// Outside the approved roots or unreadable: not offered.
+			}
 		}
 		return { title: current, items };
 	};
@@ -334,7 +338,9 @@ async function browseSessions(ctx: MobileContext, args: string, quick: boolean):
 					firstMessage: "",
 					allMessagesText: "",
 				});
-		} catch {}
+		} catch {
+			// Unreadable session file: left out of the list.
+		}
 	}
 	const query = args.toLowerCase();
 	const items = sessions
