@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
+import { removeOldClaudeCodeVersions } from "../utils/claude-code-release.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { stream as streamMessages, streamSimple as streamSimpleMessages } from "./anthropic-messages.ts";
 import { ClaudeCodeLoopback, type ClaudeCodeTool } from "./claude-code-loopback.ts";
@@ -64,9 +65,20 @@ type Block = Record<string, unknown>;
 interface Frame {
 	type: "user" | "assistant";
 	message: { role: "user" | "assistant"; model?: string; content: Block[] };
+	/** Skips Claude Code's turn-start context (memory, reminders, file mentions) for this turn. */
+	client_composed?: true;
 }
 
-/** A Messages request translated into Claude Code's inputs. */
+/** Claude Code refuses a settings file over 2 MiB; the rest is headroom for the JSON wrapper. */
+const SETTINGS_LIMIT = 2 * 1024 * 1024 - 4096;
+/** Matches the TTL of the two system-prompt markers Claude Code adds, which must not come after a shorter one. */
+const HISTORY_MARKER = { type: "ephemeral", ttl: "1h" } as const;
+
+/**
+ * A Messages request translated into Claude Code's inputs. Normally `extraBody.messages` carries lunR's
+ * history and `frames` is the one turn Claude Code queries with. A history too large for the settings
+ * file is replayed through `frames` instead.
+ */
 interface ClaudeCodeRequest {
 	route: string;
 	system: string;
@@ -112,6 +124,38 @@ function historyFrames(messages: unknown[], model: string): Frame[] {
 	return frames;
 }
 
+/** The settings file that carries the request body override into Claude Code. */
+function settingsJson(extraBody: Record<string, unknown>): string {
+	return JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extraBody) } });
+}
+
+/**
+ * lunR's history as the request's `messages`, with a cache marker on the newest block. Sending it through
+ * the body keeps the prefix byte-identical across requests: Claude Code attaches its own turn-start context
+ * (date, account email, memory) to whichever turn queries, and each request is a new Claude Code process.
+ */
+function historyMessages(history: readonly Frame[]): Record<string, unknown>[] {
+	return history.map(({ message: { role, content } }, index) => ({
+		role,
+		content:
+			index === history.length - 1
+				? content.map((block, blockIndex) =>
+						blockIndex === content.length - 1 ? { ...block, cache_control: HISTORY_MARKER } : block,
+					)
+				: content,
+	}));
+}
+
+/**
+ * The one turn Claude Code queries with when the body carries the history. Claude Code's billing header
+ * fingerprints the first user text, so the turn repeats the first text of lunR's history.
+ */
+function queryFrame(history: readonly Frame[]): Frame {
+	const first = history.find((frame) => frame.type === "user")?.message.content.find((block) => block.type === "text");
+	const text = typeof first?.text === "string" && first.text ? first.text : ".";
+	return { type: "user", client_composed: true, message: { role: "user", content: [{ type: "text", text }] } };
+}
+
 /**
  * Validates the request lunR's Messages implementation built and maps it onto Claude Code's inputs. The
  * route is the one setup saved for the model, so Claude Code gets exactly the variant discovery chose.
@@ -150,10 +194,11 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 
 	const maxTokens = typeof body.max_tokens === "number" ? body.max_tokens : undefined;
 	const thinking = isRecord(body.thinking) ? body.thinking : undefined;
-	return {
+	const history = historyFrames(body.messages, body.model);
+	const request = {
 		route,
 		system,
-		frames: historyFrames(body.messages, body.model),
+		frames: history,
 		tools,
 		maxTokens,
 		extraBody: {
@@ -169,6 +214,10 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 			...(maxTokens ? { max_tokens: maxTokens } : {}),
 		},
 	};
+	const extraBody = { ...request.extraBody, messages: historyMessages(history) };
+	return Buffer.byteLength(settingsJson(extraBody)) <= SETTINGS_LIMIT
+		? { ...request, frames: [queryFrame(history)], extraBody }
+		: request;
 }
 
 /** Reads events up to the next `result`, or undefined when Claude Code's output ends first. */
@@ -231,6 +280,7 @@ function answerStream(
 	next: () => Promise<ClaudeCodeEvent | undefined>,
 	inventory: ReadonlySet<string>,
 	finish: (graceful?: boolean) => Promise<void>,
+	answered: () => void,
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	let pending: ClaudeCodeEvent | undefined = first;
@@ -259,6 +309,7 @@ function answerStream(
 					// The answer is complete; stopping now also keeps Claude Code from any further request.
 					controller.close();
 					await finish();
+					answered();
 				}
 			} catch (error) {
 				controller.error(error);
@@ -279,6 +330,49 @@ function localFailure(message: string): Response {
 	});
 }
 
+let oldVersionsRemoved = false;
+
+/**
+ * After the first answer this process gets from the saved Claude Code, removes other versions left by a pin
+ * bump. It runs once per process and in the background, so no request waits for it.
+ */
+function removeOldVersionsOnce(command: string): void {
+	if (oldVersionsRemoved) return;
+	oldVersionsRemoved = true;
+	void removeOldClaudeCodeVersions(command).catch(() => {});
+}
+
+/**
+ * The connection whose binary exists. When the in-memory one's binary is gone, another lunR on the profile
+ * logged in with a newer pin and removed the old version, so this reads the saved login once and uses the
+ * version it names.
+ */
+async function currentConnection(connection: ExternalClaudeCodeCredential): Promise<ExternalClaudeCodeCredential> {
+	if (existsSync(connection.command)) return connection;
+	const versions = dirname(dirname(connection.command));
+	if (basename(versions) === "claude-code") {
+		let saved: unknown;
+		try {
+			saved = JSON.parse(await readFile(join(dirname(versions), "auth.json"), "utf8"));
+		} catch {
+			/* Falls through to the missing-binary error. */
+		}
+		const anthropic = isRecord(saved) ? saved.anthropic : undefined;
+		if (isSavedConnection(anthropic) && existsSync(anthropic.command)) return anthropic;
+	}
+	throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
+}
+
+function isSavedConnection(value: unknown): value is ExternalClaudeCodeCredential {
+	return (
+		isRecord(value) &&
+		value.type === "external_claude_code" &&
+		value.version === 3 &&
+		value.manager === "claude-code" &&
+		typeof value.command === "string"
+	);
+}
+
 async function runClaudeCode(
 	connection: ExternalClaudeCodeCredential,
 	request: ClaudeCodeRequest,
@@ -286,8 +380,6 @@ async function runClaudeCode(
 	idleMs: number,
 	upstream: string | undefined,
 ): Promise<Response> {
-	if (!existsSync(connection.command))
-		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
 	const loopback = await ClaudeCodeLoopback.open(request.tools);
 	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-")).catch((error: unknown) => {
 		loopback.close();
@@ -323,11 +415,10 @@ async function runClaudeCode(
 	try {
 		await writeFile(join(directory, "system.md"), request.system, { encoding: "utf8", mode: 0o600 });
 		// Settings carry the body override inside the process, avoiding per-argument size limits for large tool schemas.
-		await writeFile(
-			join(directory, "settings.json"),
-			JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(request.extraBody) } }),
-			{ encoding: "utf8", mode: 0o600 },
-		);
+		await writeFile(join(directory, "settings.json"), settingsJson(request.extraBody), {
+			encoding: "utf8",
+			mode: 0o600,
+		});
 		// The MCP URL carries a secret path, so it goes in a file rather than on the visible command line.
 		await writeFile(
 			join(directory, "mcp.json"),
@@ -427,10 +518,13 @@ async function runClaudeCode(
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
 		const next = () => within(nextAnswerEvent(events), "Claude Code request timed out.");
-		return new Response(answerStream(first, next, inventory, finish), {
-			status: 200,
-			headers: { "content-type": "text/event-stream" },
-		});
+		return new Response(
+			answerStream(first, next, inventory, finish, () => removeOldVersionsOnce(connection.command)),
+			{
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			},
+		);
 	} catch (error) {
 		await finish();
 		throw error;
@@ -450,7 +544,8 @@ export function claudeCodeFetch(
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			return await runClaudeCode(connection, claudeCodeRequest(body, connection), signal, idleMs, upstream);
+			const current = await currentConnection(connection);
+			return await runClaudeCode(current, claudeCodeRequest(body, current), signal, idleMs, upstream);
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));
@@ -501,8 +596,8 @@ function validateOptions(model: Model<Api>, options: StreamOptions | SimpleStrea
 /**
  * Streams one Anthropic turn for a Claude subscription. lunR builds the same Messages request it sends
  * with an API key; the injected client hands it to Claude Code, which authenticates and sends it.
- * Tool references, eager tool input, cache markers, and sampling stay off because Claude Code manages
- * those parts of its own request.
+ * Tool references, eager tool input, and sampling stay off because Claude Code manages those parts of
+ * its own request. lunR adds no cache markers; the bridge places the history marker itself.
  */
 export function streamClaudeCode(
 	model: Model<"anthropic-messages">,
