@@ -19,6 +19,7 @@
  */
 
 import { computerPolicy } from "./computer-use/policy.ts";
+import { credentialArgsReason, credentialBashReason } from "./credential-files.ts";
 import { effectiveLargeSubagentLaunchCountForTurn, LARGE_SUBAGENT_LAUNCH_THRESHOLD } from "./large-subagent-launch.ts";
 import { readOnlyModeBlockReason } from "./plan-mode.ts";
 import { protectedTargetWriteReason } from "./protected-targets.ts";
@@ -259,6 +260,16 @@ function protectedFileWriteReason(toolName: string, input: Record<string, unknow
 	return protectedTargetWriteReason(input.path, cwd);
 }
 
+/**
+ * lunR's saved logins stay out of every tool call in every mode, built-in, extension and MCP alike,
+ * because each call's arguments are scanned here; see credential-files.ts.
+ */
+function credentialToolReason(toolName: string, input: Record<string, unknown>, cwd: string): string | undefined {
+	const reason = credentialArgsReason(input, cwd);
+	if (reason || toolName !== "bash" || typeof input.command !== "string") return reason;
+	return credentialBashReason(input.command, cwd);
+}
+
 interface RequestedChildLaunch {
 	description: string;
 	permissions: "full" | "read-only";
@@ -442,6 +453,8 @@ export async function gateToolCall(
 	if (protectedWriteReason) {
 		return { block: true, reason: protectedWriteReason };
 	}
+	const credentialReason = credentialToolReason(toolName, input, cwd);
+	if (credentialReason) return { block: true, reason: credentialReason };
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
 
 	if (ctx.mode === "read-only") return readOnlyModeBlock(toolName, input);
