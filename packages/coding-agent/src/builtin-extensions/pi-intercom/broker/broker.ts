@@ -5,6 +5,7 @@ import { randomUUID } from "crypto";
 import { writeMessage, createMessageReader } from "./framing.ts";
 import {
   ensureIntercomRuntimeDir,
+  ensurePrivateSocketDir,
   getBrokerListenTarget,
   getBrokerPortFilePath,
   getIntercomDirPath,
@@ -129,6 +130,10 @@ function isSessionRegistration(value: unknown): value is SessionRegistration {
   return session.status === undefined || typeof session.status === "string";
 }
 
+function describeTarget(target: BrokerConnectTarget): string {
+  return typeof target === "string" ? target : `${target.host}:${target.port}`;
+}
+
 class IntercomBroker {
   private sessions = new Map<string, ConnectedSession>();
   private askEdges = new Map<string, AskEdge>();
@@ -141,6 +146,7 @@ class IntercomBroker {
   constructor() {
     ensureIntercomRuntimeDir(INTERCOM_DIR);
     if (typeof LISTEN_TARGET === "string" && process.platform !== "win32") {
+      ensurePrivateSocketDir(LISTEN_TARGET);
       try {
         unlinkSync(LISTEN_TARGET);
       } catch {
@@ -171,8 +177,15 @@ class IntercomBroker {
       writeFileSync(PID_PATH, String(process.pid), { mode: INTERCOM_RUNTIME_FILE_MODE });
       restrictIntercomRuntimeFile(PID_PATH);
       console.log(`Intercom broker started (pid: ${process.pid})`);
+      // A broker whose spawning client died before registering would otherwise never exit.
+      this.scheduleShutdownCheck();
     };
 
+    // Without this handler a failed listen is an unhandled 'error' event and a stack trace.
+    this.server.on("error", (error) => {
+      console.error(`Intercom broker failed to listen on ${describeTarget(LISTEN_TARGET)}: ${error.message}`);
+      process.exit(1);
+    });
     if (typeof LISTEN_TARGET === "string") {
       this.server.listen(LISTEN_TARGET, onListening);
     } else {
@@ -243,9 +256,10 @@ class IntercomBroker {
           this.sessions.delete(sessionId);
           this.clearAskEdgesForSession(sessionId);
           this.broadcast({ type: "session_left", sessionId }, sessionId);
-          this.scheduleShutdownCheck();
         }
       }
+      // Also covers connections that never registered, such as a client killed mid-startup.
+      if (this.sessions.size === 0) this.scheduleShutdownCheck();
     });
 
     socket.on("error", (error) => {
@@ -283,12 +297,14 @@ class IntercomBroker {
     return true;
   }
 
+  /** Exits 5 s after the last client leaves, unless a client connects again in that time. */
   private scheduleShutdownCheck(): void {
-    if (this.shutdownTimer) return;
+    if (this.shutdownTimer) clearTimeout(this.shutdownTimer);
 
     this.shutdownTimer = setTimeout(() => {
       this.shutdownTimer = null;
-      if (this.sessions.size === 0) {
+      // A connection that has not registered yet is a client on its way in.
+      if (this.sessions.size === 0 && this.connections.size === 0) {
         console.log("No sessions connected, shutting down");
         this.shutdown();
       }
@@ -633,4 +649,9 @@ class IntercomBroker {
   }
 }
 
-new IntercomBroker().start();
+try {
+  new IntercomBroker().start();
+} catch (error) {
+  console.error(`Intercom broker failed to start: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
