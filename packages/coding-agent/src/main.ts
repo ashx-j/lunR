@@ -1051,6 +1051,17 @@ export async function main(args: string[], options?: MainOptions) {
 		stdinContent,
 	);
 	time("prepareInitialMessage");
+	// Print and json mode run the given prompts and exit, so with none they would do nothing.
+	if (
+		(appMode === "print" || appMode === "json") &&
+		initialMessage === undefined &&
+		initialImages === undefined &&
+		parsed.messages.length === 0
+	) {
+		console.error(chalk.red("Error: print mode needs a prompt."));
+		console.error(`Usage: ${APP_NAME} -p "<prompt>"  or  <command> | ${APP_NAME} -p`);
+		process.exit(1);
+	}
 	initTheme(settingsManager.getTheme(), appMode === "interactive");
 	time("initTheme");
 
