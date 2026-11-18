@@ -1,7 +1,7 @@
 # lunR
 
 A coding agent that runs in your terminal.
-You can use it with the subscription you already pay for, like Claude Code, Codex, or Grok.
+You can use it with the subscription you already pay for, like Claude Code or Codex.
 
 [![npm](https://img.shields.io/npm/v/@ashx-j/lunr?style=flat-square)](https://www.npmjs.com/package/@ashx-j/lunr)
 
