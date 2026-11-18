@@ -170,20 +170,21 @@ async function discoverModels(command: string, configDir: string | undefined): P
 	try {
 		const picker = await channel.request({ subtype: "initialize" });
 		const rows = isRecord(picker) && Array.isArray(picker.models) ? picker.models : [];
-		const routes = new Map<string, boolean>();
+		const routes = new Map<string, string | undefined>();
 		for (const row of rows) {
 			if (!isRecord(row)) continue;
 			const resolved = typeof row.resolvedModel === "string" && row.resolvedModel ? row.resolvedModel : row.value;
 			if (typeof resolved !== "string" || !resolved.startsWith("claude-") || routes.has(resolved)) continue;
-			routes.set(resolved, typeof row.description === "string" && USAGE_CREDITS.test(row.description));
+			routes.set(resolved, typeof row.description === "string" && row.description ? row.description : undefined);
 		}
 		const models = new Map<string, ClaudeCodeModelRoute>();
-		for (const [route, usageCredits] of routes) {
-			if (usageCredits) continue;
+		for (const [route, description] of routes) {
+			if (description && USAGE_CREDITS.test(description)) continue;
 			const id = route.replace(/\[1m\]$/, "");
+			const text = description ? { description } : {};
 			// Replacing an existing key keeps its first picker position, so a `[1m]` route wins over the plain one.
-			if (id !== route) models.set(id, { id, route, contextWindow: ONE_MILLION_ROUTE_WINDOW });
-			else if (!models.has(id)) models.set(id, { id, route });
+			if (id !== route) models.set(id, { id, route, contextWindow: ONE_MILLION_ROUTE_WINDOW, ...text });
+			else if (!models.has(id)) models.set(id, { id, route, ...text });
 		}
 		if (tripwire.tripped) throw new Error("Claude Code model discovery tried to contact Anthropic. Setup not saved.");
 		return [...models.values()];

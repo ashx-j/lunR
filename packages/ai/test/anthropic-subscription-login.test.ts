@@ -136,7 +136,7 @@ describe("Anthropic subscription login", () => {
 			row("default", "claude-sonnet-5"),
 			sonnet,
 			row("sonnet[1m]", "claude-sonnet-5[1m]"),
-			row("opus", "claude-opus-5"),
+			row("opus", "claude-opus-5", "Opus 5 · Best for everyday, complex tasks"),
 			row("opus[1m]", "claude-opus-5[1m]", "Opus 5 with 1M context · Draws from usage credits · $5/$25 per Mtok"),
 			haiku,
 		];
@@ -145,7 +145,7 @@ describe("Anthropic subscription login", () => {
 		expect(credential).toMatchObject({
 			models: [
 				{ id: "claude-sonnet-5", route: "claude-sonnet-5[1m]", contextWindow: 1_000_000 },
-				{ id: "claude-opus-5", route: "claude-opus-5" },
+				{ id: "claude-opus-5", route: "claude-opus-5", description: "Opus 5 · Best for everyday, complex tasks" },
 				{ id: "claude-haiku-4-5-20251001", route: "claude-haiku-4-5-20251001" },
 			],
 		});

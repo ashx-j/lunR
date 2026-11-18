@@ -51,7 +51,8 @@ process.stdin.on("end", async () => {
 		process.exit(1);
 	}
 	line({ type: "system", subtype: "status", status: "requesting" });
-	const body = { ...extra, model: flag("--model"), messages: frames.map((frame) => frame.message), stream: true };
+	// Like Claude Code, fields from CLAUDE_CODE_EXTRA_BODY replace its own, including messages.
+	const body = { model: flag("--model"), messages: frames.map((frame) => frame.message), ...extra, stream: true };
 	let response;
 	try {
 		response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages?beta=true", { method: "POST", body: JSON.stringify(body) });
@@ -71,7 +72,7 @@ process.stdin.on("end", async () => {
 		line({ type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: "API Error" }] }, error: "unknown" });
 	}
 	if (response.status === 200) result({ is_error: false, num_turns: 1 });
-	else result({ is_error: true, num_turns: 1, terminal_reason: "api_error", api_error_status: response.status, result: "API Error: " + response.status + " " + JSON.parse(text).error.type });
+	else result({ is_error: true, num_turns: 1, terminal_reason: "api_error", api_error_status: response.status, result: "API Error: " + response.status + " " + (JSON.parse(text).error.message ?? JSON.parse(text).error.type) });
 	if (__dirname.endsWith("lingers")) {
 		await new Promise((resolve) => setTimeout(resolve, 400));
 		writeFileSync(join(__dirname, "exited-cleanly"), "");
@@ -205,7 +206,7 @@ const context: Context = {
 const model = ANTHROPIC_MODELS["claude-opus-4-8"];
 
 describe.skipIf(process.platform === "win32")("Claude Code subscription bridge", () => {
-	it("replays history through Claude Code and returns the upstream turn with lunR tool names", async () => {
+	it("sends lunR's history in the request body and returns the upstream turn with lunR tool names", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
 		const result = await streamClaudeCode(
 			model,
@@ -235,6 +236,141 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(mcpUrl.pathname).toBe(`/${mcpSecret}/mcp`);
 		expect(record.argv.join("\n")).not.toContain(mcpSecret);
 		expect(record.system).toBe("You are lunR.");
+		// Claude Code queries once with the first prompt text, which its billing header fingerprints.
+		expect(record.frames).toEqual([
+			{
+				type: "user",
+				client_composed: true,
+				message: { role: "user", content: [{ type: "text", text: "Read a.txt" }] },
+			},
+		]);
+		// The body carries the history exactly, so Claude Code's own per-request context cannot move the cached prefix.
+		expect(record.extra.messages).toEqual([
+			{ role: "user", content: [{ type: "text", text: "Read a.txt" }] },
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "Need a.txt.", signature: "sig-old" },
+					{ type: "tool_use", id: "toolu_1", name: "mcp__lunr__read", input: { path: "a.txt" } },
+				],
+			},
+			{
+				role: "user",
+				content: [
+					expect.objectContaining({ type: "tool_result", tool_use_id: "toolu_1" }),
+					{ type: "text", text: "Now b.txt", cache_control: { type: "ephemeral", ttl: "1h" } },
+				],
+			},
+		]);
+		expect(record.extra.tools.map((tool: { name: string }) => tool.name)).toEqual(["mcp__lunr__read"]);
+		expect(record.extra.output_config).toEqual({ effort: "high" });
+	});
+
+	it("sends a catalog Claude model the saved login does not list, and explains a refusal", async () => {
+		const unlisted = ANTHROPIC_MODELS["claude-sonnet-5-5"];
+		const sent = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const answered = await streamClaudeCode(
+			unlisted,
+			context,
+			{ externalClaudeCode: sent.connection },
+			true,
+			sent.upstream,
+		).result();
+		expect(answered.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(sent.directory, "record.json"), "utf8"));
+		expect(record.argv[record.argv.indexOf("--model") + 1]).toBe("claude-sonnet-5-5");
+
+		const refused = await setup({
+			status: 404,
+			body: JSON.stringify({ type: "error", error: { type: "not_found_error", message: "Run --model" } }),
+		});
+		const failed = await streamClaudeCode(
+			unlisted,
+			context,
+			{ externalClaudeCode: refused.connection },
+			true,
+			refused.upstream,
+		).result();
+		expect(failed.errorMessage).toBe(
+			"Claude claude-sonnet-5-5 is not available on this subscription, or the saved login predates it. Run /login anthropic to refresh the models it offers.",
+		);
+		expect(isRetryableAssistantError(failed)).toBe(false);
+
+		// A 403 is about the model only when Anthropic's message names it; otherwise its reason is kept.
+		for (const [message, hint] of [
+			["model: claude-sonnet-5-5", true],
+			["Your organization has been disabled.", false],
+		] as const) {
+			const denied = await setup({
+				status: 403,
+				body: JSON.stringify({ type: "error", error: { type: "permission_error", message } }),
+			});
+			const result = await streamClaudeCode(
+				unlisted,
+				context,
+				{ externalClaudeCode: denied.connection },
+				true,
+				denied.upstream,
+			).result();
+			expect(result.errorMessage?.includes("not available on this subscription")).toBe(hint);
+			expect(result.errorMessage?.includes(message)).toBe(!hint);
+		}
+	});
+
+	it("lists an offered model the catalog lacks in picker order and streams it with its family's settings", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const offered: ExternalClaudeCodeCredential = {
+			...connection,
+			models: [
+				{
+					id: "claude-opus-9",
+					route: "claude-opus-9[1m]",
+					contextWindow: 1_000_000,
+					description: "Opus 9 · Newest",
+				},
+				{ id: "claude-opus-4-8", route: "claude-opus-4-8" },
+				{ id: "claude-mythos-1", route: "claude-mythos-1" },
+			],
+		};
+		const listed = anthropicProvider().filterModels?.(Object.values(ANTHROPIC_MODELS), offered) ?? [];
+		expect(listed.map((row) => row.id)).toEqual(["claude-opus-9", "claude-opus-4-8", "claude-mythos-1"]);
+		const [unknown, , newFamily] = listed;
+		expect(unknown).toMatchObject({
+			name: "Opus 9",
+			contextWindow: 1_000_000,
+			reasoning: true,
+			// A family's models differ in price, so the row borrows none.
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			catalog: { pricing: "unknown" },
+		});
+		// No family row to borrow from: lunR sends no thinking setting.
+		expect(newFamily).toMatchObject({ name: "claude-mythos-1", reasoning: false, contextWindow: 128_000 });
+
+		const result = await streamClaudeCode(
+			unknown,
+			context,
+			{ reasoning: "high", externalClaudeCode: offered },
+			true,
+			upstream,
+		).result();
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(record.argv[record.argv.indexOf("--model") + 1]).toBe("claude-opus-9[1m]");
+		expect(record.extra.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(record.extra.output_config).toEqual({ effort: "high" });
+	});
+
+	it("replays a history too large for Claude Code's settings file through stdin", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const large: Context = {
+			...context,
+			messages: [{ role: "user", content: "x".repeat(2_200_000), timestamp: 0 }, ...context.messages.slice(1)],
+		};
+		const result = await streamClaudeCode(model, large, { externalClaudeCode: connection }, true, upstream).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(record.extra.messages).toBeUndefined();
 		expect(
 			record.frames.map((frame: { type: string; shouldQuery?: boolean }) => [frame.type, frame.shouldQuery]),
 		).toEqual([
@@ -243,20 +379,7 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			["user", undefined],
 		]);
 		// Claude Code keeps signed thinking only when the replayed turn names its model.
-		expect(record.frames[1].message).toEqual({
-			role: "assistant",
-			model: "claude-opus-4-8",
-			content: [
-				{ type: "thinking", thinking: "Need a.txt.", signature: "sig-old" },
-				{ type: "tool_use", id: "toolu_1", name: "mcp__lunr__read", input: { path: "a.txt" } },
-			],
-		});
-		expect(record.frames[2].message.content.map((block: { type: string }) => block.type)).toEqual([
-			"tool_result",
-			"text",
-		]);
-		expect(record.extra.tools.map((tool: { name: string }) => tool.name)).toEqual(["mcp__lunr__read"]);
-		expect(record.extra.output_config).toEqual({ effort: "high" });
+		expect(record.frames[1].message.model).toBe("claude-opus-4-8");
 	});
 
 	it("accepts an explicit automatic tool choice", async () => {
@@ -280,7 +403,7 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			upstream,
 		).result();
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toMatch(/^429 .*rate_limit_error/);
+		expect(result.errorMessage).toMatch(/^429 .*Slow down/);
 		expect(isRetryableAssistantError(result)).toBe(true);
 	});
 

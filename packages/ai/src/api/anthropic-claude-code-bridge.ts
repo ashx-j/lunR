@@ -31,6 +31,7 @@ const SUPPORTED_PARAMS: ReadonlySet<string> = new Set([
 	"output_config",
 	"tool_choice",
 ]);
+const CLAUDE_MODEL_ID = /^claude-[a-z0-9.-]+(\[1m\])?$/;
 const USER_BLOCKS: ReadonlySet<unknown> = new Set(["text", "image", "document", "tool_result"]);
 const ASSISTANT_BLOCKS: ReadonlySet<unknown> = new Set(["text", "thinking", "redacted_thinking", "tool_use"]);
 const REQUEST_ENV = {
@@ -64,11 +65,24 @@ type Block = Record<string, unknown>;
 interface Frame {
 	type: "user" | "assistant";
 	message: { role: "user" | "assistant"; model?: string; content: Block[] };
+	/** Skips Claude Code's turn-start context (memory, reminders, file mentions) for this turn. */
+	client_composed?: true;
 }
 
-/** A Messages request translated into Claude Code's inputs. */
+/** Claude Code refuses a settings file over 2 MiB; the rest is headroom for the JSON wrapper. */
+const SETTINGS_LIMIT = 2 * 1024 * 1024 - 4096;
+/** Matches the TTL of the two system-prompt markers Claude Code adds, which must not come after a shorter one. */
+const HISTORY_MARKER = { type: "ephemeral", ttl: "1h" } as const;
+
+/**
+ * A Messages request translated into Claude Code's inputs. Normally `extraBody.messages` carries lunR's
+ * history and `frames` is the one turn Claude Code queries with. A history too large for the settings
+ * file is replayed through `frames` instead.
+ */
 interface ClaudeCodeRequest {
 	route: string;
+	/** Whether the saved login lists the model. */
+	listed: boolean;
 	system: string;
 	frames: Frame[];
 	tools: ClaudeCodeTool[];
@@ -112,6 +126,38 @@ function historyFrames(messages: unknown[], model: string): Frame[] {
 	return frames;
 }
 
+/** The settings file that carries the request body override into Claude Code. */
+function settingsJson(extraBody: Record<string, unknown>): string {
+	return JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extraBody) } });
+}
+
+/**
+ * lunR's history as the request's `messages`, with a cache marker on the newest block. Sending it through
+ * the body keeps the prefix byte-identical across requests: Claude Code attaches its own turn-start context
+ * (date, account email, memory) to whichever turn queries, and each request is a new Claude Code process.
+ */
+function historyMessages(history: readonly Frame[]): Record<string, unknown>[] {
+	return history.map(({ message: { role, content } }, index) => ({
+		role,
+		content:
+			index === history.length - 1
+				? content.map((block, blockIndex) =>
+						blockIndex === content.length - 1 ? { ...block, cache_control: HISTORY_MARKER } : block,
+					)
+				: content,
+	}));
+}
+
+/**
+ * The one turn Claude Code queries with when the body carries the history. Claude Code's billing header
+ * fingerprints the first user text, so the turn repeats the first text of lunR's history.
+ */
+function queryFrame(history: readonly Frame[]): Frame {
+	const first = history.find((frame) => frame.type === "user")?.message.content.find((block) => block.type === "text");
+	const text = typeof first?.text === "string" && first.text ? first.text : ".";
+	return { type: "user", client_composed: true, message: { role: "user", content: [{ type: "text", text }] } };
+}
+
 /**
  * Validates the request lunR's Messages implementation built and maps it onto Claude Code's inputs. The
  * route is the one setup saved for the model, so Claude Code gets exactly the variant discovery chose.
@@ -123,8 +169,13 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 	if (unsupported.length) throw new Error(`Claude Code subscription does not support ${unsupported.join(", ")}`);
 	if (body.tool_choice !== undefined && !(isRecord(body.tool_choice) && body.tool_choice.type === "auto"))
 		throw new Error("Claude Code subscription does not support forced tool choice");
-	const route = connection.models?.find((model) => model.id === body.model)?.route;
-	if (!route) throw new Error(`Claude Code ${body.model} is not available through this subscription connection`);
+	// A saved route keeps the variant setup chose. A Claude id the saved login does not list, such as a model
+	// newer than the login, goes to Claude Code as is; lunR only builds requests for ids its catalog or
+	// models.json knows, and Anthropic decides whether the plan includes it.
+	const saved = connection.models?.find((model) => model.id === body.model);
+	const route = saved?.route ?? body.model;
+	if (!CLAUDE_MODEL_ID.test(route))
+		throw new Error(`Claude Code ${body.model} is not available through this subscription connection`);
 
 	const system =
 		typeof body.system === "string"
@@ -150,10 +201,12 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 
 	const maxTokens = typeof body.max_tokens === "number" ? body.max_tokens : undefined;
 	const thinking = isRecord(body.thinking) ? body.thinking : undefined;
-	return {
+	const history = historyFrames(body.messages, body.model);
+	const request = {
 		route,
+		listed: !!saved,
 		system,
-		frames: historyFrames(body.messages, body.model),
+		frames: history,
 		tools,
 		maxTokens,
 		extraBody: {
@@ -169,6 +222,10 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 			...(maxTokens ? { max_tokens: maxTokens } : {}),
 		},
 	};
+	const extraBody = { ...request.extraBody, messages: historyMessages(history) };
+	return Buffer.byteLength(settingsJson(extraBody)) <= SETTINGS_LIMIT
+		? { ...request, frames: [queryFrame(history)], extraBody }
+		: request;
 }
 
 /** Reads events up to the next `result`, or undefined when Claude Code's output ends first. */
@@ -323,11 +380,10 @@ async function runClaudeCode(
 	try {
 		await writeFile(join(directory, "system.md"), request.system, { encoding: "utf8", mode: 0o600 });
 		// Settings carry the body override inside the process, avoiding per-argument size limits for large tool schemas.
-		await writeFile(
-			join(directory, "settings.json"),
-			JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(request.extraBody) } }),
-			{ encoding: "utf8", mode: 0o600 },
-		);
+		await writeFile(join(directory, "settings.json"), settingsJson(request.extraBody), {
+			encoding: "utf8",
+			mode: 0o600,
+		});
 		// The MCP URL carries a secret path, so it goes in a file rather than on the visible command line.
 		await writeFile(
 			join(directory, "mcp.json"),
@@ -423,6 +479,16 @@ async function runClaudeCode(
 				);
 			if (!error) throw new Error(stoppedBeforeRequest(first));
 			await finish(true);
+			// Claude Code's own 404 text points at its --model flag, which lunR users do not have. Its result
+			// carries Anthropic's message but not the error type, so a 403 counts as a model refusal only when
+			// the message names the model; any other 403 (a disabled organization, a policy block) keeps it.
+			const refusedModel =
+				error.status === 404 ||
+				(error.status === 403 && typeof first.result === "string" && first.result.includes(request.route));
+			if (!request.listed && refusedModel)
+				return localFailure(
+					`Claude ${request.route} is not available on this subscription, or the saved login predates it. Run /login anthropic to refresh the models it offers.`,
+				);
 			return new Response(error.body, { status: error.status, headers: { "content-type": "application/json" } });
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
@@ -501,8 +567,8 @@ function validateOptions(model: Model<Api>, options: StreamOptions | SimpleStrea
 /**
  * Streams one Anthropic turn for a Claude subscription. lunR builds the same Messages request it sends
  * with an API key; the injected client hands it to Claude Code, which authenticates and sends it.
- * Tool references, eager tool input, cache markers, and sampling stay off because Claude Code manages
- * those parts of its own request.
+ * Tool references, eager tool input, and sampling stay off because Claude Code manages those parts of
+ * its own request. lunR adds no cache markers; the bridge places the history marker itself.
  */
 export function streamClaudeCode(
 	model: Model<"anthropic-messages">,
