@@ -38,9 +38,16 @@ Session replacement invalidates pending initialization. MCP cancels initializati
 and closes partially connected state. LSP drops stale write diagnostics. Web
 requests and curator callbacks cannot publish into a replacement session.
 
-The Node bundle does not automatically enable Node's compile cache. Reusing that
-cache was slower in the measured bundle. Node's explicit compile-cache environment
-settings remain available; the unbundled launch path keeps its existing policy.
+The Node bundle enables Node's compile cache (`<agent dir>/compile-cache`) only
+for non-interactive launches (`-p`, json, rpc, acp, `--help`, subcommands). On
+Linux it cut a one-turn print run by about 170 ms, but it delayed the interactive
+first request by about 60 ms, as it did in the 2026-09-08 Windows measurement.
+Node rejects entries whose source or Node version changed, so an old cache after
+an upgrade only costs a recompile. The unbundled launch path always enables it.
+
+`--version` is answered in `cli-runtime.ts` before `main.ts` is imported.
+`--help` still imports the runtime because it lists flags from every loaded
+extension, including user and project extensions.
 
 ## Validation
 
