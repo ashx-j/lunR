@@ -8,13 +8,42 @@ PR watching polls GitHub every minute without model calls during quiet cycles. T
 
 ## Permissions and planning
 
-Permission modes: `yolo | auto | read-only`. Shift+Tab cycles in that order. The TUI labels read-only as `read` in its footer and settings. Ctrl+T cycles thinking levels.
+Permission modes: `yolo | auto | ask | read-only`. Shift+Tab cycles in that order, from least to most strict, then back to yolo. The TUI labels read-only as `read` in its footer and settings. Ctrl+T cycles thinking levels.
 
 - **yolo** auto-approves tools. Large subagent launch confirmation is optional and off by default. This is the default mode.
 - **auto** has a review model check each risky action before it runs, the way Claude Code, Codex, Grok Build and Qwen Code do in their own auto modes. Reads, informational shell commands, edits inside the project, todos and goal updates run straight away. Other shell commands, writes outside the project, MCP calls, browser and computer actions, cron changes and full-access subagent launches go to the reviewer first. The reviewer sees what you asked for, the agent's earlier actions this turn and the pending action, but never tool output, so text in files or web pages can't argue with it. A blocked action returns the reviewer's reason to the model. After 3 blocks in a row or 20 in a session, lunR asks you instead; the gateway asks on your phone, and cron or `-p` runs keep the action blocked. Each review is one extra request and appears in `/usage`.
 - **Which model reviews.** Anthropic sessions use Claude Sonnet 5, Claude Code's own reviewer, falling back to the session model when Sonnet 5 isn't available. OpenAI (API and Codex), xAI and Qwen sessions use the session model at low reasoning effort, since their agents don't name one. Other providers' own agents offer no reviewer, so entering auto warns you and opens the model list to pick one. `/settings` → Auto review model changes or resets the choice. Without a usable reviewer, auto asks you before each risky action.
 - **No questions** is separate from the permission mode. `/goal`, subagents and the ACP Autonomous mode work without stopping to ask you and skip the large-launch confirmation. Subagents follow their parent's mode: reviewed in auto, unreviewed in yolo.
+- **ask** asks you before each call that read-only mode would block: shell commands that change things, edits and writes, MCP tool calls, browser and computer actions, cron changes, unknown extension tools and full-access subagent launches. Reads, informational shell commands, todos and goal updates run straight away. Choose Approve once, Approve for this session (only for shell commands and file tools, and only that exact command or file), Always allow (saves an allow rule for that exact command or file to global settings, so it applies in every project), Reject, or Reject with feedback, which the model sees. Subagent, browser, computer, MCP and cron calls have no session answer, because one such call says nothing about the next. A full-access child can't ask you, so its launch question says it runs commands and edits files without asking; it then runs as in yolo. The gateway asks with buttons (no feedback or Always allow). Where nobody can answer, such as `-p`, cron, subagents, and RPC or SDK sessions without an approval handler, or when a gateway question goes unanswered, the call is blocked and the model is told which allow rule would permit it. `/goal` keeps asking in ask mode. ACP has no ask mode: its client approves each tool already, so an ask default runs as Build there.
 - **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. Shell calls permit known informational forms. Project scripts and tests such as `npm test`, package executors, interpreter execution, and unknown Git operations require a writable mode. The shell command check is heuristic, not an OS sandbox.
+
+### Allow and deny rules
+
+`permissions.allow` and `permissions.deny` in settings.json list rules. A rule is a tool name, which matches every call of that tool, or `tool(pattern)`. Tool names match in any case, and Claude Code's `bash(npm run test:*)` form works too.
+
+- `bash(pattern)` matches the command, where `*` matches any text, flags included: `bash(npm test)` is exactly `npm test`, while `bash(git diff*)` would also allow `git diff --output=../file`, which writes a file. A `*` right after a word also matches longer words: `bash(git push*)` blocks `git push-docs` too, so write `bash(git push)` plus `bash(git push *)` when that matters.
+- For `read`, `edit`, `write`, `ls`, `grep`, `find` and `code_rewrite` the pattern is a path glob relative to the working directory: `*` and `?` stay inside one folder, `**` spans any number of folders, `~/` is your home folder. `edit(src/**)` covers every file under `src`. Paths compare without case on macOS and Windows.
+- Other tools take no pattern. lunR warns at startup about a rule that can never match, such as `mcp(github)` or `bash()`.
+- Each settings list reads at most 200 rules of up to 300 characters. lunR warns about the rest; a deny rule it can't read blocks every call of its tool until you shorten or remove it.
+
+```json
+{
+  "permissions": {
+    "allow": ["bash(npm test)", "bash(npm run lint)", "edit(src/**)"],
+    "deny": ["bash(git push*)", "read(~/.ssh/**)"]
+  }
+}
+```
+
+Deny rules block in every mode, including yolo, and win over allow rules. Allow rules skip the question in ask mode and the review request in auto mode. No rule lets a call past read-only mode or a protected file.
+
+A deny rule checks every command the line runs, and only commands: quoted text, commit messages, here-document bodies and comments are data, so `git commit -m "explain git push"` is not blocked by `bash(git push*)`. A denied command is caught in a chain (`make && git push`), a subshell, a function or `case` body, `$(...)` or backticks, `sh -c '...'`, `bash <<EOF`, `eval`, `env -S`, `find -exec`, `if`/`then` blocks, after `VAR=1` or a redirect, behind wrappers such as `sudo`, `env`, `command`, `nohup`, `timeout 5`, `nice`, `ionice`, `setsid`, `flock`, `taskset`, `strace`, `stdbuf`, `busybox` or `xargs` (a rule naming the wrapper, like `bash(sudo*)`, matches too), with quotes or backslashes in its name and as `/usr/bin/touch`. Options and one value each may sit between a pattern's words, so `bash(git push*)` matches `git -C repo push`, and also `git -C push-repo log`. A short-flag word is a set: `bash(rm -rf*)` matches `rm -r -f`. The set is case-sensitive and long options don't count, so it misses `rm -Rf` and `rm --recursive --force`. A command name bash expands before running (`{touch,x}`, `$'touch'`) matches every deny rule. A command that nests `sh -c`, `eval` or similar more than 4 levels deep, or has more than 15 wrappers or `-exec`s in one command, or costs more to match than about 4 steps per character per rule, can't be checked, so every bash deny rule blocks it.
+
+Allow rules match strictly: never a command with `;`, `&`, `|`, `<`, `>`, `$`, backticks, parentheses or backslashes, so `bash(npm test*)` can't approve `npm test; rm -rf ~`, and only the real path, so a link inside `src` can't approve a write outside it.
+
+Rules stop a model from running something by accident; they are not a sandbox. Deny rules don't see commands built while the shell runs (`$(echo touch)`, `$T`, `${X:-touch}`, globs in the command name), text piped or redirected into a shell (`echo 'touch x' | bash`, `bash <<< '...'`), interpreters (`python -c`, `node -e`, `perl -e`, `awk`'s `system`), `git -c alias...`, `sed`'s `e` command, `ssh`, `docker`, `su -c`, `coproc`, a wrapper's value glued to a flag cluster (`sudo -iu root`), a substitution inside an unquoted here-document body (`cat <<EOF` with `$(touch x)` in it), a `case` pattern's `)` inside a quoted `"$(...)"`, or sourced files. A hard link to a denied file gets past a path rule.
+
+Rules in global settings apply everywhere. A project's `.lunr/settings.json` can always add deny rules, trusted or not; its allow rules count only when you trust the project, so a cloned repository can't grant itself permissions.
 
 Use `/mode read` to inspect without changing files. `/plan` switches to read-only mode, and `/plan <task>` asks for a plan in that mode. If already read-only, `/plan <task>` stays read-only. Use `/plan off` to leave read-only mode. `present_plan` is available in read-only mode when a plan is needed. Approving a plan restores the previous mode before the tool result resolves, or enters yolo if no writable previous mode exists.
 

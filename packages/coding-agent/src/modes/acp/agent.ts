@@ -424,7 +424,8 @@ export class LunrAcpAgent implements Agent {
 		if (params.configId === "mode") {
 			// acp allows mode changes during a turn; lunr's tool gates read the mode on each call.
 			const owner = this.get(params.sessionId);
-			const mode = PERMISSION_MODES.find((mode) => mode === params.value);
+			// ACP offers no ask mode: its client approves each tool already (see the worker bridge).
+			const mode = PERMISSION_MODES.find((mode) => mode === params.value && mode !== "ask");
 			if (!mode) throw new RequestError(-32602, "Unknown lunr mode.");
 			await owner.session.process.request({ type: "set_permission_mode", mode });
 			owner.session.emit({ sessionUpdate: "current_mode_update", currentModeId: mode });
