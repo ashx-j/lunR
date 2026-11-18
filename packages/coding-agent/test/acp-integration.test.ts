@@ -273,6 +273,7 @@ describe("compiled ACP stdio integration", () => {
 			  "tools": [
 			    "ast_search",
 			    "bash",
+			    "bash_job",
 			    "code_overview",
 			    "code_rewrite",
 			    "edit",

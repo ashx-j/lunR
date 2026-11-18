@@ -187,6 +187,7 @@ registerHooks({load(url, context, nextLoad) {
 		for (const name of [
 			"read",
 			"bash",
+			"bash_job",
 			"edit",
 			"write",
 			"subagent",
@@ -208,8 +209,8 @@ registerHooks({load(url, context, nextLoad) {
 		assert.equal(
 			request.toolSchemaHash,
 			computerHost
-				? browserEnabled ? "301be7d2ad06229bf8d3492ce40da63483773a8354677e729d40ab0f73248f26" : "30b976c6a662a179717b0b535b7f9870ba2aef6f416eec76e11e4c57a7ea2fe0"
-				: browserEnabled ? "66c4ca968489505f17586d7b1ce85e01ed06558adf4d14faf1020a36caef7f49" : "e4effe88cbd8ed034a8a053ef176071043159ac0b162c6af0907468165a39c6b",
+				? browserEnabled ? "6b74379df7e0c8f97b48d769b6bec8f20b51d374184b367704ebb4b34da3b7d2" : "400091517d4b22c5123b097ab5c2d718d6bc5848d840191e7e9a12362ae19920"
+				: browserEnabled ? "08f67be27d3efe65b181102aab294ef50781fc859aa45a92cad796f749becea0" : "c4a0ba5af589e0e7cc7aeac8d0477ea1672a5e583def0e2f04fc221edd25f313",
 			"First request tool payload differs from the baseline fixture",
 		);
 		assert(request.hasSystemPrompt);
