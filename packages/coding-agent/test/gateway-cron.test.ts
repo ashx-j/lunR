@@ -539,8 +539,9 @@ describe("startGatewayCron", () => {
 		});
 		stoppers.push(cron.stop);
 
+		// The scheduler delivers before it records the run, so wait for both.
 		const deadline = Date.now() + 5000;
-		while (adapter.sent.length === 0 && Date.now() < deadline) {
+		while ((adapter.sent.length === 0 || getJob(job.id).lastStatus !== "ok") && Date.now() < deadline) {
 			await new Promise((resolve) => setTimeout(resolve, 50));
 		}
 		expect(adapter.sent).toHaveLength(1);
@@ -716,7 +717,7 @@ describe("startGatewayCron fallback models", () => {
 		});
 		stoppers.push(cron.stop);
 
-		await waitFor(() => adapter.sent.length > 0);
+		await waitFor(() => adapter.sent.length > 0 && getJob(job.id).lastStatus === "ok");
 		expect(seen).toEqual(["default", "ollama-cloud/glm-5.2"]);
 		expect(adapter.sent[0].text).toBe("Cron: fallbackjob\n———\n[fell back to ollama-cloud/glm-5.2]\nfallback result");
 		expect(getJob(job.id).lastStatus).toBe("ok");
