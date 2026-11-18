@@ -40,7 +40,12 @@ function createMode() {
 		ui: { terminal, requestRender: vi.fn(), stop: vi.fn() },
 		footer: { invalidate: vi.fn(), dispose: vi.fn() },
 		footerDataProvider: { dispose: vi.fn() },
-		session: { getAvailableThinkingLevels: () => [], isIdle: true, refreshModelFromRegistry: vi.fn() },
+		session: {
+			getAvailableThinkingLevels: () => [],
+			getCompactionCeilingFloor: () => ({ floor: 0 }),
+			isIdle: true,
+			refreshModelFromRegistry: vi.fn(),
+		},
 		sessionManager: { getCwd: () => "/inert", getSessionId: () => "inert" },
 		themeController: { getTerminalTheme: () => undefined, disableAutoSync: vi.fn() },
 		countSubscriptions: async () => 0,

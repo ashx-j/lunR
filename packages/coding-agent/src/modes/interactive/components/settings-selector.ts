@@ -70,12 +70,50 @@ const DEFAULT_PROJECT_TRUST_LABELS: Record<DefaultProjectTrust, string> = {
 	never: "Never trust",
 };
 
+/** Above the floor lunR raises a ceiling to (about 105k with its own tools), so each choice takes effect. */
+const COMPACTION_CEILING_CHOICES = [150_000, 200_000, 300_000, 500_000];
+
+/** Whole thousands read as "300k"; a hand-edited value shows exactly, so it saves back unchanged. */
+function formatCompactionCeiling(tokens: number | undefined): string {
+	if (!tokens) return "off";
+	return tokens % 1000 === 0 ? `${tokens / 1000}k` : String(tokens);
+}
+
+function parseCompactionCeiling(value: string): number | undefined {
+	if (value === "off") return undefined;
+	return Math.round(Number.parseFloat(value) * (value.endsWith("k") ? 1000 : 1));
+}
+
+function compactionCeilingDescription(
+	ceiling: number | undefined,
+	floor: number | undefined,
+	keptTokens: number | undefined,
+): string {
+	if (!ceiling || !floor || floor <= ceiling) return "Compact at this many tokens even when the model allows more";
+	const raised = `Raised to ${Math.round(floor / 1000)}k`;
+	return keptTokens
+		? `${raised} for now: the last compaction kept ${Math.round(keptTokens / 1000)}k. Back to ${formatCompactionCeiling(ceiling)} after one that keeps less`
+		: `${raised} here, twice the size of a compacted context`;
+}
+
+/** Keeps a hand-edited ceiling in the cycle so the row can show it. */
+function compactionCeilingValues(current: number | undefined): string[] {
+	const choices = new Set([...COMPACTION_CEILING_CHOICES, ...(current ? [current] : [])]);
+	return ["off", ...[...choices].sort((a, b) => a - b).map(formatCompactionCeiling)];
+}
+
 const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 	Object.entries(DEFAULT_PROJECT_TRUST_LABELS).map(([value, label]) => [label, value as DefaultProjectTrust]),
 );
 
 export interface SettingsConfig {
 	autoCompact: boolean;
+	/** Unset means no ceiling. */
+	compactionCeilingTokens?: number;
+	/** The lowest ceiling this session uses (`compactionCeilingFloor`); a lower setting is raised to it. */
+	compactionCeilingFloorTokens?: number;
+	/** Set when what the last compaction kept, not the estimate, sets the floor. */
+	compactionCeilingKeptTokens?: number;
 	showImages: boolean;
 	imageWidthCells: number;
 	autoResizeImages: boolean;
@@ -156,6 +194,7 @@ export interface SettingsConfig {
 
 export interface SettingsCallbacks {
 	onAutoCompactChange: (enabled: boolean) => void;
+	onCompactionCeilingChange: (ceilingTokens: number | undefined) => void;
 	onShowImagesChange: (enabled: boolean) => void;
 	onImageWidthCellsChange: (width: number) => void;
 	onAutoResizeImagesChange: (enabled: boolean) => void;
@@ -1545,6 +1584,18 @@ export class SettingsSelectorComponent extends Container {
 			},
 		];
 
+		// The description follows the chosen value, so the change handler rewrites it.
+		const compactionCeilingRow: SettingItem = {
+			id: "compaction-ceiling",
+			label: "Compaction ceiling",
+			description: compactionCeilingDescription(
+				config.compactionCeilingTokens,
+				config.compactionCeilingFloorTokens,
+				config.compactionCeilingKeptTokens,
+			),
+			currentValue: formatCompactionCeiling(config.compactionCeilingTokens),
+			values: compactionCeilingValues(config.compactionCeilingTokens),
+		};
 		const subscriptionCallbacks = callbacks.subscriptions;
 		const items: (SettingItem | SettingSection)[] = [
 			{ kind: "section", label: "Model" },
@@ -1667,6 +1718,7 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.autoCompact ? "on" : "off",
 				values: ["on", "off"],
 			},
+			compactionCeilingRow,
 			{
 				id: "steering-mode",
 				label: "Steering mode",
@@ -1965,6 +2017,16 @@ export class SettingsSelectorComponent extends Container {
 				case "autocompact":
 					callbacks.onAutoCompactChange(newValue === "on");
 					break;
+				case "compaction-ceiling": {
+					const ceiling = parseCompactionCeiling(newValue);
+					compactionCeilingRow.description = compactionCeilingDescription(
+						ceiling,
+						config.compactionCeilingFloorTokens,
+						config.compactionCeilingKeptTokens,
+					);
+					callbacks.onCompactionCeilingChange(ceiling);
+					break;
+				}
 				case "show-images":
 					callbacks.onShowImagesChange(newValue === "on");
 					break;
