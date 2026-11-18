@@ -33,7 +33,6 @@ const result = await build({
 		"canvas",
 		"web-tree-sitter",
 		"tree-sitter-wasms",
-		"recheck",
 		"open",
 		"unpdf",
 		"discord.js",
