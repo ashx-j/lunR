@@ -4,7 +4,9 @@
  * its own mode, then snapshots that resolved child permission into the child
  * environment. Read-only maps to Read-only. Full follows the parent: a parent in
  * auto passes its reviewer and the child runs in auto, otherwise the child runs in
- * yolo. Every child also works autonomously (see AgentSession).
+ * yolo. A child can't ask the user, so an ask parent's full child runs in yolo after
+ * the parent's gate asked before launching it. Every child also works autonomously
+ * (see AgentSession).
  */
 
 import { SUBAGENT_CHILD_AUTO_REVIEW_ENV } from "./auto-review.ts";
@@ -25,7 +27,7 @@ export function isSubagentChildProcess(env: NodeJS.ProcessEnv = process.env): bo
 }
 
 export function parseParentPermissionMode(value: string | undefined): PermissionMode | undefined {
-	if (value === "yolo" || value === "auto" || value === "read-only") return value;
+	if (value === "yolo" || value === "auto" || value === "ask" || value === "read-only") return value;
 	if (value === "plan") return "read-only";
 	if (value === "manual") return "yolo";
 	return undefined;
@@ -70,8 +72,8 @@ export interface RejectedChildPermissions {
  * Resolve the child's permission level before spawn.
  *
  * Parent mode           Requested          Result
- * YOLO/Auto             omitted/full       Full
- * YOLO/Auto             read-only          Read-only
+ * YOLO/Auto/Ask         omitted/full       Full (ask mode asks before the launch)
+ * YOLO/Auto/Ask         read-only          Read-only
  * Read-only             read-only          Read-only
  * Read-only             full / omitted     Reject (omission resolves to full)
  */

@@ -10,6 +10,7 @@ import { computerSettingsChanged } from "./computer-use/policy.ts";
 import { globalBridge } from "./global-bridge.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "./memory-cap.ts";
+import { type PermissionRuleSettings, permissionRuleProblems } from "./permission-rules.ts";
 import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "./pr-watch/types.ts";
 import {
 	DEFAULT_SUBAGENT_SPINNER,
@@ -87,7 +88,7 @@ export interface MarkdownSettings {
 }
 
 export type DefaultProjectTrust = "ask" | "always" | "never";
-export type DefaultPermissionMode = "yolo" | "auto" | "read-only";
+export type DefaultPermissionMode = "yolo" | "auto" | "ask" | "read-only";
 export type SkillTagCharacter = "+" | "~" | "$";
 export const SKILL_TAG_CHARACTERS: readonly SkillTagCharacter[] = ["+", "~", "$"];
 export const DEFAULT_SKILL_TAG_CHARACTER: SkillTagCharacter = "$";
@@ -214,6 +215,7 @@ export interface Settings {
 	// lunr: permission mode default (per-session mode is in-memory; this is the startup default)
 	defaultPermissionMode?: DefaultPermissionMode; // default "yolo"
 	autoReviewModel?: string; // "provider/model" that reviews auto-mode actions; unset = the provider's own reviewer
+	permissions?: PermissionRuleSettings; // allow/deny rules (permission-rules.ts); project allow rules need a trusted project
 	// lunr: rollback settings
 	rollbackEnabled?: boolean; // default false
 	rollbackTurns?: number; // default 2 — how many user-turns of snapshots to retain
@@ -283,6 +285,8 @@ export interface SettingsManagerCreateOptions {
 
 export interface SettingsStorage {
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
+	/** Reads a scope without locking or writing anything; undefined when it is missing, throws when unreadable. */
+	readWithoutLock(scope: SettingsScope): string | undefined;
 }
 
 export interface SettingsError {
@@ -299,6 +303,15 @@ export class FileSettingsStorage implements SettingsStorage {
 		const resolvedAgentDir = resolvePath(agentDir);
 		this.globalSettingsPath = join(resolvedAgentDir, "settings.json");
 		this.projectSettingsPath = join(resolvedCwd, CONFIG_DIR_NAME, "settings.json");
+	}
+
+	readWithoutLock(scope: SettingsScope): string | undefined {
+		try {
+			return readFileSync(scope === "global" ? this.globalSettingsPath : this.projectSettingsPath, "utf-8");
+		} catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+			throw error;
+		}
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {
@@ -374,6 +387,10 @@ export class InMemorySettingsStorage implements SettingsStorage {
 			}
 		}
 	}
+
+	readWithoutLock(scope: SettingsScope): string | undefined {
+		return scope === "global" ? this.global : this.project;
+	}
 }
 
 // copy a scope on its first trusted read so later writes and reloads stay in memory.
@@ -396,6 +413,10 @@ class SessionOnlySettingsStorage extends InMemorySettingsStorage {
 		}
 		super.withLock(scope, fn);
 	}
+
+	override readWithoutLock(scope: SettingsScope): string | undefined {
+		return this.copiedScopes.has(scope) ? super.readWithoutLock(scope) : this.source.readWithoutLock(scope);
+	}
 }
 
 export class SettingsManager {
@@ -404,6 +425,8 @@ export class SettingsManager {
 	private projectSettings: Settings;
 	private settings: Settings;
 	private projectTrusted: boolean;
+	/** Project `permissions.deny`, read even when the project is untrusted, since deny rules only restrict. */
+	private projectDenyRules: unknown;
 	private readonly runtimeOverrides: Partial<Settings>;
 	private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
 	private modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
@@ -463,7 +486,7 @@ export class SettingsManager {
 			initialErrors.push({ scope: "project", error: projectLoad.error });
 		}
 
-		return new SettingsManager(
+		const manager = new SettingsManager(
 			storage,
 			globalLoad.settings,
 			projectLoad.settings,
@@ -473,6 +496,8 @@ export class SettingsManager {
 			projectTrusted,
 			options.runtimeOverrides,
 		);
+		manager.loadPermissionRules();
+		return manager;
 	}
 
 	/** Create an in-memory SettingsManager (no file I/O) */
@@ -638,6 +663,7 @@ export class SettingsManager {
 		}
 
 		this.settings = this.mergeSettings();
+		this.loadPermissionRules();
 	}
 
 	/** Apply additional overrides on top of current settings */
@@ -1325,7 +1351,68 @@ export class SettingsManager {
 	getDefaultPermissionMode(): DefaultPermissionMode {
 		const value: unknown = this.settings.defaultPermissionMode;
 		if (value === "plan") return "read-only";
-		return value === "auto" || value === "read-only" ? value : "yolo";
+		return value === "auto" || value === "ask" || value === "read-only" ? value : "yolo";
+	}
+
+	/** Allow and deny rules per scope. Project settings are empty when the project isn't trusted. */
+	getPermissionRuleSettings(): {
+		global: PermissionRuleSettings | undefined;
+		project: PermissionRuleSettings | undefined;
+		projectTrusted: boolean;
+	} {
+		const deny = this.projectDenyRules;
+		return {
+			global: this.globalSettings.permissions,
+			project: {
+				allow: this.projectTrusted ? this.projectSettings.permissions?.allow : undefined,
+				deny: Array.isArray(deny) ? deny : undefined,
+			},
+			projectTrusted: this.projectTrusted,
+		};
+	}
+
+	/**
+	 * Reads the project's deny rules straight from its file, trusted or not, and records a settings
+	 * warning (printed at startup) for every rule that can never match.
+	 */
+	private loadPermissionRules(): void {
+		// A trusted project's file is already loaded, and its errors reported. An untrusted one gets a
+		// plain read, so lunR writes no lock folder into it.
+		let project: unknown = this.projectSettings;
+		if (!this.projectTrusted) {
+			try {
+				const content = this.storage.readWithoutLock("project");
+				project = content ? JSON.parse(content) : undefined;
+			} catch (error) {
+				const why = error instanceof Error ? error.message : String(error);
+				this.recordError("project", new Error(`Could not read the project's deny rules, so none apply: ${why}`));
+			}
+		}
+		const projectPermissions =
+			project && typeof project === "object" && "permissions" in project ? project.permissions : undefined;
+		const projectDeny =
+			projectPermissions && typeof projectPermissions === "object" && "deny" in projectPermissions
+				? projectPermissions.deny
+				: undefined;
+		this.projectDenyRules = projectDeny;
+		const global = this.globalSettings.permissions;
+		for (const [scope, name, list] of [
+			["global", "permissions.allow", global?.allow],
+			["global", "permissions.deny", global?.deny],
+			["project", "permissions.allow", this.projectTrusted ? this.projectSettings.permissions?.allow : undefined],
+			["project", "permissions.deny", projectDeny],
+		] as const) {
+			for (const problem of permissionRuleProblems(list, name)) this.recordError(scope, new Error(problem));
+		}
+	}
+
+	/** Adds a global allow rule; an "always allow" answer saves one. */
+	addPermissionAllowRule(rule: string): void {
+		const permissions = this.globalSettings.permissions ?? {};
+		if (permissions.allow?.includes(rule)) return;
+		this.globalSettings.permissions = { ...permissions, allow: [...(permissions.allow ?? []), rule] };
+		this.markModified("permissions", "allow");
+		this.save();
 	}
 
 	setDefaultPermissionMode(mode: DefaultPermissionMode): void {

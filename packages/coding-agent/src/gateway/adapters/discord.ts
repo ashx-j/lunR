@@ -76,6 +76,7 @@ import {
 	GatewayIntentBits,
 	type Interaction,
 } from "discord.js";
+import { PERMISSION_MODES } from "../../core/permissions.ts";
 import { isAuthorized } from "../authz.ts";
 import { type DiscordConfig, loadGatewayConfig } from "../config.ts";
 import { downloadAttachment } from "../download.ts";
@@ -617,7 +618,7 @@ export class DiscordAdapter implements PlatformAdapter {
 			}
 			const query = String(interaction.options.getFocused()).toLowerCase();
 			let values: string[] = [];
-			if (interaction.commandName === "mode") values = ["yolo", "auto", "read-only"];
+			if (interaction.commandName === "mode") values = [...PERMISSION_MODES];
 			if (this.commandSuggestions && ["thinking", "model"].includes(interaction.commandName)) {
 				values = [...(await this.commandSuggestions(source, interaction.commandName))];
 			}

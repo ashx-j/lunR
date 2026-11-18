@@ -175,7 +175,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Theme, thinking, agent memory, message delivery; Advanced holds transport, prompt cache and terminal layout |
 | `/thinking [level]` | Set thinking level, for example `/thinking high` (`xhigh`/`max` are opt-in when the model supports them) |
-| `/mode` | Set permission mode: `yolo`, `auto` (a review model checks risky actions), or `read-only` (Shift+Tab cycles) |
+| `/mode` | Set permission mode: `yolo`, `auto` (a review model checks risky actions), `ask` (you approve each change), or `read-only` (Shift+Tab cycles) |
 | `/plan` | Switch to read-only mode for planning, or `/plan <task>` to plan a task |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
 | `/goal` | Session goal (works without asking questions, in your current mode) |
@@ -204,7 +204,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/init` | Generate a starter AGENTS.md |
 | `/quit` | Quit lunR |
 
-Some commands still work when typed but stay out of the `/` list: the aliases `/auth`, `/deauth`, `/effort`, `/reasoning`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, and `/debug`, which writes the rendered screen to the debug log.
+Some commands still work when typed but stay out of the `/` list: the aliases `/auth`, `/deauth`, `/effort`, `/reasoning`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo`, `/auto` and `/ask`, and `/debug`, which writes the rendered screen to the debug log.
 
 ### Permission modes
 
@@ -212,9 +212,13 @@ Some commands still work when typed but stay out of the `/` list: the aliases `/
 
 `auto` works like `yolo`, but a reviewer model checks risky calls before they run, such as shell commands that change things, writes outside the project or to hidden files, and web fetches. Pick the reviewer in `/settings` under Auto review model.
 
+`ask` asks you before each change: shell commands that change things, edits, writes, MCP calls and full-access subagents. Reads run without asking.
+
 `read-only` blocks writes and other changes. The footer shows it as `read`. `/plan` switches to it while you plan a task.
 
-Shift+Tab cycles `yolo`, `auto` and `read-only`. `/mode yolo`, `/mode auto` and `/mode read` switch directly.
+Shift+Tab cycles `yolo`, `auto`, `ask` and `read-only`. `/mode yolo`, `/mode auto`, `/mode ask` and `/mode read` switch directly.
+
+`permissions.allow` and `permissions.deny` in settings.json take rules such as `bash(npm test)` or `edit(src/**)`. Deny rules block in every mode. Allow rules skip the question in `ask` and the review in `auto`. See [Allow and deny rules](docs/features.md#allow-and-deny-rules).
 
 ### Keyboard Shortcuts
 
@@ -231,7 +235,7 @@ See `/hotkeys` for the full list. Customize via `~/.lunr/agent/keybindings.json`
 | Escape twice within 500ms | Stop this session's active async subagents; otherwise open `/tree` when idle |
 | Ctrl+L | Open model selector |
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
-| Shift+Tab | Cycle permission mode (`yolo` → `auto` → `read-only`) |
+| Shift+Tab | Cycle permission mode (`yolo` → `auto` → `ask` → `read-only`) |
 | Ctrl+O | Cycle `/tree` filters (not tool expand) |
 | Ctrl+T | Cycle thinking level for the selected model |
 | Ctrl+X | Copy the last assistant message |
@@ -496,7 +500,7 @@ lunR keeps a small core and still lets you shape the product with [extensions](#
 
 - **MCP** — `/mcp`, `/mcp-auth`
 - **Subagents** use fresh children and a configured tier by default, or an explicit model when the user names one. Confirmation for 3+ children in yolo is optional and off by default. Default parallel concurrency is unlimited.
-- **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (see [Permission modes](#permission-modes))
+- **Permission modes** — `yolo | auto | ask | read-only`; Shift+Tab cycles that order (see [Permission modes](#permission-modes))
 - **Read-only mode** — `/mode read` blocks changes; `/plan` and `present_plan` handle plan approval
 - **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
 - **Background processes** — `/processes`

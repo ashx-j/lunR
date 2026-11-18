@@ -114,25 +114,27 @@ export class PermissionModeController {
 			return;
 		}
 
-		if (sub === "yolo" || sub === "auto" || sub === "read-only" || sub === "read") {
+		if (sub === "yolo" || sub === "auto" || sub === "ask" || sub === "read-only" || sub === "read") {
 			this.applyPermissionMode(sub === "read" ? "read-only" : sub);
 			return;
 		}
 
 		if (sub !== "") {
-			this.host.showStatus("Usage: /mode [yolo|auto|read] — bare /mode opens the selector.");
+			this.host.showStatus("Usage: /mode [yolo|auto|ask|read] — bare /mode opens the selector.");
 			return;
 		}
 
 		const options = [
 			"YOLO — auto-approve tools, agent may still ask",
 			"Auto — a review model checks risky actions",
+			"Ask — you approve each change before it runs",
 			"Read — inspect without making changes",
 		];
 		void this.host.showExtensionSelector("Permission mode", options).then((choice) => {
 			if (!choice) return;
 			if (choice.startsWith("YOLO")) this.applyPermissionMode("yolo");
 			else if (choice.startsWith("Auto")) this.applyPermissionMode("auto");
+			else if (choice.startsWith("Ask")) this.applyPermissionMode("ask");
 			else if (choice.startsWith("Read")) this.applyPermissionMode("read-only");
 		});
 	}
@@ -212,6 +214,8 @@ export class PermissionModeController {
 			this.host.showStatus(`Auto mode active. ${by} checks risky actions. Rollback enabled for this session.`);
 		} else if (mode === "read-only") {
 			this.host.showStatus("Read mode active. Changes are blocked.");
+		} else if (mode === "ask") {
+			this.host.showStatus("Ask mode active. lunR asks before each change; reads run straight away.");
 		} else {
 			this.host.showStatus(`Permission mode: ${mode}`);
 		}

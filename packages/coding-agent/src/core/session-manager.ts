@@ -933,7 +933,7 @@ export class SessionManager {
 				const mode: unknown = saved.permissionMode;
 				if (mode === "plan" || mode === "read-only") this.permissionMode = "read-only";
 				else if (mode === "manual" || mode === "yolo") this.permissionMode = "yolo";
-				else if (mode === "auto") this.permissionMode = "auto";
+				else if (mode === "auto" || mode === "ask") this.permissionMode = mode;
 			}
 			if (
 				saved.id === this.sessionId &&
