@@ -152,8 +152,13 @@ export function getStepAgents(step: ChainStep): string[] {
 // Chain Directory Management
 // =============================================================================
 
+/** Where `createChainDir` puts a run's directory, without creating anything. */
+export function chainDirPath(runId: string, baseDir?: string): string {
+	return path.join(baseDir ? path.resolve(baseDir) : CHAIN_RUNS_DIR, runId);
+}
+
 export function createChainDir(runId: string, baseDir?: string): string {
-	const chainDir = path.join(baseDir ? path.resolve(baseDir) : CHAIN_RUNS_DIR, runId);
+	const chainDir = chainDirPath(runId, baseDir);
 	fs.mkdirSync(chainDir, { recursive: true });
 	return chainDir;
 }
