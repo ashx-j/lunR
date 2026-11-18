@@ -198,6 +198,22 @@ describe("LSP manager startup ownership", () => {
 		expect(error).not.toHaveBeenCalled();
 	});
 
+	it("does not spawn a missing server again until an explicit restart", async () => {
+		const { manager, error } = setup();
+		const missing = Object.assign(new Error("spawn typescript-language-server ENOENT"), { code: "ENOENT" });
+		clients.start.mockRejectedValue(new Error("Failed to spawn LSP server", { cause: missing }));
+		expect(await manager.getClientForFile("a.ts")).toBeNull();
+		await vi.waitFor(() => expect(error).toHaveBeenCalledOnce());
+		expect(await manager.getClientForFile("b.ts")).toBeNull();
+		manager.startEagerly(["typescript"]);
+		expect(clients.created).toHaveLength(1);
+		expect(manager.getUnavailableReason("b.ts")).toContain("not installed or not on PATH");
+		clients.start.mockResolvedValue();
+		await manager.restartServer("typescript");
+		expect(clients.created).toHaveLength(2);
+		await manager.shutdownAll();
+	});
+
 	it("closes a pending start's client before an explicit restart replaces it", async () => {
 		const { manager } = setup();
 		const gate = deferred<void>();

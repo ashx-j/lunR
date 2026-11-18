@@ -25,6 +25,8 @@ The expensive implementations load when needed:
 - The built-in headless browser is enabled by default and can be hidden in `/settings`. Its runtime and Playwright load on first browser use. Installation, not startup, installs Chromium. See [Headless browser](../../packages/coding-agent/docs/browser.md) for recovery and network limits.
 - LSP registers its tools before loading clients and Tree-sitter. Configured
   autostart runs in the background; first use waits for the required services.
+  A server command that fails to spawn with `ENOENT` is not tried again in that
+  session; `/lsp-restart <language>` clears it.
 - MCP registers the proxy and cached direct-tool definitions without loading its
   connection engine. Configured eager servers, keep-alive, and metadata discovery
   retain their background behavior.
