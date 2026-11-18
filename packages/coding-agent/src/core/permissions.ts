@@ -104,6 +104,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"contact_supervisor",
 	"present_plan",
 	"structured_output",
+	"load_tools",
 ]);
 
 export const NO_HANDLER_REASON = "Approval channel unavailable.";

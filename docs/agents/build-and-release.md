@@ -16,7 +16,7 @@ Read before building, testing, packaging or publishing lunR.
 
 - Packages: `vitest --run` (ai, agent, coding-agent), `node --test` (tui).
 - `bash test.sh --workspace=packages/coding-agent -- <test files> --maxWorkers=1` runs with disposable home/profile/cache/temp directories and an allowlisted environment without credentials. Plain package `vitest --run` uses the caller's profile.
-- First paint and first request: after the builds, `node scripts/check-interactive-first-paint.mjs [cli]` checks stalled and failed hydration plus first-turn subagent/MCP/LSP/fetch, and compares the full default tool payload with browser-on and browser-off baseline hashes.
+- First paint and first request: after the builds, `node scripts/check-interactive-first-paint.mjs [cli]` checks stalled and failed hydration plus first-turn subagent/MCP/LSP/fetch, and compares the full default tool payload with browser-on and browser-off baseline hashes. A second pair of runs gives the faux model native tool loading and pins the loaded list, the deferred list and the `load_tools` hash.
 - Async child questions: `node scripts/check-subagent-questions.mjs` (also `--idle`), logs under `.artifacts/`.
 - CI's Script tests step installs bun 1.3.14, the version `build-binaries.yml` pins, because `scripts/build-standalone.test.mjs` bundles its probe with bun.
 - Fixture gotchas live in [testing.md](testing.md).

@@ -196,6 +196,11 @@ describe("large subagent launch", () => {
 		expect((await gateToolCall("subagent", { action: "resume", id: "old-run" }, "/cwd"))?.block).toBe(true);
 		expect(await gateToolCall("subagent", { action: "status", id: "old-run" }, "/cwd")).toBeUndefined();
 	});
+
+	it("lets load_tools run in read-only mode", async () => {
+		setPermissionMode("read-only");
+		expect(await gateToolCall("load_tools", { names: ["cron"] }, "/cwd")).toBeUndefined();
+	});
 });
 
 describe("same-turn executable launch approval", () => {
