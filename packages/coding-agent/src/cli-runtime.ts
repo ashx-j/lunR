@@ -3,6 +3,7 @@ import { enableCompileCache } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "./cli/args.ts";
+import { readPipedStdin, readsStdinBeforeTurn } from "./cli/piped-stdin.ts";
 import { isNodeBundle } from "./config.ts";
 import type { InteractiveView } from "./startup/interactive-view.ts";
 import { resolvePreloadLaunchMode } from "./startup/launch-routing.ts";
@@ -47,6 +48,24 @@ const preloadMode = resolvePreloadLaunchMode(args, {
 });
 markStartupMilestone("mode_routed");
 
+// A prompt launch with piped stdin starts reading it here, before main.ts loads (about 500 ms),
+// so the first-byte wait overlaps startup. Subcommands (a leading non-flag word) and launches
+// that use stdin for something else keep main's own read.
+const launchArgs = parseArgs(args);
+const pipedStdin =
+	!process.stdin.isTTY &&
+	!startupBenchmark &&
+	(args[0] === undefined || args[0].startsWith("-")) &&
+	launchArgs.mode !== "rpc" &&
+	launchArgs.mode !== "acp" &&
+	!launchArgs.help &&
+	!launchArgs.version &&
+	launchArgs.listModels === undefined &&
+	launchArgs.export === undefined &&
+	!readsStdinBeforeTurn(launchArgs)
+		? readPipedStdin()
+		: undefined;
+
 if (preloadMode === "interactive") {
 	const { InteractiveView } = await import("./startup/interactive-view.ts");
 	startupView = new InteractiveView();
@@ -65,7 +84,7 @@ const startRuntime = async () => {
 		]);
 		noteImportMain(performance.now() - importStarted);
 		process.title = APP_NAME;
-		await main(args, { startupView });
+		await main(args, { startupView, pipedStdin });
 	} catch (error) {
 		if (startupBenchmark) console.error(error);
 		if (startupView && !startupView.isExitRequested) {
