@@ -1,4 +1,5 @@
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstatSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { canonicalizeTargetPath } from "../utils/paths.ts";
 import { getInstructionsRoot } from "./model-instructions.ts";
@@ -13,10 +14,30 @@ export const SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON =
 export const PR_WATCH_STATE_WRITE_BLOCK_REASON =
 	"PR watch state is client-managed. Use pr_watch start/wait; only the user can cancel or restart through /pr-watch.";
 
+export const LUNR_MANAGED_STATE_WRITE_BLOCK_REASON =
+	"This is gateway, MCP login or Claude Code state that lunR manages itself. The agent cannot change it.";
+
 /** Windows and macOS (APFS, HFS+) are case-insensitive by default, so `SETTINGS.JSON` is settings.json there. */
 function normalize(path: string): string {
 	const normalized = resolve(path);
 	return process.platform === "win32" || process.platform === "darwin" ? normalized.toLowerCase() : normalized;
+}
+
+/**
+ * `canonicalizeTargetPath`, recomputed on every check because `git checkout`, an unpacked archive or
+ * another terminal can turn any component into a symlink. The target and the policies share most
+ * ancestors, so `memo` keeps one result per path for one check: one `lstat` per ancestor, and a full
+ * resolve only for a component that is a symlink.
+ */
+function canonicalPath(path: string, memo: Map<string, string>): string {
+	let canonical = memo.get(path);
+	if (canonical !== undefined) return canonical;
+	const parent = dirname(path);
+	if (parent === path) canonical = path;
+	else if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) canonical = canonicalizeTargetPath(path);
+	else canonical = join(canonicalPath(parent, memo), basename(path));
+	memo.set(path, canonical);
+	return canonical;
 }
 
 function isWithin(target: string, root: string): boolean {
@@ -27,8 +48,9 @@ function isWithin(target: string, root: string): boolean {
 /** Shared direct-mutation policy. Check the requested name and its canonical destination. */
 export function protectedTargetWriteReason(path: string, cwd: string): string | undefined {
 	try {
-		const target = resolveToCwd(path, cwd);
-		const targets = [normalize(target), normalize(canonicalizeTargetPath(target))];
+		const memo = new Map<string, string>();
+		const target = resolve(resolveToCwd(path, cwd));
+		const targets = [normalize(target), normalize(canonicalPath(target, memo))];
 		const agentDir = getAgentDir();
 		const policies = [
 			{ path: getInstructionsRoot(agentDir), tree: true, reason: GLOBAL_AGENTS_FILE_WRITE_BLOCK_REASON },
@@ -41,9 +63,15 @@ export function protectedTargetWriteReason(path: string, cwd: string): string | 
 				reason:
 					"Optional features are user-managed through lunr features; Browser is managed in /settings. Do not change install-features.json directly.",
 			},
+			// Bot tokens, approved gateway users, MCP OAuth tokens and the pinned binary the Claude bridge runs.
+			{ path: join(agentDir, "gateway.json"), reason: LUNR_MANAGED_STATE_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "pairing"), tree: true, reason: LUNR_MANAGED_STATE_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "mcp-oauth"), tree: true, reason: LUNR_MANAGED_STATE_WRITE_BLOCK_REASON },
+			{ path: join(agentDir, "claude-code"), tree: true, reason: LUNR_MANAGED_STATE_WRITE_BLOCK_REASON },
 		];
 		for (const policy of policies) {
-			const roots = [normalize(policy.path), normalize(canonicalizeTargetPath(policy.path))];
+			const root = resolve(policy.path);
+			const roots = [normalize(root), normalize(canonicalPath(root, memo))];
 			if (
 				targets.some((candidate) =>
 					roots.some((root) => (policy.tree ? isWithin(candidate, root) : candidate === root)),

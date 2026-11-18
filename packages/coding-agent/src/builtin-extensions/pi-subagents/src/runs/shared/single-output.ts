@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { OutputMode, SavedOutputReference } from "../../shared/types.ts";
+import { protectedTargetWriteReason } from "../../../../../core/protected-targets.ts";
 import { hasMutationToolCapability } from "./completion-guard.ts";
 
 export interface SingleOutputSnapshot {
@@ -144,6 +145,17 @@ export function validateFileOnlyOutputMode(outputMode: OutputMode | undefined, o
 	return undefined;
 }
 
+/**
+ * Why a child's output can't go to `outputPath`, or undefined. The runtime writes the child's reply
+ * there itself, outside the file tools, so the file tools' protected targets are checked here: at
+ * launch and again before the write.
+ */
+export function outputTargetError(outputPath: string | undefined, cwd: string): string | undefined {
+	if (!outputPath) return undefined;
+	const reason = protectedTargetWriteReason(outputPath, cwd);
+	return reason ? `Subagent output can't go to ${outputPath}: ${reason}` : undefined;
+}
+
 export function captureSingleOutputSnapshot(outputPath: string | undefined): SingleOutputSnapshot | undefined {
 	if (!outputPath) return undefined;
 	try {
@@ -158,8 +170,11 @@ export function captureSingleOutputSnapshot(outputPath: string | undefined): Sin
 function persistSingleOutput(
 	outputPath: string | undefined,
 	fullOutput: string,
+	cwd: string,
 ): { savedPath?: string; error?: string } {
 	if (!outputPath) return {};
+	const blocked = outputTargetError(outputPath, cwd);
+	if (blocked) return { error: blocked };
 	try {
 		fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 		fs.writeFileSync(outputPath, fullOutput, "utf-8");
@@ -169,10 +184,12 @@ function persistSingleOutput(
 	}
 }
 
+/** `cwd` is the session's directory, which decides the project `.lunr/settings.json` it may not write. */
 export function resolveSingleOutput(
 	outputPath: string | undefined,
 	fallbackOutput: string,
 	beforeRun: SingleOutputSnapshot | undefined,
+	cwd: string,
 ): { fullOutput: string; savedPath?: string; saveError?: string } {
 	if (!outputPath) return { fullOutput: fallbackOutput };
 
@@ -203,7 +220,7 @@ export function resolveSingleOutput(
 		}
 	}
 
-	const save = persistSingleOutput(outputPath, fallbackOutput);
+	const save = persistSingleOutput(outputPath, fallbackOutput, cwd);
 	if (save.savedPath) return { fullOutput: fallbackOutput, savedPath: save.savedPath };
 	return { fullOutput: fallbackOutput, saveError: save.error };
 }

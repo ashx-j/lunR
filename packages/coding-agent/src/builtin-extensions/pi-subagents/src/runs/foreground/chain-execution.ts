@@ -14,6 +14,7 @@ import { ChainClarifyComponent, type ChainClarifyResult, type BehaviorOverride }
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
 import {
 	resolveChainTemplates,
+	chainDirPath,
 	createChainDir,
 	removeChainDir,
 	resolveStepBehavior,
@@ -68,7 +69,7 @@ import {
 } from "../../shared/types.ts";
 import { captureModelSelection, resolveExecutableChildModel } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
-import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../shared/single-output.ts";
+import { injectSingleOutputInstruction, outputTargetError, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
 import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferences, validateChainOutputBindings, withChainHandoff } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
@@ -190,6 +191,23 @@ function buildChainExecutionErrorResult(message: string, input: ChainExecutionDe
 		isError: true,
 		details: buildChainExecutionDetails(input),
 	};
+}
+
+/** The first protected-target refusal among the outputs the chain's steps name directly. */
+function staticChainOutputError(chainSteps: ChainStep[], chainDir: string, cwd: string): string | undefined {
+	const outputs = chainSteps.flatMap((step) =>
+		isParallelStep(step)
+			? step.parallel.map((task) => task.output)
+			: isDynamicParallelStep(step)
+				? [step.parallel.output]
+				: [step.output],
+	);
+	for (const output of outputs) {
+		if (typeof output !== "string" || !output) continue;
+		const error = outputTargetError(path.isAbsolute(output) ? output : path.join(chainDir, output), cwd);
+		if (error) return error;
+	}
+	return undefined;
 }
 
 function ensureParallelProgressFile(
@@ -590,6 +608,10 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		throw error;
 	}
 
+	// A later step's output is otherwise checked only when that step starts, after earlier children ran.
+	// Checked before the chain directory exists, so a refused chain leaves nothing behind.
+	const outputError = staticChainOutputError(chainSteps, chainDirPath(runId, chainDirBase), ctx.cwd);
+	if (outputError) return buildChainExecutionErrorResult(outputError, makeDetailsInput());
 	const chainDir = createChainDir(runId, chainDirBase);
 	const hasParallelSteps = chainSteps.some((step) => isParallelStep(step) || isDynamicParallelStep(step));
 	let templates: ResolvedTemplates = resolveChainTemplates(chainSteps);
@@ -728,7 +750,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					const outputPath = typeof behavior.output === "string"
 						? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 						: undefined;
-					const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Parallel chain step ${stepIndex + 1} task ${taskIndex + 1} (${step.parallel[taskIndex]!.agent})`);
+					const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Parallel chain step ${stepIndex + 1} task ${taskIndex + 1} (${step.parallel[taskIndex]!.agent})`) ?? outputTargetError(outputPath, ctx.cwd);
 					if (validationError) return buildChainExecutionErrorResult(validationError, makeDetailsInput({ currentStepIndex: stepIndex, currentFlatIndex: globalTaskIndex + taskIndex }));
 				}
 				progressCreated = ensureParallelProgressFile(chainDir, progressCreated, parallelBehaviors);
@@ -946,7 +968,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				const outputPath = typeof behavior.output === "string"
 					? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 					: undefined;
-				const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Dynamic chain step ${stepIndex + 1} item ${taskIndex + 1} (${dynamicParallelStep.parallel[taskIndex]!.agent})`);
+				const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Dynamic chain step ${stepIndex + 1} item ${taskIndex + 1} (${dynamicParallelStep.parallel[taskIndex]!.agent})`) ?? outputTargetError(outputPath, ctx.cwd);
 				if (validationError) {
 					dynamicGroupStatuses[stepIndex] = { status: "failed", error: validationError };
 					return buildChainExecutionErrorResult(validationError, makeDetailsInput({ currentStepIndex: stepIndex, currentFlatIndex: globalTaskIndex + taskIndex }));
@@ -1163,7 +1185,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 				: undefined;
 			stepTask = withChainHandoff(injectSingleOutputInstruction(stepTask, outputPath, agentConfig), stepIndex < totalSteps - 1);
-			const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Chain step ${stepIndex + 1} (${seqStep.agent})`);
+			const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Chain step ${stepIndex + 1} (${seqStep.agent})`) ?? outputTargetError(outputPath, ctx.cwd);
 			if (validationError) {
 				return buildChainExecutionErrorResult(validationError, makeDetailsInput({ currentStepIndex: stepIndex, currentFlatIndex: globalTaskIndex }));
 			}
