@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeOnExit } from "../temp-files.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
 
 export interface OutputAccumulatorOptions {
@@ -214,6 +215,7 @@ export class OutputAccumulator {
 		}
 		this.tempFilePath = defaultTempFilePath(this.tempFilePrefix);
 		this.tempFileStream = createWriteStream(this.tempFilePath);
+		removeOnExit(this.tempFilePath);
 		for (const chunk of this.rawChunks) {
 			this.tempFileStream.write(chunk);
 		}
