@@ -2,6 +2,9 @@
  * System prompt construction and project context loading
  */
 
+import { existsSync } from "node:fs";
+import { release } from "node:os";
+import { dirname, join } from "node:path";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.ts";
 import { formatSkillsForPrompt, type Skill } from "./skills.ts";
 
@@ -40,7 +43,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		contextFiles: providedContextFiles,
 		skills: providedSkills,
 	} = options;
-	const promptCwd = cwd.replace(/\\/g, "/");
 
 	const appendSection = appendSystemPrompt ? `\n\n${appendSystemPrompt}` : "";
 
@@ -70,7 +72,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 			prompt += formatSkillsForPrompt(skills);
 		}
 
-		prompt += `\nCurrent working directory: ${promptCwd}`;
+		prompt += environmentBlock(cwd);
 
 		return prompt;
 	}
@@ -81,24 +83,39 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const examplesPath = getExamplesPath();
 
 	const currentModel = modelSlug?.trim() || "no model selected";
-	const hasRead = !selectedTools || selectedTools.includes("read");
-	const todoGuideline =
-		!selectedTools || selectedTools.includes("todo")
-			? "- Use todo for meaningful multi-step work. Every update must send the complete list, with exactly one item in progress at a time.\n"
-			: "";
-	const cronGuideline =
-		!selectedTools || selectedTools.includes("cron")
-			? "- Use cron only when the user asks to schedule or manage unattended prompts.\n"
-			: "";
+	const has = (tool: string) => !selectedTools || selectedTools.includes(tool);
+	const hasRead = has("read");
 	const delegationBehavior = automaticSubagentDelegation
 		? "- Orchestrate subagents with intent! Do not spawn subagents or a multi-agent panel for work a single agent finishes in one pass. Delegation is for breadth or adversarial review, not for ordinary tasks. Use subagents as a tool when there is genuine benefit to it or the user explicitly asks for it."
 		: "- Work on tasks directly. Launch subagents only when the user specifically instructs you to delegate work.";
-	const delegationGuideline = automaticSubagentDelegation
-		? "- Use subagents for independent parallel work, specialist analysis, or substantial research. Subagents start with fresh sessions. Use intercom instead to coordinate with an existing lunR session.\n"
-		: "";
+	// A tool's guideline goes out only when the session has that tool.
+	const guidelines = [
+		has("bash") && "Use bash for file operations like ls, rg, find",
+		hasRead && "Use read to examine files instead of cat or sed.",
+		has("todo") &&
+			"Use todo for meaningful multi-step work. Every update must send the complete list, with exactly one item in progress at a time.",
+		automaticSubagentDelegation &&
+			has("subagent") &&
+			"Use subagents for independent parallel work, specialist analysis, or substantial research. Subagents start with fresh sessions.",
+		has("intercom") && "Use intercom to coordinate with an existing lunR session.",
+		has("subagent") &&
+			"Resume a subagent only when its work is unfinished or the next task genuinely needs the context it built up. Otherwise launch a new subagent.",
+		has("ast_search") && "Use ast_search for structural code matches.",
+		has("cron") && "Use cron only when the user asks to schedule or manage unattended prompts.",
+		has("bash") &&
+			`For gateway work, inspect with \`lunr gateway status\` or \`lunr gateway doctor\`, configure with \`lunr gateway setup\`, and run \`lunr gateway start\` or \`lunr gateway stop\` only with user approval. Test by asking the user to send \`/whoami\` or a normal message to the bot; there is no arbitrary outbound send command. Keep bot tokens out of commands and output. See ${docsPath}/features.md for pairing, logs, and service details.`,
+		has("memory_add") &&
+			"Memory stores established, durable facts and stable preferences. Do not store behavior instructions, transient task details, transcripts, guesses, or secrets. Change memory only with the memory tools.",
+		"~/.lunr/agent/agents/ contains optional global and per-model AGENTS.md instructions written by the user. Never modify this tree, including through shell commands.",
+		has("web_search") &&
+			"Use web search when information is current, uncertain, externally referenced, or research-heavy, and cite the sources used.",
+		has("mcp") && "Use MCP only for capabilities exposed by configured MCP servers. Call native lunR tools directly.",
+	]
+		.filter((line) => typeof line === "string")
+		.map((line) => `- ${line}`)
+		.join("\n");
 
-	let prompt = `You are an expert coding assistant currently running ''${currentModel}'', operating inside lunR, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
-Current working directory: ''${promptCwd}''
+	let prompt = `You are an expert coding assistant currently running ${currentModel}, operating inside lunR, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
 
 Behavior guidelines:
 - Default to writing no comments. Only add one if the why is non-obvious: a hidden constraint, a subtle invariant, a workaround for a specific bug, something that would surprise the reader. If removing the comment wouldn't confuse a future reader, don't write it.
@@ -114,20 +131,7 @@ ${delegationBehavior}
 
 
 Guidelines:
-- Use bash for file operations like ls, rg, find
-- Use read to examine files instead of cat or sed.
-- Use edit for precise changes (edits[].oldText must match exactly)
-- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls
-- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.
-- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.
-- Use write only for new files or complete rewrites.
-${todoGuideline}${delegationGuideline}- Resume a subagent only when its work is unfinished or the next task genuinely needs the context it built up. Otherwise launch a new subagent.
-- Use ast_search for structural code matches.
-${cronGuideline}- For gateway work, inspect with \`lunr gateway status\` or \`lunr gateway doctor\`, configure with \`lunr gateway setup\`, and run \`lunr gateway start\` or \`lunr gateway stop\` only with user approval. Test by asking the user to send \`/whoami\` or a normal message to the bot; there is no arbitrary outbound send command. Keep bot tokens out of commands and output. See ${docsPath}/features.md for pairing, logs, and service details.
-- Memory stores established, durable facts and stable preferences. Do not store behavior instructions, transient task details, transcripts, guesses, or secrets. Change memory only with the memory tools.
-- ~/.lunr/agent/agents/ contains optional global and per-model AGENTS.md instructions written by the user. Never modify this tree, including through shell commands.
-- Use web search when information is current, uncertain, externally referenced, or research-heavy, and cite the sources used.
-- Use MCP only for capabilities exposed by configured MCP servers. Call native lunR tools directly.
+${guidelines}
 
 
 lunR documentation (read only when the user asks about lunR itself, or the task concerns lunR itself, its SDK, extensions, themes, skills, or TUI):
@@ -155,5 +159,38 @@ lunR documentation (read only when the user asks about lunR itself, or the task 
 		prompt += formatSkillsForPrompt(skills);
 	}
 
+	prompt += environmentBlock(cwd);
+
 	return prompt;
+}
+
+/**
+ * Facts the model would otherwise spend a tool call on. The prompt is rebuilt only on a model, tool
+ * or resource change or a reload, so the date is the one the session started on and adds no cache
+ * misses inside a session.
+ */
+function environmentBlock(cwd: string): string {
+	const now = new Date();
+	const date = [now.getFullYear(), now.getMonth() + 1, now.getDate()]
+		.map((part) => String(part).padStart(2, "0"))
+		.join("-");
+	return `\n\nEnvironment:
+- Working directory: ${cwd.replace(/\\/g, "/")}
+- Git repository: ${isInGitRepo(cwd) ? "yes" : "no"}
+- OS: ${osName()}
+- Session started: ${date}`;
+}
+
+/** macOS and Windows report kernel versions (Darwin 25 is macOS 26), so only Linux gets one. */
+function osName(): string {
+	if (process.platform === "darwin") return "macOS";
+	if (process.platform === "win32") return "Windows";
+	return process.platform === "linux" ? `Linux ${release()}` : process.platform;
+}
+
+function isInGitRepo(cwd: string): boolean {
+	for (let dir = cwd; ; dir = dirname(dir)) {
+		if (existsSync(join(dir, ".git"))) return true;
+		if (dirname(dir) === dir) return false;
+	}
 }
