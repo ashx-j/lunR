@@ -1,3 +1,4 @@
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { ContextBreakdown } from "../../../core/context-breakdown.ts";
 import { theme } from "../theme/theme.ts";
 import { formatTokens } from "./footer.ts";
@@ -7,6 +8,8 @@ export interface ContextViewData {
 	breakdown: ContextBreakdown;
 	/** provider/model id shown in the box, when known. */
 	model?: string;
+	/** Warning shown under the total, such as a subscription history that is no longer prompt-cached. */
+	notice?: string;
 }
 
 interface BreakdownRow {
@@ -65,6 +68,11 @@ export function renderContextBox(data: ContextViewData, maxWidth: number): strin
 	content.push(
 		`  ${"Estimated total".padEnd(labelWidth)}  ${usageBar(usedPercent)}  ${formatTokens(breakdown.total)} / ${formatTokens(breakdown.contextWindow)} (${Math.round(usedPercent)}%)`,
 	);
+	if (data.notice) {
+		// Wrap to the box the rows already need, so the note does not widen it or get cut off.
+		const width = Math.max(20, Math.min(Math.max(...content.map((line) => visibleWidth(line))), maxWidth - 4));
+		content.push("", ...wrapTextWithAnsi(data.notice, width).map((line) => theme.fg("warning", line)));
+	}
 
 	return renderThemedBox(" Context ", content, maxWidth);
 }
