@@ -185,8 +185,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 			const hasImages = imageContent.length > 0;
 
 			// Gemini 3+ models support multimodal function responses with images nested inside
-			// functionResponse.parts. Claude and other non-Gemini models behind Cloud Code Assist /
-			// Gemini < 3 still needs a separate user image turn.
+			// functionResponse.parts. Gemini < 3 still needs a separate user image turn.
 			const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
 			// Use "output" key for success, "error" key for errors as per SDK documentation
@@ -209,8 +208,8 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				},
 			};
 
-			// Cloud Code Assist API requires all function responses to be in a single user turn.
-			// Check if the last content is already a user turn with function responses and merge.
+			// All function responses for one model turn go in a single user turn, so merge into the last
+			// user turn when it already holds function responses.
 			const lastContent = contents[contents.length - 1];
 			if (lastContent?.role === "user" && lastContent.parts?.some((p) => p.functionResponse)) {
 				lastContent.parts.push(functionResponsePart);
@@ -234,54 +233,18 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 	return contents;
 }
 
-const JSON_SCHEMA_META_DECLARATIONS = new Set([
-	"$schema",
-	"$id",
-	"$anchor",
-	"$dynamicAnchor",
-	"$vocabulary",
-	"$comment",
-	"$defs",
-	"definitions", // pre-draft-2019-09 equivalent of $defs
-]);
-
 /**
- * Strip meta-declarations from a schema obj
+ * Convert tools to Gemini function declarations format. `parametersJsonSchema` takes full JSON Schema
+ * (anyOf, oneOf, const and so on).
  */
-function sanitizeForOpenApi(schema: unknown): unknown {
-	if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
-		return schema;
-	}
-
-	const result: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(schema)) {
-		if (JSON_SCHEMA_META_DECLARATIONS.has(key)) continue;
-		result[key] = sanitizeForOpenApi(value);
-	}
-	return result;
-}
-
-/**
- * Convert tools to Gemini function declarations format.
- *
- * By default uses `parametersJsonSchema` which supports full JSON Schema (including
- * anyOf, oneOf, const, etc.). Set `useParameters` to true to use the legacy `parameters`
- * field instead (OpenAPI 3.03 Schema). This is needed for Cloud Code Assist with Claude
- * models, where the API translates `parameters` into Anthropic's `input_schema`.
- */
-export function convertTools(
-	tools: Tool[],
-	useParameters = false,
-): { functionDeclarations: Record<string, unknown>[] }[] | undefined {
+export function convertTools(tools: Tool[]): { functionDeclarations: Record<string, unknown>[] }[] | undefined {
 	if (tools.length === 0) return undefined;
 	return [
 		{
 			functionDeclarations: tools.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
-				...(useParameters
-					? { parameters: sanitizeForOpenApi(tool.parameters as unknown) }
-					: { parametersJsonSchema: tool.parameters }),
+				parametersJsonSchema: tool.parameters,
 			})),
 		},
 	];
