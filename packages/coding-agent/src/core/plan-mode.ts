@@ -188,31 +188,57 @@ function readBashCommand(input: unknown): string {
 export function isMutatingBashCommand(command: string): boolean {
 	if (!command.trim()) return false;
 
-	// Any output redirect outside quotes can write a file.
-	if (hasUnquotedRedirect(command)) return true;
+	// Output redirects outside quotes can write a file, except to /dev/null or onto another descriptor.
+	const withoutRedirects = withoutHarmlessRedirects(command);
+	if (withoutRedirects === undefined) return true;
 
 	// Substitutions, parameter expansion, ANSI-C quoting and brace expansion change
 	// the words after this check, so a literal word check cannot classify them.
-	if (hasShellExpansion(command)) return true;
+	if (hasShellExpansion(withoutRedirects)) return true;
 
 	// Every segment separated by ; | & && || must individually be read-only.
-	for (const segment of splitShellSegments(command)) {
+	let changedDir = false;
+	for (const segment of splitShellSegments(withoutRedirects)) {
+		const tokens = shellWords(segment);
+		if (tokens?.[0] === "cd") {
+			if (!isPlainCd(segment, tokens)) return true;
+			changedDir = true;
+			continue;
+		}
 		if (isMutatingSegment(segment)) return true;
+		// `cd dir && git log` is `git -C dir log`: the new directory's config can run a program.
+		const name = tokens?.find((token) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token));
+		if (changedDir && name && CWD_CONFIG_COMMANDS.has(basenameOf(name).toLowerCase())) return true;
 	}
 	return false;
 }
 
-function hasUnquotedRedirect(command: string): boolean {
+/** Allowed commands that load config, hooks or a program from the working directory. */
+const CWD_CONFIG_COMMANDS = new Set(["git", "gh", "npm", "pnpm", "bun"]);
+
+/** `cd <dir>` alone: one literal argument that isn't an option, `-` or a glob. */
+function isPlainCd(segment: string, tokens: string[]): boolean {
+	return tokens.length === 2 && tokens[1] !== "" && !tokens[1].startsWith("-") && !unquotedGlobs(segment).any;
+}
+
+/**
+ * The command with each unquoted `[n]>/dev/null`, `&>/dev/null` and `[n]>&m` blanked out, or
+ * undefined when any other output redirect remains (`>file`, `>>`, `>|`, `<>`, `>&-`, a quoted or
+ * expanded target) or any redirect names its fd (`{PATH}>`, `{HOME}<`). Comments are blanked too.
+ * Blanking keeps the `&` of `2>&1` from reading as an operator later.
+ */
+function withoutHarmlessRedirects(command: string): string | undefined {
+	const parts: string[] = [];
+	let copied = 0;
+	const blank = (start: number, end: number) => {
+		parts.push(command.slice(copied, start), " ".repeat(end - start));
+		copied = end;
+	};
 	let quote: "'" | '"' | undefined;
-	let escaped = false;
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
 		if (ch === "\\" && quote !== "'") {
-			escaped = true;
+			i++;
 			continue;
 		}
 		if (quote) {
@@ -223,9 +249,58 @@ function hasUnquotedRedirect(command: string): boolean {
 			quote = ch;
 			continue;
 		}
-		if (ch === ">") return true;
+		// A comment runs to the end of its line, so a quote inside it can't hide the next line. Bash starts
+		// one only after its own word breaks: `\r`, a no-break space and other Unicode spaces are word text.
+		if (ch === "#" && (i === 0 || /[ \t\n;|&()<>]/.test(command[i - 1]))) {
+			const lineEnd = command.indexOf("\n", i);
+			const end = lineEnd < 0 ? command.length : lineEnd;
+			blank(i, end);
+			i = end - 1;
+			continue;
+		}
+		if (ch !== ">" && ch !== "<") continue;
+		// `{name}>` and `{name}<` store the new fd number in a variable such as PATH or HOME.
+		if (command[fdStart(command, i) - 1] === "}") return undefined;
+		if (ch === "<") continue;
+		const end = harmlessRedirectEnd(command, i);
+		if (end === undefined) return undefined;
+		blank(redirectStart(command, i), end);
+		i = end - 1;
 	}
-	return false;
+	parts.push(command.slice(copied));
+	return parts.join("");
+}
+
+/** Index of the fd digits before the redirect operator at `at`, or `at` when there are none. */
+function fdStart(command: string, at: number): number {
+	let start = at;
+	while (start > 0 && /\d/.test(command[start - 1])) start--;
+	return start;
+}
+
+/** Where the redirect whose `>` is at `at` begins: a whole-word fd number or a lone `&` before it. */
+function redirectStart(command: string, at: number): number {
+	const start = fdStart(command, at);
+	if (start < at) return start === 0 || /[ \t\n;|&(]/.test(command[start - 1]) ? start : at;
+	return command[at - 1] === "&" && (at === 1 || /[ \t\n]/.test(command[at - 2])) ? at - 1 : at;
+}
+
+/** End index of a harmless redirect whose `>` is at `at`, or undefined. */
+function harmlessRedirectEnd(command: string, at: number): number | undefined {
+	if (command[at - 1] === "<") return undefined;
+	// Bash's word breaks only: after `>&1`, a no-break space and a name would be a file target.
+	const boundary = (index: number) => index >= command.length || /[ \t\n;|&)]/.test(command[index]);
+	const next = command[at + 1];
+	if (next === "&" && command[at - 1] !== "&") {
+		let end = at + 2;
+		while (end < command.length && /\d/.test(command[end])) end++;
+		return end > at + 2 && boundary(end) ? end : undefined;
+	}
+	if (next === ">" || next === "|" || next === "&" || next === "(") return undefined;
+	let target = at + 1;
+	while (command[target] === " " || command[target] === "\t") target++;
+	const end = target + "/dev/null".length;
+	return command.startsWith("/dev/null", target) && boundary(end) ? end : undefined;
 }
 
 function splitShellSegments(command: string): string[] {
