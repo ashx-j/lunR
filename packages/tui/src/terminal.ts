@@ -16,6 +16,41 @@ const DESIRED_KITTY_KEYBOARD_PROTOCOL_FLAGS = 7;
 const KEYBOARD_PROTOCOL_RESPONSE_FRAGMENT_TIMEOUT_MS = 150;
 const KITTY_KEYBOARD_PROTOCOL_QUERY = `\x1b[>${DESIRED_KITTY_KEYBOARD_PROTOCOL_FLAGS}u\x1b[?u\x1b[c`;
 
+/** Receives text that something other than the TUI wrote to stdout or stderr while the TUI owned the screen. */
+export type StrayOutputHandler = (text: string, stream: "stdout" | "stderr") => void;
+
+type StreamWrite = typeof process.stdout.write;
+
+// The writes a started ProcessTerminal replaced, so the TUI can still reach the terminal.
+let outputGuard: { owner: ProcessTerminal; stdout: StreamWrite; stderr: StreamWrite | undefined } | undefined;
+const strayDecoder = new TextDecoder();
+
+function divertWrites(stream: "stdout" | "stderr", handler: StrayOutputHandler): StreamWrite {
+	return ((
+		chunk: string | Uint8Array,
+		encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+		callback?: (error?: Error | null) => void,
+	): boolean => {
+		try {
+			handler(typeof chunk === "string" ? chunk : strayDecoder.decode(chunk), stream);
+		} catch {
+			// A failing handler must not throw into the extension that wrote.
+		}
+		const done = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
+		if (done) process.nextTick(done);
+		return true;
+	}) as StreamWrite;
+}
+
+/**
+ * Writes straight to the terminal, past the stray-output guard. For escape sequences the app sends
+ * beside the TUI while it runs, such as an OSC 52 clipboard copy.
+ */
+export function writeTerminalOutput(data: string): void {
+	if (outputGuard) outputGuard.stdout.call(process.stdout, data);
+	else process.stdout.write(data);
+}
+
 export type KeyboardProtocolNegotiationSequence =
 	| { type: "kitty-flags"; flags: number }
 	| { type: "device-attributes" };
@@ -98,6 +133,7 @@ export interface Terminal {
  */
 export class ProcessTerminal implements Terminal {
 	private wasRaw = false;
+	private strayOutputHandler: StrayOutputHandler | undefined;
 	private inputHandler?: (data: string) => void;
 	private resizeHandler?: () => void;
 	private _kittyProtocolActive = false;
@@ -131,9 +167,38 @@ export class ProcessTerminal implements Terminal {
 		return this._modifyOtherKeysActive;
 	}
 
+	/**
+	 * While this terminal is started, text written to process.stdout, and to process.stderr when it is a
+	 * TTY, goes to `handler` instead of the screen, where it would move the cursor behind the TUI's back
+	 * and leave stale rows. Interactive mode sets it; other users of ProcessTerminal leave writes alone.
+	 */
+	setStrayOutputHandler(handler: StrayOutputHandler): void {
+		this.strayOutputHandler = handler;
+	}
+
+	private guardOutput(): void {
+		const handler = this.strayOutputHandler;
+		if (outputGuard || !handler) return;
+		outputGuard = {
+			owner: this,
+			stdout: process.stdout.write,
+			stderr: process.stderr.isTTY ? process.stderr.write : undefined,
+		};
+		process.stdout.write = divertWrites("stdout", handler);
+		if (outputGuard.stderr) process.stderr.write = divertWrites("stderr", handler);
+	}
+
+	private releaseOutput(): void {
+		if (outputGuard?.owner !== this) return;
+		process.stdout.write = outputGuard.stdout;
+		if (outputGuard.stderr) process.stderr.write = outputGuard.stderr;
+		outputGuard = undefined;
+	}
+
 	start(onInput: (data: string) => void, onResize: () => void): void {
 		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
+		this.guardOutput();
 
 		// Save previous state and enable raw mode
 		this.wasRaw = process.stdin.isRaw || false;
@@ -144,7 +209,7 @@ export class ProcessTerminal implements Terminal {
 		process.stdin.resume();
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
-		process.stdout.write("\x1b[?2004h");
+		writeTerminalOutput("\x1b[?2004h");
 
 		// Set up resize handler immediately
 		process.stdout.on("resize", this.resizeHandler);
@@ -224,7 +289,7 @@ export class ProcessTerminal implements Terminal {
 		process.stdin.on("data", this.stdinDataHandler!);
 		this.keyboardProtocolPushed = true;
 		this.clearKeyboardProtocolNegotiationBuffer();
-		process.stdout.write(KITTY_KEYBOARD_PROTOCOL_QUERY);
+		writeTerminalOutput(KITTY_KEYBOARD_PROTOCOL_QUERY);
 	}
 
 	private handleKeyboardProtocolNegotiationSequence(
@@ -321,13 +386,13 @@ export class ProcessTerminal implements Terminal {
 
 	private enableModifyOtherKeys(): void {
 		if (this._kittyProtocolActive || this._modifyOtherKeysActive) return;
-		process.stdout.write("\x1b[>4;2m");
+		writeTerminalOutput("\x1b[>4;2m");
 		this._modifyOtherKeysActive = true;
 	}
 
 	private disableModifyOtherKeys(): void {
 		if (!this._modifyOtherKeysActive) return;
-		process.stdout.write("\x1b[>4;0m");
+		writeTerminalOutput("\x1b[>4;0m");
 		this._modifyOtherKeysActive = false;
 	}
 
@@ -373,7 +438,7 @@ export class ProcessTerminal implements Terminal {
 		if (shouldDisableKittyProtocol) {
 			// Disable Kitty keyboard protocol first so any late key releases
 			// do not generate new Kitty escape sequences.
-			process.stdout.write("\x1b[<u");
+			writeTerminalOutput("\x1b[<u");
 			this.keyboardProtocolPushed = false;
 			this._kittyProtocolActive = false;
 			setKittyProtocolActive(false);
@@ -406,19 +471,21 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		// First, so a crash handler that calls stop() can print its stack even if a later step throws.
+		this.releaseOutput();
 		if (this.clearProgressInterval()) {
-			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
+			writeTerminalOutput(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
 
 		// Disable bracketed paste mode
-		process.stdout.write("\x1b[?2004l");
+		writeTerminalOutput("\x1b[?2004l");
 
 		const shouldDisableKittyProtocol = this.keyboardProtocolPushed || this._kittyProtocolActive;
 		this.clearKeyboardProtocolNegotiationBuffer();
 
 		// Disable Kitty keyboard protocol if not already done by drainInput()
 		if (shouldDisableKittyProtocol) {
-			process.stdout.write("\x1b[<u");
+			writeTerminalOutput("\x1b[<u");
 			this.keyboardProtocolPushed = false;
 			this._kittyProtocolActive = false;
 			setKittyProtocolActive(false);
@@ -454,7 +521,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	write(data: string): void {
-		process.stdout.write(data);
+		writeTerminalOutput(data);
 		if (this.writeLogPath) {
 			try {
 				fs.appendFileSync(this.writeLogPath, data, { encoding: "utf8" });
@@ -475,52 +542,52 @@ export class ProcessTerminal implements Terminal {
 	moveBy(lines: number): void {
 		if (lines > 0) {
 			// Move down
-			process.stdout.write(`\x1b[${lines}B`);
+			writeTerminalOutput(`\x1b[${lines}B`);
 		} else if (lines < 0) {
 			// Move up
-			process.stdout.write(`\x1b[${-lines}A`);
+			writeTerminalOutput(`\x1b[${-lines}A`);
 		}
 		// lines === 0: no movement
 	}
 
 	hideCursor(): void {
-		process.stdout.write("\x1b[?25l");
+		writeTerminalOutput("\x1b[?25l");
 	}
 
 	showCursor(): void {
-		process.stdout.write("\x1b[?25h");
+		writeTerminalOutput("\x1b[?25h");
 	}
 
 	clearLine(): void {
-		process.stdout.write("\x1b[K");
+		writeTerminalOutput("\x1b[K");
 	}
 
 	clearFromCursor(): void {
-		process.stdout.write("\x1b[J");
+		writeTerminalOutput("\x1b[J");
 	}
 
 	clearScreen(): void {
-		process.stdout.write("\x1b[2J\x1b[H"); // Clear screen and move to home (1,1)
+		writeTerminalOutput("\x1b[2J\x1b[H"); // Clear screen and move to home (1,1)
 	}
 
 	setTitle(title: string): void {
 		// OSC 0;title BEL - set terminal window title
-		process.stdout.write(`\x1b]0;${title}\x07`);
+		writeTerminalOutput(`\x1b]0;${title}\x07`);
 	}
 
 	setProgress(active: boolean): void {
 		if (active) {
 			// OSC 9;4;3 - indeterminate progress
-			process.stdout.write(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
+			writeTerminalOutput(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
 			if (!this.progressInterval) {
 				this.progressInterval = setInterval(() => {
-					process.stdout.write(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
+					writeTerminalOutput(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
 				}, TERMINAL_PROGRESS_KEEPALIVE_MS);
 			}
 		} else {
 			this.clearProgressInterval();
 			// OSC 9;4;0 - clear progress
-			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
+			writeTerminalOutput(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
 	}
 
