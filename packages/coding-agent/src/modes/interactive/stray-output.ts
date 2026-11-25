@@ -1,4 +1,5 @@
 import { appendDebugLog } from "../../config.ts";
+import { stripAnsi } from "../../utils/ansi.ts";
 
 /**
  * Stray-output handler for the interactive ProcessTerminal. Text that extensions or libraries write to
@@ -6,6 +7,6 @@ import { appendDebugLog } from "../../config.ts";
  * leave stale rows. Extensions that want the user to see a message use `ctx.ui.notify`.
  */
 export function logStrayOutput(text: string, stream: "stdout" | "stderr"): void {
-	const trimmed = text.trimEnd();
+	const trimmed = stripAnsi(text).trimEnd();
 	if (trimmed) appendDebugLog(`${stream}: ${trimmed}`);
 }
