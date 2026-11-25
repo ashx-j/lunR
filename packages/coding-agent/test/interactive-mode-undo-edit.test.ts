@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import {
+	handleEditCommand,
+	handleRedoCommand,
+	handleUndoCommand,
+	type SessionNavigationHost,
+} from "../src/modes/interactive/session-navigation.ts";
 
 type BranchEntry = {
 	id: string;
@@ -38,11 +44,6 @@ type UndoEditContext = {
 
 type InteractiveModePrivate = {
 	clearChatContainer(this: UndoEditContext): void;
-	handleUndoCommand(this: UndoEditContext): Promise<void>;
-	handleEditCommand(this: UndoEditContext): Promise<void>;
-	handleRedoCommand(this: UndoEditContext): Promise<void>;
-	rewindLastTurn(this: UndoEditContext, command: "undo" | "edit"): Promise<{ editorText?: string } | undefined>;
-	restoreEditorFromTreeResult(this: UndoEditContext, result: { editorText?: string; editorImages?: unknown[] }): void;
 };
 
 const proto = InteractiveMode.prototype as unknown as InteractiveModePrivate;
@@ -56,7 +57,7 @@ function userBranch(): BranchEntry[] {
 	];
 }
 
-function createContext(overrides: Partial<UndoEditContext> = {}): UndoEditContext & InteractiveModePrivate {
+function createContext(overrides: Partial<UndoEditContext> = {}): UndoEditContext & SessionNavigationHost {
 	const context: UndoEditContext = {
 		session: {
 			isStreaming: false,
@@ -80,21 +81,17 @@ function createContext(overrides: Partial<UndoEditContext> = {}): UndoEditContex
 		...overrides,
 	};
 	return Object.assign(context, {
-		rewindLastTurn: proto.rewindLastTurn,
-		handleUndoCommand: proto.handleUndoCommand,
-		handleEditCommand: proto.handleEditCommand,
-		handleRedoCommand: proto.handleRedoCommand,
 		restoreEditorFromTreeResult(result: { editorText?: string; editorImages?: unknown[] }) {
 			context.editor.setText(result.editorText ?? "");
 		},
-	});
+	}) as unknown as UndoEditContext & SessionNavigationHost;
 }
 
 describe("InteractiveMode /undo and /edit", () => {
 	it("/undo rewinds via navigateTree, does not fork, and does not fill the editor", async () => {
 		const context = createContext();
 
-		await proto.handleUndoCommand.call(context);
+		await handleUndoCommand(context);
 
 		expect(context.runtimeHost.fork).not.toHaveBeenCalled();
 		expect(context.session.navigateTree).toHaveBeenCalledWith("leaf", {});
@@ -110,7 +107,7 @@ describe("InteractiveMode /undo and /edit", () => {
 	it("/edit rewinds via navigateTree and pastes the undone user text", async () => {
 		const context = createContext();
 
-		await proto.handleEditCommand.call(context);
+		await handleEditCommand(context);
 
 		expect(context.runtimeHost.fork).not.toHaveBeenCalled();
 		expect(context.session.navigateTree).toHaveBeenCalledWith("leaf", {});
@@ -128,10 +125,10 @@ describe("InteractiveMode /undo and /edit", () => {
 			session: { isStreaming: false, navigateTree },
 		});
 
-		await proto.handleUndoCommand.call(context);
+		await handleUndoCommand(context);
 		expect(context.redoStack).toEqual(["reply"]);
 
-		await proto.handleRedoCommand.call(context);
+		await handleRedoCommand(context);
 
 		expect(navigateTree).toHaveBeenLastCalledWith("reply", {});
 		expect(context.redoStack).toEqual([]);
@@ -146,8 +143,8 @@ describe("InteractiveMode /undo and /edit", () => {
 			},
 		});
 
-		await proto.handleUndoCommand.call(context);
-		await proto.handleEditCommand.call(context);
+		await handleUndoCommand(context);
+		await handleEditCommand(context);
 
 		expect(context.session.navigateTree).not.toHaveBeenCalled();
 		expect(context.showWarning).toHaveBeenCalled();
