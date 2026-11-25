@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { gateToolCall, resetAllPermissionContexts, setPermissionMode } from "../src/core/permissions.ts";
@@ -41,7 +41,8 @@ describe("protected destinations", () => {
 					`@${target}`,
 					pathToFileURL(target).href,
 					relative(profile, target),
-					`~/${relative(homedir(), target)}`,
+					// Windows has no `~/` form for a target on another drive than the home folder.
+					...(isAbsolute(relative(homedir(), target)) ? [] : [`~/${relative(homedir(), target)}`]),
 					target.replace("agent space", "agent\u202fspace"),
 				]) {
 					expect(resolveToCwd(path, profile)).toBe(target);

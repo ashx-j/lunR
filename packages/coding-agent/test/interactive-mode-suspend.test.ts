@@ -23,7 +23,8 @@ function callHandleCtrlZ(context: HandleCtrlZThis): void {
 
 const interactiveModePrototype = InteractiveMode.prototype as unknown;
 
-describe("InteractiveMode.handleCtrlZ", () => {
+// Windows has no SIGTSTP or SIGCONT, so Ctrl+Z does not suspend there.
+describe.skipIf(process.platform === "win32")("InteractiveMode.handleCtrlZ", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});

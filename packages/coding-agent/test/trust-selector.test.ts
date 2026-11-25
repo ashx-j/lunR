@@ -5,7 +5,8 @@ import { TrustSelectorComponent } from "../src/modes/interactive/components/trus
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
-describe("TrustSelectorComponent", () => {
+// The fixtures use POSIX paths such as /project, which Windows resolves to D:\project.
+describe.skipIf(process.platform === "win32")("TrustSelectorComponent", () => {
 	beforeAll(() => {
 		initTheme("moon");
 	});

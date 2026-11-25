@@ -299,7 +299,10 @@ async function crashOwner(stage: string): Promise<number> {
 	});
 }
 
-it.each(["write", "publish"])("recovers after an owner crashes during atomic metadata %s", async (stage) => {
+// The crash fixture kills itself with SIGKILL, and Windows reports no signal for a killed process.
+const crashTest = process.platform === "win32" ? it.skip : it;
+
+crashTest.each(["write", "publish"])("recovers after an owner crashes during atomic metadata %s", async (stage) => {
 	const previousPid = await crashOwner("published");
 	const owner = join(dir, "cron", "scheduler.owner.json");
 	expect(JSON.parse(readFileSync(owner, "utf8"))).toEqual({ pid: previousPid });
@@ -331,7 +334,7 @@ it.each(["", '{"pid":', "{}", '{"pid":0}', '{"pid":-1}', '{"pid":1.5}'])(
 	},
 );
 
-it("keeps an expired ownerless lease closed until deliberate repair", async () => {
+crashTest("keeps an expired ownerless lease closed until deliberate repair", async () => {
 	await crashOwner("write");
 	expect(existsSync(join(dir, "cron", "scheduler.owner.json"))).toBe(false);
 	expiredLease();
