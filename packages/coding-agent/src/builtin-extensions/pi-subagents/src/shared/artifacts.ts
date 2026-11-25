@@ -1,27 +1,21 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { TEMP_ARTIFACTS_DIR, type ArtifactPaths } from "./types.ts";
+import { securePrivateDir } from "../../../../utils/private-dir.ts";
+import { TEMP_ARTIFACTS_DIR, TEMP_ROOT_DIR, type ArtifactPaths } from "./types.ts";
 import { getAgentDir } from "./utils.ts";
 const CLEANUP_MARKER_FILE = ".last-cleanup";
-const PROJECT_ARTIFACT_ROOT = ".pi-subagents";
-
-export function getProjectSubagentsDir(cwd: string): string {
-	return path.join(cwd, PROJECT_ARTIFACT_ROOT);
-}
-
-export function getProjectChainRunsDir(cwd: string): string {
-	return path.join(getProjectSubagentsDir(cwd), "chain-runs");
-}
+const ARTIFACTS_DIR_NAME = "subagent-artifacts";
 
 /**
- * Where a run keeps its task, output copy, transcript and metadata, and where relative `output` files
- * land (`outputs/<runId>`): next to the parent's session in the profile, or the temp dir without one.
- * Never the project, so read-only runs write nothing there. Old project `.pi-subagents/` dirs stay as they are.
+ * Where a run keeps its task, output copy, transcript and metadata, where relative `output` files land
+ * (`outputs/<runId>`) and where a sync chain works (`chain-runs/<runId>`): next to the parent's session
+ * in the profile, or the private temp tree without one. Never the project, so read-only runs write
+ * nothing there. Old project `.pi-subagents/` dirs stay as they are.
  */
 export function getArtifactsDir(sessionFile: string | null): string {
 	if (sessionFile) {
 		const sessionDir = path.dirname(sessionFile);
-		return path.join(sessionDir, "subagent-artifacts");
+		return path.join(sessionDir, ARTIFACTS_DIR_NAME);
 	}
 	return TEMP_ARTIFACTS_DIR;
 }
@@ -39,24 +33,43 @@ export function getArtifactPaths(artifactsDir: string, runId: string, agent: str
 	};
 }
 
+const securedArtifactDirs = new Set<string>();
+
+/**
+ * Creates an artifacts dir as a 0700 tree only this user can read: transcripts hold the user's code and
+ * prompts, and the temp one has a fixed name anyone could create first. Checked once per process.
+ */
 export function ensureArtifactsDir(dir: string): void {
-	fs.mkdirSync(dir, { recursive: true });
+	if (securedArtifactDirs.has(dir)) return;
+	if (dir === TEMP_ARTIFACTS_DIR) securePrivateDir(TEMP_ROOT_DIR, false);
+	else fs.mkdirSync(path.dirname(dir), { recursive: true });
+	securePrivateDir(dir);
+	securedArtifactDirs.add(dir);
+}
+
+/** True for a path inside an artifacts dir, whose files and dirs lunR creates private. */
+export function isArtifactsPath(filePath: string): boolean {
+	const resolved = path.resolve(filePath);
+	return resolved.startsWith(`${TEMP_ARTIFACTS_DIR}${path.sep}`) || resolved.split(path.sep).includes(ARTIFACTS_DIR_NAME);
 }
 
 export function writeArtifact(filePath: string, content: string): void {
-	fs.writeFileSync(filePath, content, "utf-8");
+	fs.writeFileSync(filePath, content, { encoding: "utf-8", mode: 0o600 });
 }
 
 export function writeMetadata(filePath: string, metadata: object): void {
-	fs.writeFileSync(filePath, JSON.stringify(metadata, null, 2), "utf-8");
+	fs.writeFileSync(filePath, JSON.stringify(metadata, null, 2), { encoding: "utf-8", mode: 0o600 });
 }
 
 export function appendJsonl(filePath: string, line: string): void {
-	fs.appendFileSync(filePath, `${line}\n`);
+	fs.appendFileSync(filePath, `${line}\n`, { mode: 0o600 });
 }
 
 export function cleanupOldArtifacts(dir: string, maxAgeDays: number): void {
-	if (!fs.existsSync(dir)) return;
+	// A symlink or another user's dir at this fixed name would point the deletes below elsewhere.
+	const dirStat = fs.lstatSync(dir, { throwIfNoEntry: false });
+	const uid = process.getuid?.();
+	if (!dirStat?.isDirectory() || (uid !== undefined && dirStat.uid !== uid)) return;
 
 	const markerPath = path.join(dir, CLEANUP_MARKER_FILE);
 	const now = Date.now();
@@ -83,7 +96,7 @@ export function cleanupOldArtifacts(dir: string, maxAgeDays: number): void {
 		}
 	}
 
-	fs.writeFileSync(markerPath, String(now));
+	fs.writeFileSync(markerPath, String(now), { mode: 0o600 });
 }
 
 export function cleanupAllArtifactDirs(maxAgeDays: number): void {

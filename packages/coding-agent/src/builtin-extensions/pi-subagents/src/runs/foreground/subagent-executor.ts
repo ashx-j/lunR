@@ -9,7 +9,7 @@ import { subagentCommunicationEnabled } from "../../../../../core/settings-manag
 import { removeOnExit } from "../../../../../core/temp-files.ts";
 import { getAgentDir } from "../../shared/utils.ts";
 import { allocateChildId, normalizeChildSpec } from "../../shared/child-spec.ts";
-import { getArtifactsDir, getProjectChainRunsDir } from "../../shared/artifacts.ts";
+import { ensureArtifactsDir, getArtifactsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
 import { resolveSubagentRequestParams } from "./request-params.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
@@ -1242,7 +1242,9 @@ async function resumeAsyncRun(input: {
 
 	const runId = randomUUID().slice(0, 8);
 	const artifactConfig: ArtifactConfig = recoveryDescriptor?.artifactConfig ?? { ...DEFAULT_ARTIFACT_CONFIG, enabled: input.params.artifacts !== false };
-	const artifactsDir = recoveryDescriptor?.artifactsDir ?? getArtifactsDir(parentSessionFile);
+	// The revived run writes new files, so they go to the current place even when the old run kept its
+	// artifacts in the project's `.pi-subagents/`; status still reads the old run's stored paths.
+	const artifactsDir = getArtifactsDir(parentSessionFile);
 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
 	let restoredAcceptance: ReturnType<typeof restorePersistedAcceptance> | undefined;
 	if (recoveryDescriptor?.acceptance !== undefined && input.params.acceptance === undefined) {
@@ -2257,7 +2259,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 	const chainSkills = normalized === false ? [] : (normalized ?? []);
 	const chain = wrapChainTasksForFork(params.chain as ChainStep[], contextPolicy);
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
-	// The chain writes its files under chainDir, so read-only chains keep the project's own chain-runs directory.
+	// The chain writes its files under chainDir, so read-only chains keep lunR's own run directory.
 	if (params.chainDir && snapshotParentPermissionMode(ctx.sessionManager.getSessionId() ?? undefined) === "read-only") {
 		return {
 			content: [{ type: "text", text: `Read-only mode cannot put a chain's files in ${params.chainDir}. Leave chainDir unset.` }],
@@ -2292,7 +2294,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		foregroundControl,
 		nestedRoute: foregroundControl?.nestedRoute,
 		chainSkills,
-		chainDir: params.chainDir ?? getProjectChainRunsDir(effectiveCwd),
+		chainDir: params.chainDir ?? defaultChainRunsDir(artifactsDir),
 		dynamicFanoutMaxItems: deps.config.chain?.dynamicFanout?.maxItems,
 		maxSubagentDepth: currentMaxSubagentDepth,
 		worktreeSetupHook: deps.config.worktreeSetupHook,
@@ -2478,6 +2480,12 @@ function buildParallelWorktreeTaskCwdError(
 	const conflict = findWorktreeTaskCwdConflict(tasks, sharedCwd);
 	if (!conflict) return undefined;
 	return formatWorktreeTaskCwdConflict(conflict, sharedCwd);
+}
+
+/** A sync chain without `chainDir` works in `chain-runs/` of the private artifacts dir, like the run's other files. */
+function defaultChainRunsDir(artifactsDir: string): string {
+	ensureArtifactsDir(artifactsDir);
+	return path.join(artifactsDir, "chain-runs");
 }
 
 function resolveSingleRunOutputBaseDir(deps: ExecutorDeps, artifactsDir: string, runId: string): string {
