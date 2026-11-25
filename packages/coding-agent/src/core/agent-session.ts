@@ -43,6 +43,7 @@ import type {
 } from "@earendil-works/pi-ai/compat";
 import {
 	clampThinkingLevel,
+	cleanupConversationResources,
 	cleanupSessionResources,
 	estimateContextTokens as estimateRequestContextTokens,
 	getSupportedThinkingLevels,
@@ -2348,8 +2349,11 @@ export class AgentSession {
 		this.abortRetry();
 		if (this._activePromptRun && !this.agent.signal) this._activePromptRun.gracefulStopRequested = true;
 		const bash = [...this._bashOperations.values()];
+		const running = !this.isIdle;
 		this.abortBash();
 		this.agent.abort();
+		// A Claude subscription's Claude Code process may hold a tool call of the aborted run.
+		if (running) cleanupConversationResources(this.sessionId);
 		await this.waitForIdle();
 		await Promise.all(bash);
 	}
@@ -2379,6 +2383,11 @@ export class AgentSession {
 		});
 	}
 
+	/** A Claude subscription keeps a Claude Code process holding the old model's conversation; end it with the switch. */
+	private _endModelSession(previous: Model<Api> | undefined): void {
+		if (!previous || !modelsAreEqual(previous, this.model)) cleanupConversationResources(this.sessionId);
+	}
+
 	/**
 	 * Set model directly.
 	 * Validates that auth is configured, saves to session and settings.
@@ -2393,6 +2402,7 @@ export class AgentSession {
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.state.model = model;
 		this._syncOpenAIServiceTier();
+		this._endModelSession(previousModel);
 		this._refreshSystemPromptForCurrentModel();
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
@@ -2438,6 +2448,7 @@ export class AgentSession {
 		// Apply model
 		this.agent.state.model = next.model;
 		this._syncOpenAIServiceTier();
+		this._endModelSession(currentModel);
 		this._refreshSystemPromptForCurrentModel();
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
@@ -2468,6 +2479,7 @@ export class AgentSession {
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.state.model = nextModel;
 		this._syncOpenAIServiceTier();
+		this._endModelSession(currentModel);
 		this._refreshSystemPromptForCurrentModel();
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);

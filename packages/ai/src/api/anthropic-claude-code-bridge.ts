@@ -5,6 +5,7 @@ import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
+import { registerConversationCleanup, registerSessionResourceCleanup } from "../session-resources.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { stream as streamMessages, streamSimple as streamSimpleMessages } from "./anthropic-messages.ts";
@@ -16,6 +17,7 @@ import {
 	spawnClaudeCode,
 	stopProcessTree,
 } from "./claude-code-process.ts";
+import { ClaudeCodeSession, keepsOrder, keepsToolResult, type SessionStep } from "./claude-code-session.ts";
 
 /** MCP server name prefix Claude Code puts on lunR's tools. Stripped again before lunR sees a tool call. */
 const TOOL_PREFIX = "mcp__lunr__";
@@ -46,6 +48,21 @@ const REQUEST_ENV = {
 	CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
 	CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
 	CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
+} as const;
+/**
+ * Extra switches for a process kept for a whole session. Claude Code runs lunR's tool calls through the
+ * held MCP calls, so it must neither move a slow call to the background, time it out, nor cut a large
+ * result; each would put a tool result in its history that lunR never sent. A kept process also adds
+ * notes of its own between turns ("The user hasn't heard from you in a while", turn updates), which lunR
+ * never shows. Its own effort level must match lunR's, or a replay records a per-turn effort change.
+ */
+const SESSION_ENV = {
+	CLAUDE_CODE_SILENT_TURN_REMINDER: "0",
+	CLAUDE_CODE_TURN_UPDATES: "0",
+	CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: "0",
+	CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: "86400000",
+	MCP_TOOL_TIMEOUT: "86400000",
+	MAX_MCP_OUTPUT_TOKENS: "100000000",
 } as const;
 const NOT_SIGNED_IN = "Claude Code is not signed in to a Claude subscription. Run /login anthropic.";
 /** Anthropic's error type for each HTTP status, used when rebuilding an error Claude Code reported. */
@@ -129,9 +146,9 @@ function historyFrames(messages: unknown[], model: string): Frame[] {
 	return frames;
 }
 
-/** The settings file that carries the request body override into Claude Code. */
-function settingsJson(extraBody: Record<string, unknown>): string {
-	return JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extraBody) } });
+/** The settings that carry the request body override into Claude Code. */
+function settings(extraBody: Record<string, unknown>): Record<string, unknown> {
+	return { env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extraBody) } };
 }
 
 /**
@@ -162,8 +179,9 @@ function queryFrame(history: readonly Frame[]): Frame {
 }
 
 /**
- * Validates the request lunR's Messages implementation built and maps it onto Claude Code's inputs. The
- * route is the one setup saved for the model, so Claude Code gets exactly the variant discovery chose.
+ * Validates the request lunR's Messages implementation built and maps it onto Claude Code's inputs, with
+ * the whole history as frames. The route is the one setup saved for the model, so Claude Code gets
+ * exactly the variant discovery chose.
  */
 function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredential): ClaudeCodeRequest {
 	if (!isRecord(body) || typeof body.model !== "string" || !Array.isArray(body.messages))
@@ -219,9 +237,17 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 			...(maxTokens ? { max_tokens: maxTokens } : {}),
 		},
 	};
-	const extraBody = { ...request.extraBody, messages: historyMessages(history) };
-	return Buffer.byteLength(settingsJson(extraBody)) <= SETTINGS_LIMIT
-		? { ...request, frames: [queryFrame(history)], extraBody }
+	return request;
+}
+
+/**
+ * The inputs for one Claude Code process per request: the history goes in the body when it fits the
+ * settings file, and is replayed through stdin otherwise.
+ */
+function oneShotRequest(request: ClaudeCodeRequest): ClaudeCodeRequest {
+	const extraBody = { ...request.extraBody, messages: historyMessages(request.frames) };
+	return Buffer.byteLength(JSON.stringify(settings(extraBody))) <= SETTINGS_LIMIT
+		? { ...request, frames: [queryFrame(request.frames)], extraBody }
 		: request;
 }
 
@@ -231,6 +257,21 @@ async function nextResult(events: AsyncGenerator<ClaudeCodeEvent>): Promise<Clau
 		if (next.value.type === "result") return next.value;
 	}
 	return undefined;
+}
+
+/**
+ * Like `nextResult`, but every line must pass `check`: false when one fails or the output ends first,
+ * true at the `result`.
+ */
+async function checkedTail(
+	events: AsyncGenerator<ClaudeCodeEvent>,
+	check: (event: ClaudeCodeEvent) => boolean,
+): Promise<boolean> {
+	for (let next = await events.next(); !next.done; next = await events.next()) {
+		if (!check(next.value)) return false;
+		if (next.value.type === "result") return true;
+	}
+	return false;
 }
 
 /** Reads events up to the next raw Messages stream event or `result`, or undefined when Claude Code's output ends first. */
@@ -285,6 +326,8 @@ function answerStream(
 	next: () => Promise<ClaudeCodeEvent | undefined>,
 	inventory: ReadonlySet<string>,
 	finish: (graceful?: boolean) => Promise<void>,
+	/** Sees each raw event passed on, before tool names lose their prefix. */
+	observe?: (event: Record<string, unknown>) => void,
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	let pending: ClaudeCodeEvent | undefined = first;
@@ -308,6 +351,7 @@ function answerStream(
 				}
 				if (!isRecord(event.event) || typeof event.event.type !== "string") return;
 				const data = renameToolCall(event.event, inventory);
+				observe?.(event.event);
 				controller.enqueue(encoder.encode(sseEvent(event.event.type, JSON.stringify(data))));
 				if (data.type === "message_stop") {
 					// The answer is complete; stopping now also keeps Claude Code from any further request.
@@ -333,12 +377,77 @@ function localFailure(message: string): Response {
 	});
 }
 
+/** Passes `events` through, calling `onFirst` when the first raw Messages stream event arrives. */
+async function* notifyFirstAnswer(
+	events: AsyncGenerator<ClaudeCodeEvent>,
+	onFirst: () => void,
+): AsyncGenerator<ClaudeCodeEvent> {
+	let first = true;
+	for await (const event of events) {
+		if (first && event.type === "stream_event") {
+			first = false;
+			onFirst();
+		}
+		yield event;
+	}
+}
+
+/** Arguments every lunR Claude Code process shares; its files live in `directory`. */
+function claudeCodeArgs(route: string, directory: string): string[] {
+	return [
+		"-p",
+		"--model",
+		route,
+		"--input-format",
+		"stream-json",
+		"--output-format",
+		"stream-json",
+		"--verbose",
+		// Emits each raw Messages stream event, which lunR replays as the SSE body.
+		"--include-partial-messages",
+		"--tools",
+		"",
+		"--system-prompt-file",
+		join(directory, "system.md"),
+		"--settings",
+		join(directory, "settings.json"),
+		"--setting-sources",
+		"",
+		"--strict-mcp-config",
+		"--mcp-config",
+		join(directory, "mcp.json"),
+		"--disable-slash-commands",
+		"--no-session-persistence",
+	];
+}
+
+/** Writes the files `claudeCodeArgs` names. Settings carry the body override and any hooks. */
+async function writeClaudeCodeFiles(
+	directory: string,
+	system: string,
+	settings: Record<string, unknown>,
+	mcpUrl: string,
+): Promise<void> {
+	const file = { encoding: "utf8", mode: 0o600 } as const;
+	await writeFile(join(directory, "system.md"), system, file);
+	// Settings carry the body override inside the process, avoiding per-argument size limits for large tool schemas.
+	await writeFile(join(directory, "settings.json"), JSON.stringify(settings), file);
+	// The MCP URL carries a secret path, so it goes in a file rather than on the visible command line.
+	await writeFile(
+		join(directory, "mcp.json"),
+		JSON.stringify({ mcpServers: { lunr: { type: "http", url: mcpUrl } } }),
+		file,
+	);
+}
+
 async function runClaudeCode(
 	connection: ExternalClaudeCodeCredential,
 	request: ClaudeCodeRequest,
 	signal: AbortSignal | undefined,
 	idleMs: number,
 	upstream: string | undefined,
+	/** Called once the first byte of Anthropic's answer arrives, when this process's request has left. */
+	onAnswer?: () => void,
 ): Promise<Response> {
 	if (!existsSync(connection.command))
 		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
@@ -375,18 +484,7 @@ async function runClaudeCode(
 	// An abort while lunR reads the body must still end Claude Code and close the MCP endpoint.
 	signal?.addEventListener("abort", () => void finish(), { once: true });
 	try {
-		await writeFile(join(directory, "system.md"), request.system, { encoding: "utf8", mode: 0o600 });
-		// Settings carry the body override inside the process, avoiding per-argument size limits for large tool schemas.
-		await writeFile(join(directory, "settings.json"), settingsJson(request.extraBody), {
-			encoding: "utf8",
-			mode: 0o600,
-		});
-		// The MCP URL carries a secret path, so it goes in a file rather than on the visible command line.
-		await writeFile(
-			join(directory, "mcp.json"),
-			JSON.stringify({ mcpServers: { lunr: { type: "http", url: loopback.mcpUrl } } }),
-			{ encoding: "utf8", mode: 0o600 },
-		);
+		await writeClaudeCodeFiles(directory, request.system, settings(request.extraBody), loopback.mcpUrl);
 		const env = {
 			...claudeCodeEnvironment(connection.configDir),
 			...REQUEST_ENV,
@@ -405,35 +503,7 @@ async function runClaudeCode(
 		if (signal?.aborted) throw new Error("Claude Code request cancelled");
 		const child = spawnClaudeCode(
 			connection.command,
-			[
-				"-p",
-				"--model",
-				request.route,
-				"--input-format",
-				"stream-json",
-				"--output-format",
-				"stream-json",
-				"--verbose",
-				// Emits each raw Messages stream event, which lunR replays as the SSE body.
-				"--include-partial-messages",
-				"--tools",
-				"",
-				"--system-prompt-file",
-				join(directory, "system.md"),
-				"--settings",
-				join(directory, "settings.json"),
-				"--setting-sources",
-				"",
-				"--strict-mcp-config",
-				"--mcp-config",
-				join(directory, "mcp.json"),
-				"--disable-slash-commands",
-				"--max-turns",
-				"1",
-				"--permission-mode",
-				"dontAsk",
-				"--no-session-persistence",
-			],
+			[...claudeCodeArgs(request.route, directory), "--max-turns", "1", "--permission-mode", "dontAsk"],
 			env,
 			cwd,
 		);
@@ -459,7 +529,9 @@ async function runClaudeCode(
 			}
 		};
 
-		const events = claudeCodeEvents(child.stdout);
+		const events = onAnswer
+			? notifyFirstAnswer(claudeCodeEvents(child.stdout), onAnswer)
+			: claudeCodeEvents(child.stdout);
 		for (const [index, frame] of request.frames.entries()) {
 			// Earlier user turns are appended without a generation; Claude Code acknowledges each with a zero-turn result.
 			const replay = frame.type === "user" && index < request.frames.length - 1;
@@ -495,20 +567,324 @@ async function runClaudeCode(
 	}
 }
 
+/** Live processes by lunR session id. A pending entry is a process that is still starting. */
+const sessions = new Map<string, Promise<ClaudeCodeSession | undefined>>();
+/** Every live process that has not exited, for the synchronous kill when lunR exits. */
+const running = new Set<ClaudeCodeSession>();
+/**
+ * Live processes one lunR process keeps, at about 210 MB each. The TUI uses one; a gateway, RPC or ACP host
+ * with several chats keeps the most recently used three and lets the others run one-shot.
+ */
+const MAX_SESSIONS = 3;
+
+/** Frees a slot for a new live process by stopping the least recently used idle one. False when all are busy. */
+function makeRoom(): boolean {
+	const live = [...running].filter((session) => !session.closed);
+	if (live.length < MAX_SESSIONS) return true;
+	const idle = live.filter((session) => !session.busy).sort((a, b) => a.lastUsed - b.lastUsed)[0];
+	if (!idle) return false;
+	void idle.close();
+	return true;
+}
+
+/** Stops the live process of one lunR session, or of all of them. */
+function stopSessions(sessionId?: string): void {
+	for (const [id, entry] of sessions) {
+		if (sessionId !== undefined && id !== sessionId) continue;
+		sessions.delete(id);
+		void entry.then((session) => session?.close());
+	}
+}
+registerSessionResourceCleanup(stopSessions);
+registerConversationCleanup(stopSessions);
+// SIGINT, SIGTERM and SIGHUP end lunR through process.exit. A kill -9 closes Claude Code's stdin, which ends
+// an idle process, and fails any held tool call, which the session's failure hook turns into a kill.
+process.once("exit", () => {
+	for (const session of running) session.kill();
+});
+
+const MEDIA: ReadonlySet<unknown> = new Set(["image", "document"]);
+
+/**
+ * Whether a live process could hold a different copy of this history: Claude Code may resize media it
+ * reads from stdin, reorders an assistant turn with text after a tool call (`keepsOrder`), and rewrites
+ * some tool results (`keepsToolResult`). Such a history runs one-shot, where the body carries it
+ * unchanged, until it no longer holds such a turn (after compaction, for example).
+ */
+function changedByClaudeCode(frames: readonly Frame[]): boolean {
+	return frames.some(({ type, message: { content } }) =>
+		type === "assistant"
+			? !keepsOrder(content)
+			: content.some(
+					(block) =>
+						MEDIA.has(block.type) ||
+						(Array.isArray(block.content) &&
+							block.content.some((item) => isRecord(item) && MEDIA.has(item.type))) ||
+						(block.type === "tool_result" && !keepsToolResult(block)),
+				),
+	);
+}
+
+/** Everything a live process fixes when it starts. A request with another key needs another process. */
+function sessionKey(
+	connection: ExternalClaudeCodeCredential,
+	request: ClaudeCodeRequest,
+	upstream: string | undefined,
+): string {
+	const { route, system, extraBody, maxTokens } = request;
+	return JSON.stringify([
+		connection.command,
+		connection.configDir,
+		route,
+		system,
+		extraBody,
+		maxTokens,
+		process.cwd(),
+		upstream,
+	]);
+}
+
+/**
+ * Starts the Claude Code process for one lunR session. lunR's history goes in through stdin frames, not
+ * the body, so later requests can add to it. It runs in lunR's directory because Claude Code's environment
+ * note names that directory.
+ */
+async function startSession(
+	connection: ExternalClaudeCodeCredential,
+	request: ClaudeCodeRequest,
+	key: string,
+	upstream: string | undefined,
+): Promise<ClaudeCodeSession> {
+	if (!existsSync(connection.command))
+		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
+	let session: ClaudeCodeSession | undefined;
+	const loopback = await ClaudeCodeLoopback.open(request.tools, (id) =>
+		session ? session.toolCall(id) : Promise.reject(new Error("Claude Code session is not ready")),
+	);
+	const directory = await mkdtemp(join(tmpdir(), "lunr-claude-code-")).catch((error: unknown) => {
+		loopback.close();
+		throw error;
+	});
+	const cleanup = async () => {
+		loopback.close();
+		await rm(directory, { recursive: true, force: true }).catch(() => {});
+	};
+	try {
+		// A failed tool call means lunR's MCP endpoint went away. If lunR itself is gone, Claude Code would
+		// answer the failure with another model request; the hook kills it first. Hooks run in their own
+		// process group with Claude Code as parent, the leader of its group.
+		const hook = { type: "command", command: `kill -0 ${process.pid} 2>/dev/null || kill -KILL -$PPID` };
+		await writeClaudeCodeFiles(
+			directory,
+			request.system,
+			{
+				...settings(request.extraBody),
+				// Idle compaction would rewrite Claude Code's copy while lunR waits; a remote flag gates it today.
+				idleCompaction: false,
+				hooks: { PostToolUseFailure: [{ matcher: `${TOOL_PREFIX}.*`, hooks: [hook] }] },
+			},
+			loopback.mcpUrl,
+		);
+		const output = request.extraBody.output_config;
+		const effort = isRecord(output) && typeof output.effort === "string" ? output.effort : undefined;
+		const env = {
+			...claudeCodeEnvironment(connection.configDir),
+			...REQUEST_ENV,
+			...SESSION_ENV,
+			...(effort ? { CLAUDE_CODE_EFFORT_LEVEL: effort } : {}),
+			// Unset outside tests, so Claude Code sends its request to Anthropic directly.
+			...(upstream ? { ANTHROPIC_BASE_URL: upstream } : {}),
+			...(request.maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(request.maxTokens) } : {}),
+		};
+		const child = spawnClaudeCode(
+			connection.command,
+			[...claudeCodeArgs(request.route, directory), "--permission-mode", "dontAsk", "--allowedTools", "mcp__lunr"],
+			env,
+			process.cwd(),
+		);
+		const started = new ClaudeCodeSession(key, child, cleanup);
+		session = started;
+		running.add(started);
+		child.once("close", () => running.delete(started));
+		child.once("error", () => void started.close());
+		return started;
+	} catch (error) {
+		await cleanup();
+		throw error;
+	}
+}
+
+/**
+ * Reads to the next answer event or `result`. A line `verify` refuses marks the session drifted: before
+ * the answer the caller discards the step, during it the process stops once the answer is complete.
+ */
+async function nextSessionEvent(session: ClaudeCodeSession, step: SessionStep): Promise<ClaudeCodeEvent | undefined> {
+	for (let next = await session.events.next(); !next.done; next = await session.events.next()) {
+		const event = next.value;
+		if (!session.verify(event, step)) session.drifted = true;
+		if (event.type === "result" || (event.type === "stream_event" && isRecord(event.event))) return event;
+	}
+	return undefined;
+}
+
+/**
+ * Runs one request on a live process; `step` says what the process still needs from `request`. Undefined
+ * when the process ended the step without asking Anthropic, for example when Claude Code's own context
+ * limit refuses the request or its copy drifted; the caller then sends the request one-shot.
+ */
+async function runSessionStep(
+	session: ClaudeCodeSession,
+	step: SessionStep,
+	request: ClaudeCodeRequest,
+	signal: AbortSignal | undefined,
+	idleMs: number,
+): Promise<Response | undefined> {
+	session.begin(step, request.frames);
+	let complete = false;
+	// A user abort ends the process: Claude Code's copy would hold a turn lunR does not keep.
+	signal?.addEventListener("abort", () => void session.close(), { once: true });
+	const within = async <T>(promise: Promise<T>, message: string): Promise<T> => {
+		let timer: NodeJS.Timeout | undefined;
+		const timeout = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => reject(new Error(message)), idleMs);
+		});
+		try {
+			return await Promise.race([promise, timeout]);
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+	try {
+		if (signal?.aborted) throw new Error("Claude Code request cancelled");
+		if (step.kind === "replay") {
+			for (const [index, frame] of step.frames.entries()) {
+				const user = frame.type === "user";
+				const replay = user && index < step.frames.length - 1;
+				// Every user turn is client_composed so Claude Code adds no turn-start context to it.
+				session.write({
+					...frame,
+					...(user ? { client_composed: true } : {}),
+					...(replay ? { shouldQuery: false } : {}),
+				});
+				if (!replay) continue;
+				const ack = await within(nextResult(session.events), "Claude Code history replay timed out.");
+				if (!ack || ack.num_turns !== 0 || ack.is_error) throw new Error("Claude Code rejected the history replay");
+			}
+		} else if (step.kind === "query") {
+			// The finished turn's tail, up to its own result line, is still unread and gets the same check.
+			const tail = checkedTail(session.events, (event) => session.verify(event, step));
+			if (!(await within(tail, "Claude Code request timed out."))) {
+				session.finish(false);
+				return undefined;
+			}
+			session.write({ ...step.frame, client_composed: true });
+		}
+		const first = await within(nextSessionEvent(session, step), "Claude Code request timed out.");
+		if (signal?.aborted) throw new Error("Claude Code request cancelled");
+		// The request Claude Code sent may already carry its changed copy; its answer is not used.
+		if (session.drifted) {
+			session.finish(false);
+			return undefined;
+		}
+		if (first?.type !== "stream_event") {
+			session.finish(false);
+			const error = first && apiError(first);
+			if (!error && first?.terminal_reason === "api_error")
+				throw new Error(
+					`Claude Code network error: ${typeof first.result === "string" ? first.result : "no answer"}`,
+				);
+			if (error)
+				return new Response(error.body, { status: error.status, headers: { "content-type": "application/json" } });
+			if (!first) throw new Error(stoppedBeforeRequest(first));
+			// A result with no request behind it: near its own context limit Claude Code refuses to send.
+			return undefined;
+		}
+		const inventory = new Set(request.tools.map((tool) => tool.name));
+		const next = () => within(nextSessionEvent(session, step), "Claude Code request timed out.");
+		const observe = (event: Record<string, unknown>) => {
+			session.observe(event);
+			if (event.type === "message_stop") complete = true;
+		};
+		const finish = async () => session.finish(complete && !signal?.aborted);
+		return new Response(answerStream(first, next, inventory, finish, observe), {
+			status: 200,
+			headers: { "content-type": "text/event-stream" },
+		});
+	} catch (error) {
+		session.finish(false);
+		throw error;
+	}
+}
+
+/**
+ * Sends a request of one lunR session to that session's live Claude Code process when the request
+ * continues exactly what the process holds, and restarts the process otherwise. The first request of a
+ * session runs one-shot and starts the live process for the next one. A request runs one-shot too when its
+ * history is one Claude Code would change, when the live process is busy with another request, when every
+ * live slot is busy, and when the live process ends a step without asking Anthropic.
+ */
+async function sessionFetch(
+	connection: ExternalClaudeCodeCredential,
+	request: ClaudeCodeRequest,
+	sessionId: string,
+	signal: AbortSignal | undefined,
+	idleMs: number,
+	upstream: string | undefined,
+): Promise<Response> {
+	const oneShot = (onAnswer?: () => void) =>
+		runClaudeCode(connection, oneShotRequest(request), signal, idleMs, upstream, onAnswer);
+	if (changedByClaudeCode(request.frames)) {
+		stopSessions(sessionId);
+		return oneShot();
+	}
+	const key = sessionKey(connection, request, upstream);
+	const entry = sessions.get(sessionId);
+	const current = await entry;
+	// Another request of this session changed the entry while this one waited; leave the process to it.
+	if (sessions.get(sessionId) !== entry || current?.busy) return oneShot();
+	const step = current?.plan(key, request.frames);
+	if (current && step) return (await runSessionStep(current, step, request, signal, idleMs)) ?? oneShot();
+	void current?.close();
+	sessions.delete(sessionId);
+	const start = () => {
+		if (sessions.has(sessionId) || !makeRoom()) return undefined;
+		const starting = startSession(connection, request, key, upstream);
+		sessions.set(
+			sessionId,
+			starting.catch(() => undefined),
+		);
+		return starting;
+	};
+	if (request.frames.length === 1) {
+		// Claude Code starts faster in the empty directory a one-shot process uses. The live process starts
+		// once Anthropic's first byte arrives, after this request has left, and is ready by the next request.
+		return oneShot(() => void start()?.catch(() => {}));
+	}
+	const started = await start()?.catch(() => undefined);
+	const fresh = started?.plan(key, request.frames);
+	if (!started || !fresh) return oneShot();
+	return (await runSessionStep(started, fresh, request, signal, idleMs)) ?? oneShot();
+}
+
 /**
  * `fetch` for the Anthropic SDK that sends each Messages request through lunR's pinned Claude Code
- * instead of HTTPS. Exported for tests, which point `upstream` at a loopback fixture.
+ * instead of HTTPS. With a session id (POSIX only) requests of that session share one live process.
+ * Exported for tests, which point `upstream` at a loopback fixture.
  */
 export function claudeCodeFetch(
 	connection: ExternalClaudeCodeCredential,
 	idleMs: number,
 	upstream?: string,
+	sessionId?: string,
 ): (input: string | URL | Request, init?: RequestInit) => Promise<Response> {
 	return async (_input, init) => {
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			return await runClaudeCode(connection, claudeCodeRequest(body, connection), signal, idleMs, upstream);
+			const request = claudeCodeRequest(body, connection);
+			if (sessionId && process.platform !== "win32")
+				return await sessionFetch(connection, request, sessionId, signal, idleMs, upstream);
+			return await runClaudeCode(connection, oneShotRequest(request), signal, idleMs, upstream);
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));
@@ -579,7 +955,7 @@ export function streamClaudeCode(
 		// Never sent anywhere: the fetch override replaces HTTP, and Claude Code supplies its own sign-in.
 		apiKey: "claude-code-subscription",
 		maxRetries: 0,
-		fetch: claudeCodeFetch(connection, idleMs, upstream),
+		fetch: claudeCodeFetch(connection, idleMs, upstream, options.sessionId),
 	});
 	const transportModel: Model<"anthropic-messages"> = {
 		...model,

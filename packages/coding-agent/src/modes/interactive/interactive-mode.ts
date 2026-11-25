@@ -16,6 +16,7 @@ import {
 	type ImageContent,
 	type Message,
 	type Model,
+	setInteractiveHost,
 } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
@@ -1040,6 +1041,8 @@ export class InteractiveMode {
 	 * Initializes the UI, shows warnings, processes initial messages, and starts the interactive loop.
 	 */
 	async run(): Promise<void> {
+		// Idle Claude subscription processes live longer here, where a person returns to the session.
+		setInteractiveHost(true);
 		if (!this.isInitialized) {
 			await this.init();
 		}
