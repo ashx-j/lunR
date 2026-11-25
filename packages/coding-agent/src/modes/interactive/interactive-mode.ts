@@ -540,6 +540,8 @@ export class InteractiveMode {
 
 	// Header container that holds the built-in or custom header
 	private headerContainer: Container;
+	// Startup warnings that finish after the first frame join the startup output here (see showStartupNotice).
+	private readonly startupNotices = new Container();
 
 	// Built-in header (logo + keybinding hints)
 	private builtInHeader: Component | undefined = undefined;
@@ -932,6 +934,7 @@ export class InteractiveMode {
 			else this.showStatus(diagnostic.message);
 		}
 		for (const warning of this.options.deprecationWarnings ?? []) this.showWarning(warning);
+		this.chatContainer.addChild(this.startupNotices);
 		this.deferredBuiltinAttachPromise = this.attachDeferredBuiltinExtensions();
 		this.startupReadyPromise = this.deferredBuiltinAttachPromise.then(() => {
 			if (!this.isInitialized) return;
@@ -1064,7 +1067,7 @@ export class InteractiveMode {
 		// Check tmux keyboard setup asynchronously
 		this.checkTmuxKeyboardSetup().then((warning) => {
 			if (warning) {
-				this.showWarning(warning);
+				this.showStartupNotice("warning", warning);
 			}
 		});
 
@@ -1072,16 +1075,16 @@ export class InteractiveMode {
 		const { migratedProviders, modelFallbackMessage, initialMessage, initialImages, initialMessages } = this.options;
 
 		if (migratedProviders && migratedProviders.length > 0) {
-			this.showWarning(`Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
+			this.showStartupNotice("warning", `Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
 		}
 
 		const modelsJsonError = this.session.modelRuntime.getError();
 		if (modelsJsonError) {
-			this.showError(`models.json error: ${modelsJsonError}`);
+			this.showStartupNotice("error", `models.json error: ${modelsJsonError}`);
 		}
 
 		void this.showModelSetupGuidance(modelFallbackMessage).catch((error: unknown) =>
-			this.showError(error instanceof Error ? error.message : String(error)),
+			this.showStartupNotice("error", error instanceof Error ? error.message : String(error)),
 		);
 
 		void this.maybeWarnAboutAnthropicSubscriptionAuth();
@@ -1136,7 +1139,7 @@ export class InteractiveMode {
 	private async showModelSetupGuidance(modelFallbackMessage: string | undefined): Promise<void> {
 		const credentials = await this.session.modelRuntime.listCredentials();
 		if (!shouldShowOnboarding(credentials, this.session.model)) {
-			if (modelFallbackMessage) this.showWarning(modelFallbackMessage);
+			if (modelFallbackMessage) this.showStartupNotice("warning", modelFallbackMessage);
 			else await this.warnIfModelHasNoAuth();
 			return;
 		}
@@ -1154,7 +1157,8 @@ export class InteractiveMode {
 		if (!model || isUnknownModel(model)) return;
 		const runtime = this.session.modelRuntime;
 		if (runtime.hasConfiguredAuth(model.provider) || (await runtime.checkAuth(model.provider))) return;
-		this.showWarning(
+		this.showStartupNotice(
+			"warning",
 			`${model.provider} has no API key or login. Run /login ${model.provider}, or /model to pick another model.`,
 		);
 	}
@@ -4085,6 +4089,22 @@ export class InteractiveMode {
 
 	showWarning(warningMessage: string): void {
 		this.showNotice("warning", `Warning: ${warningMessage}`);
+	}
+
+	/**
+	 * Shows a startup check's result at the end of the startup output, above the first prompt, so a
+	 * check that finishes late (the tmux probe, auth lookups) never lands between messages and tool
+	 * cards. After /new, /resume or /tree cleared the chat it falls back to a normal notice.
+	 */
+	private showStartupNotice(kind: "error" | "warning", message: string): void {
+		const notice = `${kind === "error" ? "Error" : "Warning"}: ${message}`;
+		if (!this.chatContainer.children.includes(this.startupNotices)) {
+			this.showNotice(kind, notice);
+			return;
+		}
+		this.startupNotices.addChild(new Spacer(1));
+		this.startupNotices.addChild(new Text(theme.fg(kind, notice), 1, 0));
+		this.ui.requestRender();
 	}
 
 	// An error or warning identical to the chat's last entry bumps a " (×N)" count on that entry
