@@ -110,6 +110,8 @@ describe("lunr doctor", () => {
 			status: "ok",
 			note: "Claude Code signs in to your Claude account. Check that account for usage and any extra charges.",
 		});
+	});
+
 	it("tells a checkout behind npm from an install behind npm", () => {
 		expect(checkVersion("0.2.39", "0.2.40", false, "@ashx-j/lunr")).toMatchObject({
 			status: "warn",
