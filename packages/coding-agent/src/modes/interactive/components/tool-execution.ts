@@ -51,6 +51,9 @@ export class ToolExecutionComponent extends Container {
 	private groupContinuation = false;
 	private groupFollowed = false;
 	private groupNext?: ToolExecutionComponent;
+	// Same-tool run across adjacent turns (applyToolRunSpacing): padding only, no tree.
+	private runContinuation = false;
+	private runFollowed = false;
 
 	constructor(
 		toolName: string,
@@ -309,14 +312,36 @@ export class ToolExecutionComponent extends Container {
 		this.invalidate();
 	}
 
+	/** True for a finished, collapsed default-shell card, which renders as its header alone. */
+	isHeaderOnly(): boolean {
+		return this.getRenderShell() === "default" && this.shouldSkipCompactResult();
+	}
+
+	isDefaultShell(): boolean {
+		return this.getRenderShell() === "default";
+	}
+
+	setRunContinuation(): void {
+		this.runContinuation = true;
+		this.topSpacer.setLines(0);
+		this.applyGroupPadding();
+		this.invalidate();
+	}
+
+	setRunFollowed(): void {
+		this.runFollowed = true;
+		this.applyGroupPadding();
+		this.invalidate();
+	}
+
 	// lunr: same-name run link keeps the final card refreshed as earlier calls settle.
 	linkGroupNext(next: ToolExecutionComponent): void {
 		this.groupNext = next;
 	}
 
 	private applyGroupPadding(): void {
-		const top = this.groupContinuation ? 0 : 1;
-		const bottom = this.groupFollowed ? 0 : 1;
+		const top = this.groupContinuation || this.runContinuation ? 0 : 1;
+		const bottom = this.groupFollowed || this.runFollowed ? 0 : 1;
 		this.contentBox.setPaddingTop(top);
 		this.contentBox.setPaddingBottom(bottom);
 		this.contentText.setPaddingTop(top);
@@ -550,6 +575,17 @@ export class ToolExecutionComponent extends Container {
 		}
 		return text;
 	}
+}
+
+/**
+ * Collapses the spacer and facing pads when `next` follows a header-only card for the same tool from
+ * an earlier turn, so a run of one-line calls reads as a list. Unlike applySameToolGrouping it changes
+ * spacing only: each card keeps its own dot and header.
+ */
+export function applyToolRunSpacing(previous: ToolExecutionComponent, next: ToolExecutionComponent): void {
+	if (previous.getToolName() !== next.getToolName() || !previous.isHeaderOnly() || !next.isDefaultShell()) return;
+	previous.setRunFollowed();
+	next.setRunContinuation();
 }
 
 /** Collapse facing pad when `next` is appended after a same-name tool card. */
