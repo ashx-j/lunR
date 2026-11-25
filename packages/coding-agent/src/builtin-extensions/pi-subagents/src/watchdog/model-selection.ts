@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { normalizeModelSegment, resolveModelCandidate } from "../runs/shared/model-fallback.ts";
 import {
@@ -133,7 +132,7 @@ function findFamilyMatch(family: StrongWatchdogFamily, availableModels: ModelInf
 function resolveStrongCandidate(ctx: ExtensionContext, family: StrongWatchdogFamily): WatchdogModelRecommendation | undefined {
 	const availableModels = modelRegistryEntries(ctx);
 	const preference = STRONG_WATCHDOG_MODELS[family];
-	const queries = [...preference.queries];
+	const queries: string[] = [...preference.queries];
 	const familyMatch = findFamilyMatch(family, availableModels);
 	if (familyMatch) queries.push(familyMatch);
 	for (const query of queries) {
