@@ -4,6 +4,7 @@ import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { getBuiltinToolRenderer } from "../tool-renderers/index.ts";
 import {
+	appendToFirstLine,
 	formatGroupedCall,
 	GroupedCallText,
 	getTextOutput as getRenderedTextOutput,
@@ -458,7 +459,6 @@ export class ToolExecutionComponent extends Container {
 			} else {
 				try {
 					const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
-					if (component instanceof GroupedCallText) component.setNote(this.rejectedNote());
 					this.callRendererComponent = component;
 					renderContainer.addChild(component);
 					hasContent = true;
@@ -505,9 +505,19 @@ export class ToolExecutionComponent extends Container {
 					}
 				}
 			}
+
+			// Last, because a renderer may rebuild its header while rendering the result (edit does).
+			const note = this.rejectedNote();
+			const header = this.callRendererComponent ? findCallHeader(this.callRendererComponent) : undefined;
+			header?.setNote(note);
+			// A custom renderer without a built-in header gets the note as its own line.
+			if (note && this.callRendererComponent && !header) renderContainer.addChild(new Text(note, 0, 0));
 		} else {
 			this.contentText.setCustomBgFn(bgFn);
-			this.contentText.setText(this.formatToolExecution());
+			const note = this.rejectedNote();
+			this.contentText.setText(
+				note ? appendToFirstLine(this.formatToolExecution(), note) : this.formatToolExecution(),
+			);
 			hasContent = true;
 		}
 
@@ -580,6 +590,18 @@ export class ToolExecutionComponent extends Container {
 		}
 		return text;
 	}
+}
+
+/** The first GroupedCallText in a call renderer's component tree; every built-in header is one. */
+function findCallHeader(component: Component): GroupedCallText | undefined {
+	if (component instanceof GroupedCallText) return component;
+	if (component instanceof Container || component instanceof Box) {
+		for (const child of component.children) {
+			const header = findCallHeader(child);
+			if (header) return header;
+		}
+	}
+	return undefined;
 }
 
 /** Collapse facing pad when `next` is appended after a same-name tool card. */

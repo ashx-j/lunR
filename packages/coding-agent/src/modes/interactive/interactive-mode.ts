@@ -3043,7 +3043,7 @@ export class InteractiveMode {
 					component.beginNextExecution(event.toolCallId, event.args);
 				}
 				component.markExecutionStarted();
-				// The agent loop runs a call's approval right after its start event, before any other call.
+				// The agent loop asks for a call's approval right after its start event.
 				this.lastStartedTool = component;
 				this.ui.requestRender();
 				break;

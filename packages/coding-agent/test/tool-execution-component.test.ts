@@ -1551,14 +1551,33 @@ describe("ToolExecutionComponent ask-mode approval", () => {
 		expect(stripAnsi(component.render(80).join("\n"))).toContain("$ touch a.txt — Took 0.2s");
 	});
 
-	test("a rejected call says so on its header", () => {
-		const component = askedBash("touch b.txt");
+	test.each([
+		["bash", { command: "touch b.txt" }, createBashToolDefinition(process.cwd()), "$ touch b.txt — rejected"],
+		[
+			"edit",
+			{ path: "f.txt", edits: [{ oldText: "a", newText: "b" }] },
+			createEditToolDefinition(process.cwd()),
+			"edit f.txt — rejected",
+		],
+		["write", { path: "w.txt", content: "hi\n" }, createWriteToolDefinition(process.cwd()), "write w.txt — rejected"],
+	])("a rejected %s call says so on its header", (toolName, args, definition, header) => {
+		const component = new ToolExecutionComponent(
+			toolName,
+			"call-1",
+			args,
+			{},
+			definition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.beginApproval();
 		component.endApproval(false);
 		component.updateResult(
 			{ content: [{ type: "text", text: "The user rejected this call." }], details: undefined, isError: true },
 			false,
 		);
 
-		expect(stripAnsi(component.render(80).join("\n"))).toContain("$ touch b.txt — rejected");
+		expect(stripAnsi(component.render(80).join("\n"))).toContain(header);
 	});
 });
