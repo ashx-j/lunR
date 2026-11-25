@@ -5,6 +5,7 @@ import type { OutputMode, SavedOutputReference } from "../../shared/types.ts";
 import { protectedTargetWriteReason } from "../../../../../core/protected-targets.ts";
 import { hasMutationToolCapability } from "./completion-guard.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
+import { mkdirParentsSync } from "../../../../../utils/mkdir.ts";
 import { canonicalizeTargetPath } from "../../../../../utils/paths.ts";
 
 export interface SingleOutputSnapshot {
@@ -201,7 +202,7 @@ function persistSingleOutput(
 	const blocked = outputTargetError(outputPath, cwd);
 	if (blocked) return { error: blocked };
 	try {
-		fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+		mkdirParentsSync(path.dirname(outputPath));
 		fs.writeFileSync(outputPath, fullOutput, "utf-8");
 		return { savedPath: outputPath };
 	} catch (err) {
