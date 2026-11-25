@@ -41,6 +41,14 @@ export interface PermissionControllerHost {
 	sendUserMessageAfterDeferredBuiltins(text: string): Promise<void>;
 }
 
+/** The bare `/mode` selector's rows. A `Record`, so a new mode without a row fails the type check. */
+const MODE_SELECTOR_ROWS: Record<PermissionMode, string> = {
+	yolo: "YOLO — auto-approve tools, agent may still ask",
+	auto: "Auto — a review model checks risky actions",
+	ask: "Ask — you approve each change before it runs",
+	"read-only": "Read — inspect without making changes",
+};
+
 export class PermissionModeController {
 	private readonly host: PermissionControllerHost;
 
@@ -128,18 +136,10 @@ export class PermissionModeController {
 			return;
 		}
 
-		const options = [
-			"YOLO — auto-approve tools, agent may still ask",
-			"Auto — a review model checks risky actions",
-			"Ask — you approve each change before it runs",
-			"Read — inspect without making changes",
-		];
+		const options = PERMISSION_MODES.map((mode) => MODE_SELECTOR_ROWS[mode]);
 		void this.host.showExtensionSelector("Permission mode", options).then((choice) => {
-			if (!choice) return;
-			if (choice.startsWith("YOLO")) this.applyPermissionMode("yolo");
-			else if (choice.startsWith("Auto")) this.applyPermissionMode("auto");
-			else if (choice.startsWith("Ask")) this.applyPermissionMode("ask");
-			else if (choice.startsWith("Read")) this.applyPermissionMode("read-only");
+			const mode = choice === undefined ? undefined : PERMISSION_MODES[options.indexOf(choice)];
+			if (mode) this.applyPermissionMode(mode);
 		});
 	}
 

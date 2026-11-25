@@ -7,7 +7,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
 import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, enqueueStepSteer, steerAcksDir, steerCapabilityPath, stepSteerInboxDir, watchAsyncControlInbox, type SteerAck, type SteerCapability, type SteerRequest } from "./control-channel.ts";
-import { appendJsonl as appendRawJsonl, getArtifactPaths } from "../../shared/artifacts.ts";
+import { appendJsonl as appendRawJsonl, ensureArtifactsDir, getArtifactPaths, writeArtifact } from "../../shared/artifacts.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, injectSingleOutputInstruction, resolveSingleOutput, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
@@ -1032,9 +1032,9 @@ export async function runSingleStep(
 	if (ctx.artifactsDir && ctx.artifactConfig?.enabled !== false) {
 		const index = ctx.flatStepCount > 1 ? ctx.flatIndex : undefined;
 		artifactPaths = getArtifactPaths(ctx.artifactsDir, ctx.id, step.agent, index);
-		fs.mkdirSync(ctx.artifactsDir, { recursive: true });
+		ensureArtifactsDir(ctx.artifactsDir);
 		if (ctx.artifactConfig?.includeInput !== false) {
-			fs.writeFileSync(artifactPaths.inputPath, `# Task for ${step.agent}\n\n${task}`, "utf-8");
+			writeArtifact(artifactPaths.inputPath, `# Task for ${step.agent}\n\n${task}`);
 		}
 		if (ctx.artifactConfig?.includeTranscript !== false) {
 			transcriptWriter = createChildTranscriptWriter({
@@ -1320,7 +1320,7 @@ export async function runSingleStep(
 
 	if (artifactPaths && ctx.artifactConfig?.enabled !== false) {
 		if (ctx.artifactConfig?.includeOutput !== false) {
-			fs.writeFileSync(artifactPaths.outputPath, output, "utf-8");
+			writeArtifact(artifactPaths.outputPath, output);
 		}
 		if (ctx.artifactConfig?.includeMetadata !== false) {
 			fs.writeFileSync(
@@ -1340,7 +1340,7 @@ export async function runSingleStep(
 					skills: step.skills,
 					timestamp: Date.now(),
 				}, null, 2),
-				"utf-8",
+				{ encoding: "utf-8", mode: 0o600 },
 			);
 		}
 	}

@@ -11,14 +11,15 @@ const removeAtExit = new Set<string>();
 let exitHookArmed = false;
 
 /**
- * Removes `path` when this process exits. Bash overflow logs use this because the model is told their
- * path and may read them later in the session, so they cannot go when the command ends.
+ * Removes `path` (a file or a directory tree) when this process exits. Bash overflow logs use this because
+ * the model is told their path and may read them later in the session, so they cannot go when the command
+ * ends. Foreground subagent session dirs without a parent session use it for the same reason.
  */
 export function removeOnExit(path: string): void {
 	if (!exitHookArmed) {
 		exitHookArmed = true;
 		process.on("exit", () => {
-			for (const item of removeAtExit) rmSync(item, { force: true });
+			for (const item of removeAtExit) rmSync(item, { recursive: true, force: true });
 		});
 	}
 	removeAtExit.add(path);
