@@ -1002,17 +1002,6 @@ export async function main(args: string[], options?: MainOptions) {
 		stdinContent,
 	);
 	time("prepareInitialMessage");
-	// Print and json mode run the given prompts and exit, so with none they would do nothing.
-	if (
-		(appMode === "print" || appMode === "json") &&
-		initialMessage === undefined &&
-		initialImages === undefined &&
-		parsed.messages.length === 0
-	) {
-		console.error(chalk.red("Error: print mode needs a prompt."));
-		console.error(`Usage: ${APP_NAME} -p "<prompt>"  or  <command> | ${APP_NAME} -p`);
-		process.exit(1);
-	}
 	initTheme(settingsManager.getTheme(), appMode === "interactive");
 	time("initTheme");
 
@@ -1039,6 +1028,19 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 	time("createAgentSession");
+	// Print and json mode run the given prompts and exit, so with none they would do nothing.
+	// This runs after the diagnostics: an unknown flag takes the next word as its value, and
+	// only the loaded extensions can tell that flag apart from one of theirs.
+	if (
+		(appMode === "print" || appMode === "json") &&
+		initialMessage === undefined &&
+		initialImages === undefined &&
+		parsed.messages.length === 0
+	) {
+		console.error(chalk.red("Error: print mode needs a prompt."));
+		console.error(`Usage: ${APP_NAME} -p "<prompt>"  or  <command> | ${APP_NAME} -p`);
+		process.exit(1);
+	}
 
 	// Non-interactive modes have no /login, so these messages use print wording. In print and
 	// json mode a provider that is named (selected model or saved default) but has no key gets

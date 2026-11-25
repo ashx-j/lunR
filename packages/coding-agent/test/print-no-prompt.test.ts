@@ -51,4 +51,11 @@ describe("print mode without a prompt", () => {
 		expect(result.stderr).toContain("print mode needs a prompt");
 		expect(result.stderr).toContain("Usage:");
 	}, 30_000);
+
+	it("reports an unknown flag that took the prompt as its value", async () => {
+		const result = await runCli(["-p", "--no-session", "--no-extensions", "--no-such-flag", "hi"]);
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("Unknown option: --no-such-flag");
+		expect(result.stderr).not.toContain("needs a prompt");
+	}, 30_000);
 });
