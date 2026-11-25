@@ -18,6 +18,7 @@ import {
 import { getCustomizeBridge } from "../../../core/customize.ts";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
+import { PERMISSION_MODES, permissionModeLabel } from "../../../core/permissions.ts";
 import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "../../../core/pr-watch/types.ts";
 import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
 import {
@@ -1614,7 +1615,7 @@ export class SettingsSelectorComponent extends Container {
 				label: "Default permission mode",
 				description: "Starting permission mode for new sessions",
 				currentValue: config.defaultPermissionMode === "read-only" ? "read" : config.defaultPermissionMode,
-				values: ["yolo", "auto", "ask", "read"],
+				values: PERMISSION_MODES.map(permissionModeLabel),
 			},
 			{
 				id: "thinking",
