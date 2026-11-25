@@ -152,24 +152,49 @@ interface GroupedCallOptions {
 	detail?: string;
 }
 
+/** `text` with ` ${suffix}` at the end of its first line. */
+export function appendToFirstLine(text: string, suffix: string): string {
+	const lineEnd = text.indexOf("\n");
+	return lineEnd === -1 ? `${text} ${suffix}` : `${text.slice(0, lineEnd)} ${suffix}${text.slice(lineEnd)}`;
+}
+
 export class GroupedCallText extends Text {
 	private call?: GroupedCallOptions;
+	// Text set directly instead of through setCall (write's expanded and failed header).
+	private plainText?: string;
 	private formattedWidth?: number;
+	private note?: string;
 
 	setCall(call: GroupedCallOptions): void {
-		this.setText(formatGroupedCall(call));
 		this.call = call;
+		this.plainText = undefined;
+		this.formattedWidth = undefined;
+		super.setText(formatGroupedCall(this.withNote(call)));
+	}
+
+	/** Styled text after the header that names a state the dot shows only by color ("— rejected"). */
+	setNote(note: string | undefined): void {
+		if (note === this.note) return;
+		this.note = note;
+		if (this.call) this.setCall(this.call);
+		else if (this.plainText !== undefined) this.setText(this.plainText);
+	}
+
+	private withNote(call: GroupedCallOptions): GroupedCallOptions {
+		if (!this.note) return call;
+		return { ...call, detail: call.detail?.trim() ? `${call.detail} ${this.note}` : this.note };
 	}
 
 	override setText(text: string): void {
 		this.call = undefined;
+		this.plainText = text;
 		this.formattedWidth = undefined;
-		super.setText(text);
+		super.setText(this.note ? appendToFirstLine(text, this.note) : text);
 	}
 
 	override render(width: number): string[] {
 		if (this.call && this.formattedWidth !== width) {
-			super.setText(formatGroupedCall(this.call, width));
+			super.setText(formatGroupedCall(this.withNote(this.call), width));
 			this.formattedWidth = width;
 		}
 		return super.render(width);

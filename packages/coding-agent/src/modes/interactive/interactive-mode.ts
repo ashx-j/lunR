@@ -470,6 +470,8 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	// The card whose tool_execution_start came last; ask mode's approval dialog belongs to it.
+	private lastStartedTool: ToolExecutionComponent | undefined;
 	private browserActivityComponent: ToolExecutionComponent | undefined;
 
 	// Tool output expansion state
@@ -3051,6 +3053,8 @@ export class InteractiveMode {
 					component.beginNextExecution(event.toolCallId, event.args);
 				}
 				component.markExecutionStarted();
+				// The agent loop asks for a call's approval right after its start event.
+				this.lastStartedTool = component;
 				this.ui.requestRender();
 				break;
 			}
@@ -6069,6 +6073,16 @@ export class InteractiveMode {
 	// allow" when the request carries a `rule`). "Reject with feedback" collects a one-line
 	// reason that becomes the block reason the model sees, so it can adjust the plan.
 	private async showToolApprovalDialog(req: ApprovalRequest): Promise<ApprovalResponse> {
+		// Ask mode's question belongs to the call that started last. Its card leaves the time spent
+		// deciding out of "Took" and says "rejected" in words.
+		const card = req.kind === "tool" ? this.lastStartedTool : undefined;
+		card?.beginApproval();
+		const response = await this.askToolApproval(req);
+		card?.endApproval((typeof response === "string" ? response : response.decision) !== "reject");
+		return response;
+	}
+
+	private askToolApproval(req: ApprovalRequest): Promise<ApprovalResponse> {
 		const always = req.rule ? `Always allow in every project (saves ${req.rule} to global settings)` : undefined;
 		return new Promise((resolve) => {
 			this.showSelector((done) => {
