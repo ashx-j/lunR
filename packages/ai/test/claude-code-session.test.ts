@@ -16,9 +16,11 @@ import type { AssistantMessage, Context, Message, StreamOptions } from "../src/t
  * and keeps querying until an answer ends its turn. Like 2.1.310 it moves text that follows a tool call
  * ahead of the tool calls in its own copy. Fields from CLAUDE_CODE_EXTRA_BODY replace its own, so a
  * one-shot process (with `messages` there) sends the body's history. A live process prints a compaction
- * line before querying when the newest user text says COMPACT, and refuses without a request when it says
- * REFUSE, as Claude Code does near its own context limit. Each process appends "<pid> oneshot|session" to
- * `pids` next to itself.
+ * line before querying when the newest user text says COMPACT, a compaction status line for STATUS_LINE,
+ * a hook line for HOOKLINE, a note after an `end_turn` answer for TAILNOTE, calls the answer's tools in
+ * reverse order for REVERSE, and refuses without a request for REFUSE, as Claude Code does near its own
+ * context limit. It reads each answer as it streams, calls a tool as soon as its block ends, and rewrites
+ * tool results the way 2.1.310 does. Each process appends "<pid> oneshot|session" to `pids` next to itself.
  */
 const FAKE_CLAUDE_CODE = `#!/usr/bin/env node
 const { appendFileSync, readFileSync } = require("node:fs");
@@ -32,49 +34,76 @@ const mcpUrl = JSON.parse(readFileSync(flag("--mcp-config"), "utf8")).mcpServers
 const line = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 const history = [];
 let queue = Promise.resolve();
+// Claude Code 2.1.310's own rewrites of an MCP result, as measured against a recording upstream.
+function recorded(call, result) {
+	const text = result.content.map((item) => item.text).join("\\n");
+	if (!result.isError) return text.trim() ? result.content : "(" + call.name + " completed with no output)";
+	const trimmed = text.trim();
+	if (!trimmed) return "Command failed with no output";
+	if (trimmed.length <= 11024) return trimmed;
+	return trimmed.slice(0, 5000) + "\\n\\n... [" + (trimmed.length - 10000) + " characters truncated] ...\\n\\n" + trimmed.slice(-5000);
+}
+async function callTool(call) {
+	const reply = await fetch(mcpUrl, { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: call.name, arguments: call.input, _meta: { "claudecode/toolUseId": call.id } } }) });
+	const data = (await reply.text()).split("\\n").find((row) => row.startsWith("data: "));
+	const { result } = JSON.parse(data.slice(6));
+	return { type: "tool_result", tool_use_id: call.id, content: recorded(call, result), ...(result.isError ? { is_error: true } : {}) };
+}
 async function query() {
 	line({ type: "system", subtype: "init" });
 	for (;;) {
 		const asked = JSON.stringify(history.at(-1));
 		if (!oneShot && asked.includes("COMPACT")) line({ type: "system", subtype: "compact_boundary" });
+		if (!oneShot && asked.includes("STATUS_LINE")) line({ type: "system", subtype: "status", status: null, compact_result: "success" });
+		if (!oneShot && asked.includes("HOOKLINE")) line({ type: "system", subtype: "hook_started" });
 		if (!oneShot && asked.includes("REFUSE")) {
 			line({ type: "result", subtype: "success", is_error: false, num_turns: 1, result: "Prompt is too long" });
 			return;
 		}
 		const body = { model: flag("--model"), messages: history, ...extra, stream: true };
 		const response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages", { method: "POST", body: JSON.stringify(body) });
-		const text = await response.text();
 		if (response.status !== 200) {
+			await response.text();
 			line({ type: "result", is_error: true, num_turns: 1, api_error_status: response.status, result: "API Error" });
 			return;
 		}
+		// Like Claude Code, read the answer as it streams and call each tool as soon as its block ends.
+		const reverse = asked.includes("REVERSE");
 		const content = [];
+		const calls = [];
 		let stop;
-		for (const chunk of text.split("\\n\\n")) {
-			const data = chunk.split("\\n").find((row) => row.startsWith("data: "));
-			if (!data) continue;
-			const event = JSON.parse(data.slice(6));
-			line({ type: "stream_event", event });
-			if (event.type === "content_block_start") content[event.index] = { ...event.content_block };
-			if (event.type === "content_block_delta" && event.delta.type === "text_delta") content[event.index].text += event.delta.text;
-			if (event.type === "content_block_delta" && event.delta.type === "input_json_delta") content[event.index].input = JSON.parse(event.delta.partial_json);
-			if (event.type === "message_delta") stop = event.delta.stop_reason;
+		let pending = "";
+		const decoder = new TextDecoder();
+		for await (const chunk of response.body) {
+			pending += decoder.decode(chunk, { stream: true });
+			for (let end = pending.indexOf("\\n\\n"); end >= 0; end = pending.indexOf("\\n\\n")) {
+				const data = pending.slice(0, end).split("\\n").find((row) => row.startsWith("data: "));
+				pending = pending.slice(end + 2);
+				if (!data) continue;
+				const event = JSON.parse(data.slice(6));
+				line({ type: "stream_event", event });
+				if (event.type === "content_block_start") content[event.index] = { ...event.content_block };
+				if (event.type === "content_block_delta" && event.delta.type === "text_delta") content[event.index].text += event.delta.text;
+				if (event.type === "content_block_delta" && event.delta.type === "input_json_delta") content[event.index].input = JSON.parse(event.delta.partial_json);
+				if (event.type === "content_block_stop" && content[event.index].type === "tool_use" && !oneShot && !reverse) calls.push(callTool(content[event.index]));
+				if (event.type === "message_delta") stop = event.delta.stop_reason;
+			}
 		}
 		const kept = content.map(({ caller, ...block }) => block);
 		const firstTool = kept.findIndex((block) => block.type === "tool_use");
 		const tail = firstTool < 0 ? [] : kept.slice(firstTool);
 		history.push({ role: "assistant", content: firstTool < 0 ? kept : [...kept.slice(0, firstTool), ...tail.filter((b) => b.type === "text"), ...tail.filter((b) => b.type !== "text")] });
 		if (stop !== "tool_use" || oneShot) {
+			if (asked.includes("TAILNOTE")) line({ type: "system", subtype: "informational" });
 			line({ type: "result", is_error: false, num_turns: 1 });
 			return;
 		}
-		const results = [];
-		for (const call of content.filter((block) => block.type === "tool_use")) {
-			const reply = await fetch(mcpUrl, { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: call.name, arguments: call.input, _meta: { "claudecode/toolUseId": call.id } } }) });
-			const data = (await reply.text()).split("\\n").find((row) => row.startsWith("data: "));
-			const { result } = JSON.parse(data.slice(6));
-			results.push(result.isError ? { type: "tool_result", tool_use_id: call.id, content: result.content[0].text, is_error: true } : { type: "tool_result", tool_use_id: call.id, content: result.content });
+		if (reverse) {
+			const ordered = kept.filter((block) => block.type === "tool_use");
+			const started = new Map(ordered.reverse().map((call) => [call.id, callTool(call)]));
+			calls.push(...ordered.reverse().map((call) => started.get(call.id)));
 		}
+		const results = await Promise.all(calls);
 		history.push({ role: "user", content: results });
 		line({ type: "user", message: { role: "user", content: results } });
 	}
@@ -97,18 +126,25 @@ const sse = (...events: object[]) =>
 	events.map((event) => `event: ${"type" in event ? event.type : ""}\ndata: ${JSON.stringify(event)}\n\n`).join("");
 
 /**
- * An upstream answer: a `read` tool call for `path` (followed by a text block when `path` ends in
- * "|after"), or text that ends the turn.
+ * An upstream answer: `read` tool calls for the paths in `step` (joined by "+", followed by a text block
+ * when `step` ends in "|after"), or text that ends the turn.
  */
 function answer(index: number, step?: string): string {
 	const after = step?.endsWith("|after") ?? false;
-	const path = after ? step?.slice(0, -"|after".length) : step;
-	const block = path
-		? { type: "tool_use", id: `toolu_${index}`, name: "mcp__lunr__read", input: {}, caller: { type: "direct" } }
-		: { type: "text", text: "" };
-	const delta = path
-		? { type: "input_json_delta", partial_json: JSON.stringify({ path }) }
-		: { type: "text_delta", text: "done" };
+	const paths = (after ? step?.slice(0, -"|after".length) : step)?.split("+") ?? [];
+	const blocks: { block: object; delta: object }[] = paths.length
+		? paths.map((path, call) => ({
+				block: {
+					type: "tool_use",
+					id: call ? `toolu_${index}_${call}` : `toolu_${index}`,
+					name: "mcp__lunr__read",
+					input: {},
+					caller: { type: "direct" },
+				},
+				delta: { type: "input_json_delta", partial_json: JSON.stringify({ path }) },
+			}))
+		: [{ block: { type: "text", text: "" }, delta: { type: "text_delta", text: "done" } }];
+	if (after) blocks.push({ block: { type: "text", text: "" }, delta: { type: "text_delta", text: "after the call" } });
 	return sse(
 		{
 			type: "message_start",
@@ -123,19 +159,14 @@ function answer(index: number, step?: string): string {
 				usage: { input_tokens: 10, output_tokens: 1 },
 			},
 		},
-		{ type: "content_block_start", index: 0, content_block: block },
-		{ type: "content_block_delta", index: 0, delta },
-		{ type: "content_block_stop", index: 0 },
-		...(after
-			? [
-					{ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
-					{ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "after the call" } },
-					{ type: "content_block_stop", index: 1 },
-				]
-			: []),
+		...blocks.flatMap(({ block, delta }, blockIndex) => [
+			{ type: "content_block_start", index: blockIndex, content_block: block },
+			{ type: "content_block_delta", index: blockIndex, delta },
+			{ type: "content_block_stop", index: blockIndex },
+		]),
 		{
 			type: "message_delta",
-			delta: { stop_reason: path ? "tool_use" : "end_turn", stop_sequence: null },
+			delta: { stop_reason: paths.length ? "tool_use" : "end_turn", stop_sequence: null },
 			usage: { output_tokens: 1 },
 		},
 		{ type: "message_stop" },
@@ -153,9 +184,13 @@ afterEach(() => {
 /**
  * A fixture upstream that answers with a `read` call until `script` says otherwise, records every body,
  * and a fake Claude Code. `script(n)` returns the path to read on request n, undefined for a final text
- * answer, or an HTTP status to fail with.
+ * answer, or an HTTP status to fail with. `gap` holds the answer's end (`message_delta` on) back, as the
+ * real API can after a tool block. `result` gives lunR's tool result for a path.
  */
-async function setup(script: (request: number) => string | number | undefined = (n) => `file-${n}`) {
+async function setup(
+	script: (request: number) => string | number | undefined = (n) => `file-${n}`,
+	{ gap = 0, result }: { gap?: number; result?: (path: string) => { text: string; isError?: boolean } } = {},
+) {
 	const directory = mkdtempSync(join(tmpdir(), "lunr-claude-session-"));
 	directories.push(directory);
 	const command = join(directory, "claude");
@@ -176,7 +211,11 @@ async function setup(script: (request: number) => string | number | undefined = 
 				return;
 			}
 			res.writeHead(200, { "content-type": "text/event-stream" });
-			res.end(answer(bodies.length, step));
+			const all = answer(bodies.length, step);
+			const cut = all.indexOf("event: message_delta");
+			if (!gap || cut < 0) return void res.end(all);
+			res.write(all.slice(0, cut));
+			setTimeout(() => res.end(all.slice(cut)), gap);
 		});
 	});
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -200,7 +239,7 @@ async function setup(script: (request: number) => string | number | undefined = 
 			.map((row) => row.split(" "));
 	const pids = () => spawns().map(([pid]) => Number(pid));
 	const sessionPids = () => spawns().flatMap(([pid, kind]) => (kind === "session" ? [Number(pid)] : []));
-	return { connection, upstream, bodies, pids, sessionPids };
+	return { connection, upstream, bodies, pids, sessionPids, result };
 }
 
 const alive = (pid: number) => {
@@ -249,16 +288,20 @@ describe.skipIf(process.platform === "win32")("Claude Code session process", () 
 			).result();
 			expect(last.errorMessage).toBeUndefined();
 			messages.push(last);
-			const call = last.content.find((block) => block.type === "toolCall");
-			if (!call || call.type !== "toolCall") break;
-			messages.push({
-				role: "toolResult",
-				toolCallId: call.id,
-				toolName: call.name,
-				content: [{ type: "text", text: `contents of ${String(call.arguments.path)}` }],
-				isError: false,
-				timestamp: turn,
-			});
+			const calls = last.content.flatMap((block) => (block.type === "toolCall" ? [block] : []));
+			if (!calls.length) break;
+			for (const call of calls) {
+				const path = String(call.arguments.path);
+				const { text, isError = false } = setupResult.result?.(path) ?? { text: `contents of ${path}` };
+				messages.push({
+					role: "toolResult",
+					toolCallId: call.id,
+					toolName: call.name,
+					content: [{ type: "text", text }],
+					isError,
+					timestamp: turn,
+				});
+			}
 		}
 		if (!last) throw new Error("no turn ran");
 		return { messages, last };
@@ -475,6 +518,84 @@ describe.skipIf(process.platform === "win32")("Claude Code session process", () 
 		expect(await settled([oldest ?? 0])).toBe(true);
 		expect(others.filter(alive)).toHaveLength(3);
 	});
+
+	it("holds a tool call Claude Code makes before the answer ends", async () => {
+		const fixture = await setup(undefined, { gap: 200 });
+		await run(fixture, 4);
+		expect(fixture.bodies).toHaveLength(4);
+		expect(fixture.sessionPids()).toHaveLength(1);
+	});
+
+	it("answers parallel tool calls Claude Code makes in the other order", async () => {
+		const fixture = await setup((n) => (n === 2 ? "a+b" : `file-${n}`), {
+			gap: 200,
+			result: (path) => ({ text: path === "file-1" ? "REVERSE" : `contents of ${path}` }),
+		});
+		const { messages } = await run(fixture, 4);
+		expect(fixture.bodies).toHaveLength(4);
+		expect(fixture.sessionPids()).toHaveLength(1);
+		expect(upstreamHistory(fixture.bodies[2]?.messages ?? [])).toEqual(lunrHistory(messages.slice(0, 6)));
+	});
+
+	it("stops the process, and nothing more is sent, when lunR aborts after a tool block", async () => {
+		const fixture = await setup(undefined, { gap: 300 });
+		const { messages } = await run(fixture, 2);
+		const controller = new AbortController();
+		const stream = streamClaudeCode(
+			ANTHROPIC_MODELS["claude-opus-4-8"],
+			{ systemPrompt: "You are lunR.", messages, tools },
+			{ externalClaudeCode: fixture.connection, sessionId: "session-a", signal: controller.signal },
+			true,
+			fixture.upstream,
+		);
+		for await (const event of stream) if (event.type === "toolcall_end") controller.abort();
+		const sent = fixture.bodies.length;
+		expect(await settled(fixture.pids())).toBe(true);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(fixture.bodies).toHaveLength(sent);
+	});
+
+	it("sends tool results Claude Code would rewrite one-shot, as lunR has them", async () => {
+		const results: Record<string, { text: string; isError?: boolean }> = {
+			"file-2": { text: " \n" },
+			"file-3": { text: "E".repeat(20_000), isError: true },
+			"file-4": { text: "failed\n", isError: true },
+		};
+		const fixture = await setup(undefined, { result: (path) => results[path] ?? { text: `contents of ${path}` } });
+		const { messages } = await run(fixture, 6);
+		// One upstream request per lunR request: none went out with a rewritten result first.
+		expect(fixture.bodies).toHaveLength(6);
+		for (const index of [2, 3, 4, 5])
+			expect(upstreamHistory(fixture.bodies[index]?.messages ?? [])).toEqual(
+				lunrHistory(messages.slice(0, 2 * index + 1)),
+			);
+		expect(await settled(fixture.sessionPids())).toBe(true);
+	});
+
+	it.each(["STATUS_LINE", "HOOKLINE"])(
+		"sends a request one-shot when Claude Code prints a %s line",
+		async (marker) => {
+			const fixture = await setup(undefined, {
+				result: (path) => ({ text: path === "file-2" ? marker : `contents of ${path}` }),
+			});
+			await run(fixture, 4);
+			const [first] = fixture.sessionPids();
+			expect(await settled([first ?? 0])).toBe(true);
+		},
+	);
+
+	it("checks what Claude Code prints after an end_turn answer before the next turn", async () => {
+		const fixture = await setup((n) => (n === 3 ? undefined : `file-${n}`), {
+			result: (path) => ({ text: path === "file-2" ? "TAILNOTE" : `contents of ${path}` }),
+		});
+		const { messages } = await run(fixture, 3);
+		messages.push({ role: "user", content: "Again", timestamp: 9 });
+		const sent = [...messages];
+		await run(fixture, 1, {}, messages);
+		const [first] = fixture.sessionPids();
+		expect(await settled([first ?? 0])).toBe(true);
+		expect(upstreamHistory(fixture.bodies.at(-1)?.messages ?? [])).toEqual(lunrHistory(sent));
+	});
 });
 
 /** lunR's history in the Messages shape the bridge receives, consecutive user turns merged. */
@@ -502,6 +623,7 @@ function lunrHistory(messages: readonly Message[]): { role: string; content: unk
 								content: message.content.map((block) =>
 									block.type === "text" ? { type: "text", text: block.text } : block,
 								),
+								...(message.isError ? { is_error: true } : {}),
 							},
 						];
 		const previous = out.at(-1);

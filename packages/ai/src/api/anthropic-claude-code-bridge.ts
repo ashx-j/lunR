@@ -17,7 +17,7 @@ import {
 	spawnClaudeCode,
 	stopProcessTree,
 } from "./claude-code-process.ts";
-import { ClaudeCodeSession, keepsOrder, type SessionStep } from "./claude-code-session.ts";
+import { ClaudeCodeSession, keepsOrder, keepsToolResult, type SessionStep } from "./claude-code-session.ts";
 
 /** MCP server name prefix Claude Code puts on lunR's tools. Stripped again before lunR sees a tool call. */
 const TOOL_PREFIX = "mcp__lunr__";
@@ -257,6 +257,21 @@ async function nextResult(events: AsyncGenerator<ClaudeCodeEvent>): Promise<Clau
 		if (next.value.type === "result") return next.value;
 	}
 	return undefined;
+}
+
+/**
+ * Like `nextResult`, but every line must pass `check`: false when one fails or the output ends first,
+ * true at the `result`.
+ */
+async function checkedTail(
+	events: AsyncGenerator<ClaudeCodeEvent>,
+	check: (event: ClaudeCodeEvent) => boolean,
+): Promise<boolean> {
+	for (let next = await events.next(); !next.done; next = await events.next()) {
+		if (!check(next.value)) return false;
+		if (next.value.type === "result") return true;
+	}
+	return false;
 }
 
 /** Reads events up to the next raw Messages stream event or `result`, or undefined when Claude Code's output ends first. */
@@ -591,9 +606,10 @@ process.once("exit", () => {
 const MEDIA: ReadonlySet<unknown> = new Set(["image", "document"]);
 
 /**
- * Whether a live process would hold a different copy of this history: Claude Code may resize media it
- * reads from stdin, and it reorders an assistant turn with text after a tool call (`keepsOrder`), in a
- * replay too. Such a history runs one-shot, where the body carries it unchanged.
+ * Whether a live process could hold a different copy of this history: Claude Code may resize media it
+ * reads from stdin, reorders an assistant turn with text after a tool call (`keepsOrder`), and rewrites
+ * some tool results (`keepsToolResult`). Such a history runs one-shot, where the body carries it
+ * unchanged, until it no longer holds such a turn (after compaction, for example).
  */
 function changedByClaudeCode(frames: readonly Frame[]): boolean {
 	return frames.some(({ type, message: { content } }) =>
@@ -603,7 +619,8 @@ function changedByClaudeCode(frames: readonly Frame[]): boolean {
 					(block) =>
 						MEDIA.has(block.type) ||
 						(Array.isArray(block.content) &&
-							block.content.some((item) => isRecord(item) && MEDIA.has(item.type))),
+							block.content.some((item) => isRecord(item) && MEDIA.has(item.type))) ||
+						(block.type === "tool_result" && !keepsToolResult(block)),
 				),
 	);
 }
@@ -754,9 +771,12 @@ async function runSessionStep(
 				if (!ack || ack.num_turns !== 0 || ack.is_error) throw new Error("Claude Code rejected the history replay");
 			}
 		} else if (step.kind === "query") {
-			// The finished turn's own result line is still unread.
-			if (!(await within(nextResult(session.events), "Claude Code request timed out.")))
-				throw new Error("Claude Code exited between requests");
+			// The finished turn's tail, up to its own result line, is still unread and gets the same check.
+			const tail = checkedTail(session.events, (event) => session.verify(event, step));
+			if (!(await within(tail, "Claude Code request timed out."))) {
+				session.finish(false);
+				return undefined;
+			}
 			session.write({ ...step.frame, client_composed: true });
 		}
 		const first = await within(nextSessionEvent(session, step), "Claude Code request timed out.");
