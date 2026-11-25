@@ -9,6 +9,7 @@ import {
 	isSessionOwnerDead,
 	readSessionOwner,
 	SessionOwnership,
+	sessionPathKey,
 	writeSessionJson,
 } from "./session-ownership.ts";
 
@@ -27,7 +28,7 @@ function registry(agentDir = getAgentDir()): string {
 	return join(agentDir, "session-handoffs");
 }
 function recordPath(file: string, agentDir?: string): string {
-	return join(registry(agentDir), `${createHash("sha256").update(canonicalSessionPath(file)).digest("hex")}.json`);
+	return join(registry(agentDir), `${createHash("sha256").update(sessionPathKey(file)).digest("hex")}.json`);
 }
 function readRecord(file: string, agentDir?: string): HandoffCandidate | undefined {
 	try {

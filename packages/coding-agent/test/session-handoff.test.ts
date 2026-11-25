@@ -258,10 +258,7 @@ describe("exclusive session ownership and handoff", () => {
 		const now = Date.now() + 10 * 24 * 60 * 60 * 1000;
 		expect((await pruneOldSessions(join(directory, "custom"), 1, { now })).deleted).toEqual([]);
 		manager.dispose();
-		// Windows: SessionOwnership writes the file under a lowercased name (a product bug listed in PR #320).
-		const deleted = (await pruneOldSessions(join(directory, "custom"), 1, { now })).deleted;
-		const fold = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
-		expect(deleted.map(fold)).toEqual([fold(file)]);
+		expect((await pruneOldSessions(join(directory, "custom"), 1, { now })).deleted).toEqual([file]);
 	});
 
 	it("cancels an accepted request before its owner commits release", async () => {

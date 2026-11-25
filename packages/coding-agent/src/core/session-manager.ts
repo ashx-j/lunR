@@ -36,6 +36,7 @@ import {
 	canonicalSessionPath,
 	SessionOwnership,
 	SessionOwnershipError,
+	sessionPathKey,
 	writeSessionJson,
 } from "./session-ownership.ts";
 
@@ -887,7 +888,7 @@ export class SessionManager {
 			if (
 				this.ownership &&
 				this.sessionFile &&
-				canonicalSessionPath(this.sessionFile) !== this.ownership.owner.file
+				sessionPathKey(this.sessionFile) !== sessionPathKey(this.ownership.owner.file)
 			) {
 				throw new SessionOwnershipError(this.sessionFile, "Session ownership does not match the write target.");
 			}
@@ -925,7 +926,7 @@ export class SessionManager {
 	private claim(file: string): void {
 		this.assertWritable();
 		const canonical = canonicalSessionPath(file);
-		if (this.ownership?.owner.file === canonical) return;
+		if (this.ownership && sessionPathKey(this.ownership.owner.file) === sessionPathKey(canonical)) return;
 		const next = new SessionOwnership(canonical);
 		this.saveLeaf();
 		this.ownership?.release();
@@ -989,7 +990,7 @@ export class SessionManager {
 	/** Switch to a different session file (used for resume and branching) */
 	setSessionFile(sessionFile: string): void {
 		this.assertWritable();
-		if (this.sessionFile && canonicalSessionPath(sessionFile) === canonicalSessionPath(this.sessionFile)) {
+		if (this.sessionFile && sessionPathKey(sessionFile) === sessionPathKey(this.sessionFile)) {
 			this.loadSessionFile(sessionFile);
 			return;
 		}
