@@ -63,7 +63,7 @@ describe("subagent output in read-only mode", () => {
 		rmSync(root, { recursive: true, force: true });
 	});
 
-	function launch(params: SubagentParamsLike) {
+	function launch(params: SubagentParamsLike, sessionFile?: string) {
 		const executor = createSubagentExecutor({
 			pi: { getSessionName: () => "test-session", events: { emit() {} } } as never,
 			state: {
@@ -94,7 +94,7 @@ describe("subagent output in read-only mode", () => {
 			hasUI: false,
 			model: availableModels[0],
 			modelRegistry: { getAvailable: () => availableModels },
-			sessionManager: { getSessionFile: () => undefined, getSessionId: () => "test-session" },
+			sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => "test-session" },
 		} as never);
 	}
 
@@ -141,6 +141,19 @@ describe("subagent output in read-only mode", () => {
 		}
 		expect(seen).toMatchObject({ isError: true });
 		expect(JSON.stringify(seen?.content)).toContain("Read-only mode cannot");
+	});
+
+	// A saved session's file path is not the key its permission mode is stored under.
+	it("refuses a project output when only the session is read-only and it has a session file", async () => {
+		resetPermissions();
+		resetPermissions("read-only", "test-session");
+		const sessionFile = join(root, "agent", "sessions", "s.jsonl");
+		const result = await launch(child(join(root, "src.ts")), sessionFile);
+		expect(result).toMatchObject({ isError: true });
+		const text = JSON.stringify(result.content);
+		expect(text).toContain(`run's directory ${join(root, "agent", "sessions", "subagent-artifacts", "outputs")}`);
+		expect(runSync).not.toHaveBeenCalled();
+		expect(existsSync(join(root, ".pi-subagents"))).toBe(false);
 	});
 
 	it.each<[string, () => SubagentParamsLike]>([

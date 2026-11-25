@@ -7,6 +7,7 @@ import { hasMutationToolCapability } from "./completion-guard.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { mkdirParentsSync } from "../../../../../utils/mkdir.ts";
 import { canonicalizeTargetPath } from "../../../../../utils/paths.ts";
+import { isArtifactsPath } from "../../shared/artifacts.ts";
 
 export interface SingleOutputSnapshot {
 	exists: boolean;
@@ -202,8 +203,13 @@ function persistSingleOutput(
 	const blocked = outputTargetError(outputPath, cwd);
 	if (blocked) return { error: blocked };
 	try {
-		mkdirParentsSync(path.dirname(outputPath));
-		fs.writeFileSync(outputPath, fullOutput, "utf-8");
+		// Inside lunR's artifacts tree (outputs/<runId>/) the file stays private; a path the user chose
+		// keeps the umask's mode. mkdirParentsSync, not recursive mkdir: the path may come from the model.
+		const dir = path.dirname(outputPath);
+		mkdirParentsSync(dir);
+		const isPrivate = isArtifactsPath(outputPath);
+		if (isPrivate) for (const created of [dir, path.dirname(dir)]) if (isArtifactsPath(created)) fs.chmodSync(created, 0o700);
+		fs.writeFileSync(outputPath, fullOutput, { encoding: "utf-8", mode: isPrivate ? 0o600 : undefined });
 		return { savedPath: outputPath };
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };

@@ -104,7 +104,7 @@ export function createChildTranscriptWriter(input: ChildTranscriptWriterInput): 
 		const markerBytes = Buffer.byteLength(marker, "utf-8");
 		if (bytesWritten + markerBytes > maxBytes) return false;
 		try {
-			fs.appendFileSync(input.transcriptPath, marker, "utf-8");
+			fs.appendFileSync(input.transcriptPath, marker, { encoding: "utf-8", mode: 0o600 });
 			bytesWritten += markerBytes;
 			return true;
 		} catch (error) {
@@ -131,7 +131,7 @@ export function createChildTranscriptWriter(input: ChildTranscriptWriterInput): 
 			return;
 		}
 		try {
-			fs.appendFileSync(input.transcriptPath, line, "utf-8");
+			fs.appendFileSync(input.transcriptPath, line, { encoding: "utf-8", mode: 0o600 });
 			bytesWritten += bytes;
 		} catch (error) {
 			writeError = `Failed to write child transcript '${input.transcriptPath}': ${errorMessage(error)}`;
@@ -139,8 +139,8 @@ export function createChildTranscriptWriter(input: ChildTranscriptWriterInput): 
 	};
 
 	try {
-		fs.mkdirSync(path.dirname(input.transcriptPath), { recursive: true });
-		fs.writeFileSync(input.transcriptPath, "", "utf-8");
+		fs.mkdirSync(path.dirname(input.transcriptPath), { recursive: true, mode: 0o700 });
+		fs.writeFileSync(input.transcriptPath, "", { encoding: "utf-8", mode: 0o600 });
 	} catch (error) {
 		writeError = `Failed to initialize child transcript '${input.transcriptPath}': ${errorMessage(error)}`;
 	}

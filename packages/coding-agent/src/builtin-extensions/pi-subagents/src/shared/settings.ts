@@ -159,7 +159,7 @@ export function chainDirPath(runId: string, baseDir?: string): string {
 
 export function createChainDir(runId: string, baseDir?: string): string {
 	const chainDir = chainDirPath(runId, baseDir);
-	fs.mkdirSync(chainDir, { recursive: true });
+	fs.mkdirSync(chainDir, { recursive: true, mode: 0o700 });
 	return chainDir;
 }
 
@@ -299,8 +299,8 @@ function resolveChainPath(filePath: string, chainDir: string): string {
  * These are appended to the task to tell the agent what to read/write.
  */
 export function writeInitialProgressFile(progressDir: string): void {
-	fs.mkdirSync(progressDir, { recursive: true });
-	fs.writeFileSync(path.join(progressDir, "progress.md"), INITIAL_PROGRESS_CONTENT);
+	fs.mkdirSync(progressDir, { recursive: true, mode: 0o700 });
+	fs.writeFileSync(path.join(progressDir, "progress.md"), INITIAL_PROGRESS_CONTENT, { mode: 0o600 });
 }
 
 export function buildChainInstructions(
@@ -409,7 +409,7 @@ export function createParallelDirs(
 ): void {
 	for (let i = 0; i < taskCount; i++) {
 		const subdir = path.join(chainDir, `parallel-${stepIndex}`, String(i));
-		fs.mkdirSync(subdir, { recursive: true });
+		fs.mkdirSync(subdir, { recursive: true, mode: 0o700 });
 	}
 }
 
