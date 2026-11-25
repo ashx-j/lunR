@@ -31,7 +31,6 @@ export interface ModelCommandHost {
 	invalidateFooter(): void;
 	updateEditorBorderColor(): void;
 	updateAvailableProviderCount(): Promise<void>;
-	maybeWarnAboutAnthropicSubscriptionAuth(model?: Model<Api>): Promise<void>;
 }
 
 // lunr: pi-ollama-cloud registers its catalog refresh here for /refresh.
@@ -52,7 +51,6 @@ export async function handleModelCommand(host: ModelCommandHost, searchTerm?: st
 			host.invalidateFooter();
 			host.updateEditorBorderColor();
 			host.showStatus(`Model: ${model.id}`);
-			void host.maybeWarnAboutAnthropicSubscriptionAuth(model);
 		} catch (error) {
 			host.showError(error instanceof Error ? error.message : String(error));
 		}
@@ -202,7 +200,6 @@ export async function showModelSelector(
 					host.updateEditorBorderColor();
 					done();
 					host.showStatus(selectedStatus ?? `Model: ${model.id}`);
-					void host.maybeWarnAboutAnthropicSubscriptionAuth(model);
 					// lunr: offer manual subscription switching for pooled providers.
 					await maybeShowSubscriptionPicker(host, model.provider);
 				} catch (error) {
