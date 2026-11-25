@@ -2,8 +2,18 @@
  * Shared timing constants for LSP operations.
  */
 
-/** Delay (ms) to wait for LSP to publish diagnostics after a file change */
-export const DIAGNOSTIC_SETTLE_DELAY_MS = 1500;
+/**
+ * Longest wait (ms) for a server's diagnostics after an edit. tsserver answers lunR's direct request in
+ * 5 to 330 ms once the project is loaded; pyright publishes with a version in about 300 ms. A slower
+ * answer can go out with a later tool result if no file changed since.
+ */
+export const DIAGNOSTIC_WAIT_CAP_MS = 500;
+
+/**
+ * Longest wait (ms) in the lsp_diagnostics tool for the server to start and answer for the file's
+ * current content. A first open loads the project, which took about 14 s on the lunR repo.
+ */
+export const DIAGNOSTIC_TOOL_WAIT_MS = 15_000;
 
 /** Delay (ms) to wait for a daemon socket to start listening after spawn */
 export const DAEMON_SOCKET_READY_DELAY_MS = 500;
