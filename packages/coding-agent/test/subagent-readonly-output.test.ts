@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fauxAssistantMessage, fauxToolCall, type ToolResultMessage } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSync } from "../src/builtin-extensions/pi-subagents/src/runs/foreground/execution.ts";
 import {
@@ -8,6 +10,7 @@ import {
 	type SubagentParamsLike,
 } from "../src/builtin-extensions/pi-subagents/src/runs/foreground/subagent-executor.ts";
 import { resetPermissions } from "../src/core/permissions.ts";
+import { createHarness } from "./suite/harness.ts";
 
 // Every foreground child starts through runSync; a refused launch must never reach it.
 vi.mock("../src/builtin-extensions/pi-subagents/src/runs/foreground/execution.ts", async (importOriginal) => {
@@ -108,6 +111,36 @@ describe("subagent output in read-only mode", () => {
 		const result = await launch(child("review.md"));
 		expect(JSON.stringify(result.content)).not.toContain("Read-only mode cannot");
 		expect(runSync).toHaveBeenCalledTimes(1);
+	});
+
+	// The refusal is returned, not thrown, so only the loop's isError check makes it a failed call.
+	it("reaches the model as a failed tool call", async () => {
+		const harness = await createHarness({
+			tools: [
+				{
+					name: "subagent",
+					label: "subagent",
+					description: "launch a child",
+					parameters: Type.Object({}, { additionalProperties: true }),
+					execute: () => launch(child(join(root, "src.ts"))),
+				},
+			],
+		});
+		let seen: ToolResultMessage | undefined;
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("subagent", {})], { stopReason: "toolUse" }),
+			(context) => {
+				seen = context.messages.find((message): message is ToolResultMessage => message.role === "toolResult");
+				return fauxAssistantMessage("done");
+			},
+		]);
+		try {
+			await harness.session.prompt("go");
+		} finally {
+			harness.cleanup();
+		}
+		expect(seen).toMatchObject({ isError: true });
+		expect(JSON.stringify(seen?.content)).toContain("Read-only mode cannot");
 	});
 
 	it.each<[string, () => SubagentParamsLike]>([

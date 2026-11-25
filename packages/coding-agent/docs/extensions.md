@@ -1894,7 +1894,7 @@ pi.registerTool({
 });
 ```
 
-**Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
+**Signaling errors:** To mark a tool execution as failed, so the LLM receives it as a failed call, either throw an error from `execute` or return a result with `isError: true`. A thrown error becomes a plain text result. A returned `isError: true` keeps your `content` and `details`, so your `renderResult` still draws them, with `context.isError` set.
 
 **Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
 
@@ -2799,7 +2799,7 @@ const text = rustLines.join("\n");
 
 - Extension errors are logged, agent continues
 - `tool_call` errors block the tool (fail-safe)
-- Tool `execute` errors must be signaled by throwing; the thrown error is caught, reported to the LLM with `isError: true`, and execution continues
+- Tool `execute` errors are signaled by throwing or by returning `isError: true`; either way the LLM sees a failed call and execution continues
 
 ## Mode Behavior
 
