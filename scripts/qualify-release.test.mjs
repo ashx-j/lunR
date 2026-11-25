@@ -64,7 +64,11 @@ test("an interrupt removes the temporary profile copy and stops the CLI", { skip
 		child.kill("SIGINT");
 		assert.equal(await exited, 130);
 		assert.deepEqual(readdirSync(runs), []);
-		assert.equal(alive(Number(readFileSync(env.FAKE_CLI_PID, "utf8"))), false);
+		// SIGKILL is delivered, and the orphan reaped, a moment after the script exits.
+		const pid = Number(readFileSync(env.FAKE_CLI_PID, "utf8"));
+		const killDeadline = Date.now() + 5_000;
+		while (alive(pid) && Date.now() < killDeadline) await new Promise((done) => setTimeout(done, 50));
+		assert.equal(alive(pid), false, "the fake CLI survived the interrupt");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
