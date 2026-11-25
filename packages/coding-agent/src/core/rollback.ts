@@ -41,6 +41,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, normalize, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { mkdirParentsSync } from "../utils/mkdir.ts";
 import { writeSessionJson } from "./session-ownership.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
@@ -655,7 +656,7 @@ export function rollbackLastTurn(
 			if (snap.existed && snap.content) {
 				const unchanged = !snap.createdByTool && existsSync(absPath) && readFileSync(absPath).equals(snap.content);
 				if (!unchanged) {
-					mkdirSync(dirname(absPath), { recursive: true });
+					mkdirParentsSync(dirname(absPath));
 					writeFileSync(absPath, snap.content);
 					result.restored.push(absPath);
 				}

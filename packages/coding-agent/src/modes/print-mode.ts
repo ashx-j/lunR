@@ -7,7 +7,7 @@
  */
 
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
-import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
+import { type AgentSessionRuntime, SIGNAL_DISPOSE_LIMIT_MS } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.ts";
 import { describeProviderError } from "../core/provider-error-display.ts";
 import { encodeChildEventLines } from "../core/subagent-event-transport.ts";
@@ -59,6 +59,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		for (const [signal, exitCode] of signals) {
 			const handler = () => {
 				killTrackedDetachedChildren();
+				setTimeout(() => process.exit(exitCode), SIGNAL_DISPOSE_LIMIT_MS);
 				void disposeRuntime().finally(() => {
 					process.exit(exitCode);
 				});

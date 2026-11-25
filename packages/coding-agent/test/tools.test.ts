@@ -302,6 +302,17 @@ describe("Coding Agent Tools", () => {
 
 			expect(getTextOutput(result)).toContain("Successfully wrote");
 		});
+
+		// Node's recursive mkdir loops forever here: /proc answers ENOENT for a new name.
+		it.runIf(process.platform === "linux")(
+			"returns the system error when a parent cannot be created under /proc",
+			async () => {
+				await expect(
+					writeTool.execute("test-call-proc", { path: "/proc/nope/a.py", content: "x" }),
+				).rejects.toThrow("ENOENT");
+			},
+			2000,
+		);
 	});
 
 	describe("edit tool", () => {

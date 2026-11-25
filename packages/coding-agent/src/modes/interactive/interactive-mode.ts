@@ -64,7 +64,11 @@ import {
 	NothingToCompactError,
 	parseSkillBlock,
 } from "../../core/agent-session.ts";
-import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
+import {
+	type AgentSessionRuntime,
+	SessionImportFileNotFoundError,
+	SIGNAL_DISPOSE_LIMIT_MS,
+} from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import {
 	CACHE_TTL_MS,
@@ -3629,7 +3633,17 @@ export class InteractiveMode {
 			// terminal. If the terminal is gone, the restore writes below emit EIO,
 			// which the stdout/stderr error handler turns into emergencyTerminalExit;
 			// the render loop is already idle, so this cannot hot-spin (see #4144).
+			const disposeLimit = setTimeout(() => {
+				try {
+					processRegistry.killAll();
+				} catch {
+					// Exit goes on even if a tracked process cannot be signalled.
+				}
+				this.stop();
+				process.exit(0);
+			}, SIGNAL_DISPOSE_LIMIT_MS);
 			await this.runtimeHost.dispose();
+			clearTimeout(disposeLimit);
 			this.themeController.disableAutoSync();
 			await this.ui.terminal.drainInput(1000);
 			try {
