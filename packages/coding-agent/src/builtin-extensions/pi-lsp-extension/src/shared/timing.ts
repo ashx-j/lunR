@@ -9,6 +9,12 @@
  */
 export const DIAGNOSTIC_WAIT_CAP_MS = 500;
 
+/**
+ * Longest wait (ms) in the lsp_diagnostics tool for the server to start and answer for the file's
+ * current content. A first open loads the project, which took about 14 s on the lunR repo.
+ */
+export const DIAGNOSTIC_TOOL_WAIT_MS = 15_000;
+
 /** Delay (ms) to wait for a daemon socket to start listening after spawn */
 export const DAEMON_SOCKET_READY_DELAY_MS = 500;
 

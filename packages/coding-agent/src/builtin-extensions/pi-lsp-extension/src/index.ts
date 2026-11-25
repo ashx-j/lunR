@@ -327,7 +327,9 @@ export default function lspExtension(pi: ExtensionAPI) {
     "Workspace index",
   );
 
-  registerToolWithRuntime(pi, createDiagnosticsTool(managerProxy, treeSitterProxy), ensureRuntime, host);
+  registerToolWithRuntime(pi, createDiagnosticsTool(managerProxy, treeSitterProxy, async (filePath) => {
+    await host.getServicesIfReady()?.fileSync.handleFileWrite(filePath);
+  }), ensureRuntime, host);
   registerToolWithRuntime(pi, createHoverTool(managerProxy, treeSitterProxy), ensureRuntime, host);
   registerToolWithRuntime(pi, createDefinitionTool(managerProxy, treeSitterProxy, workspaceIndexProxy), ensureRuntime, host);
   registerToolWithRuntime(pi, createReferencesTool(managerProxy, treeSitterProxy), ensureRuntime, host);
