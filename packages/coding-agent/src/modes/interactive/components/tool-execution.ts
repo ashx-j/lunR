@@ -371,7 +371,8 @@ export class ToolExecutionComponent extends Container {
 
 	private applyGroupPadding(): void {
 		const top = this.groupContinuation || this.runContinuation ? 0 : 1;
-		const bottom = this.groupFollowed || this.runFollowed ? 0 : 1;
+		// An expanded card in a run keeps its bottom pad so its body does not touch the next header.
+		const bottom = this.groupFollowed || (this.runFollowed && !this.expanded) ? 0 : 1;
 		this.contentBox.setPaddingTop(top);
 		this.contentBox.setPaddingBottom(bottom);
 		this.contentText.setPaddingTop(top);
