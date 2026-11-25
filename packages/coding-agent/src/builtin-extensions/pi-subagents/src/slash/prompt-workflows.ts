@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -220,7 +219,7 @@ function splitPromptChain(input: string): string[] {
 	return input.split(" -> ").map((part) => part.trim()).filter(Boolean);
 }
 
-function workflowParams(workflow: PromptWorkflow, args: string[], runtime: ReturnType<typeof parseRuntimeOptions>): SubagentParamsLike {
+function workflowParams(workflow: PromptWorkflow, args: string[], runtime: ReturnType<typeof parseRuntimeOptions>): SubagentParamsLike & { skill?: PromptWorkflow["skill"] } {
 	const task = substituteArgs(workflow.body, args).trim();
 	return {
 		task,

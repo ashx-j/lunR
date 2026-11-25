@@ -95,7 +95,8 @@ export interface DynamicExpandSpec {
 	onEmpty?: "skip" | "fail";
 }
 
-export type DynamicParallelTemplate = Omit<ParallelTaskItem, "as" | "count">;
+// Async runner templates also carry childId (see RUNNER_DYNAMIC_PARALLEL_KEYS in dynamic-fanout.ts).
+export type DynamicParallelTemplate = Omit<ParallelTaskItem, "as" | "count"> & { childId?: string };
 
 export interface DynamicCollectSpec {
 	as: string;

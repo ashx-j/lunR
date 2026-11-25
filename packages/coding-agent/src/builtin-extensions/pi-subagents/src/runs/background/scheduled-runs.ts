@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -179,12 +178,12 @@ class ScheduledRunStore {
 
 function resolveMaxLatenessMs(config: ExtensionConfig): number {
 	const value = config.scheduledRuns?.maxLatenessMs;
-	return Number.isInteger(value) && value >= 0 ? value : DEFAULT_MAX_LATENESS_MS;
+	return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : DEFAULT_MAX_LATENESS_MS;
 }
 
 function resolveMaxPending(config: ExtensionConfig): number {
 	const value = config.scheduledRuns?.maxPending;
-	return Number.isInteger(value) && value >= 1 ? value : DEFAULT_MAX_PENDING;
+	return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : DEFAULT_MAX_PENDING;
 }
 
 function terminalState(state: ScheduledRunState): boolean {

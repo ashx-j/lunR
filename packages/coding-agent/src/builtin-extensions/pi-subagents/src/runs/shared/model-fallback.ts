@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
 import { getSupportedThinkingLevels, splitKnownThinkingSuffix, THINKING_LEVELS, type ThinkingLevel } from "../../shared/model-info.ts";
 import type { ChildTier, ModelSelection, Usage } from "../../shared/types.ts";
@@ -243,7 +242,7 @@ export function resolveTierModelOverride(tier: unknown): string | undefined {
 	const tierName = tier.trim();
 	try {
 		const bridge = (globalThis as Record<symbol, unknown>)[Symbol.for("@lunr/model-tiers")] as
-			| { getTierModel?: (tier: string) => unknown; isTierModeEnabled?: () => unknown }
+			| { getTierModel?: (tier: string) => unknown; isTierModeEnabled?: () => unknown; getTierThinking?: (tier: string) => unknown; getParentThinking?: () => unknown }
 			| undefined;
 		if (typeof bridge?.isTierModeEnabled !== "function" || typeof bridge?.getTierModel !== "function") {
 			throw new Error("Model tier settings are unavailable. Reload lunR and try again.");

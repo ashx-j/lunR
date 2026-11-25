@@ -12,6 +12,7 @@ import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-
 interface AsyncRunStepSummary {
 	index: number;
 	agent: string;
+	sessionFile?: string;
 	label?: string;
 	phase?: string;
 	outputName?: string;

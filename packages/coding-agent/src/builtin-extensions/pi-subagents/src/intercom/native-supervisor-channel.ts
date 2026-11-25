@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -276,7 +275,8 @@ function formatChildMessage(input: {
 	return lines.join("\n").trimEnd();
 }
 
-function communicationKind(reason?: SupervisorReason): SubagentCommunication["kind"] {
+// Takes a string because the legacy contact_supervisor schema types reason as a plain string enum.
+function communicationKind(reason?: string): SubagentCommunication["kind"] {
 	return reason === "progress_update" ? "progress" : reason === "handoff" ? "handoff" : reason === "interview_request" ? "interview" : "request";
 }
 
@@ -782,7 +782,7 @@ function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>,
 		description: PARENT_ASK_DESCRIPTION,
 		parameters: ParentSupervisorParamsSchema,
 		renderCall(args, theme, context) {
-			const request = args.action === "reply" ? pending.get(args.replyTo) : undefined;
+			const request = args.action === "reply" && args.replyTo !== undefined ? pending.get(args.replyTo) : undefined;
 			const peer = request ? requestCommunication(request, state).peer : args.id ? resolveCommunicationPeer(state, args.id, args.index ?? 0, args.childId) : "Subagent";
 			return renderCommunicationCall(name, args, theme, context, args.message ? { direction: "to", peer, message: args.message, kind: args.action === "ask" ? "question" : "reply" } : undefined);
 		},

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Agent, type AgentTool, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createReadOnlyTools } from "../../../../core/tools/index.ts";
@@ -95,7 +94,8 @@ function resolveReviewThinking(input: {
 function resolveConfiguredModel(ctx: ExtensionContext, rawModel: string): { model: RegistryModel; modelString: string } {
 	const availableModels = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const preferredProvider = typeof ctx.model?.provider === "string" ? ctx.model.provider : undefined;
-	const resolved = resolveModelCandidate(rawModel, availableModels, preferredProvider);
+	// rawModel is non-empty (the caller checks), so resolveModelCandidate returns a string.
+	const resolved = resolveModelCandidate(rawModel, availableModels, preferredProvider)!;
 	const { baseModel } = splitKnownThinkingSuffix(resolved);
 	const named = splitProviderModel(baseModel);
 	if (!named) {
