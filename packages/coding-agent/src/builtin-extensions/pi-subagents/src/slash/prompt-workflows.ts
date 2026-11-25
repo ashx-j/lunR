@@ -24,6 +24,9 @@ interface PromptWorkflow {
 
 type PromptWorkflowRunner = (params: SubagentParamsLike, ctx: ExtensionContext) => Promise<void>;
 
+// Label for the workflow list message; the TUI shows it as [subagent-prompt-workflows].
+const PROMPT_WORKFLOWS_MESSAGE_TYPE = "subagent-prompt-workflows";
+
 const RESERVED_COMMAND_NAMES = new Set([
 	"chain-prompts",
 	"chain-workflows",
@@ -269,7 +272,7 @@ export function registerPromptWorkflowCommands(input: {
 			const name = words.shift();
 			const workflows = discoverPromptWorkflows(ctx.cwd);
 			if (!name || name === "list") {
-				pi.sendMessage({ content: formatWorkflowList(workflows), display: true });
+				pi.sendMessage({ customType: PROMPT_WORKFLOWS_MESSAGE_TYPE, content: formatWorkflowList(workflows), display: true });
 				return;
 			}
 			const workflow = findWorkflow(workflows, name);
@@ -316,7 +319,7 @@ export async function runWorkflowChain(
 	const { declaration, argsText } = splitChainDeclaration(rawArgs);
 	const workflows = discoverPromptWorkflows(ctx.cwd);
 	if (!declaration || declaration === "list") {
-		pi.sendMessage({ content: formatWorkflowList(workflows), display: true });
+		pi.sendMessage({ customType: PROMPT_WORKFLOWS_MESSAGE_TYPE, content: formatWorkflowList(workflows), display: true });
 		return;
 	}
 	const runtime = parseRuntimeOptions(shellWords(argsText));
