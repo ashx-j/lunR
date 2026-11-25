@@ -18,7 +18,7 @@ const HEAVY_STATIC_IMPORTS = [
 	"./mcp-setup-panel.ts",
 ];
 
-const HEAVY_PACKAGE_MARKERS = ["@modelcontextprotocol/sdk", "@modelcontextprotocol/ext-apps", "recheck"];
+const HEAVY_PACKAGE_MARKERS = ["@modelcontextprotocol/sdk", "@modelcontextprotocol/ext-apps"];
 
 type RegisteredTool = {
 	name: string;

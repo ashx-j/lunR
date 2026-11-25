@@ -20,7 +20,16 @@ import { theme } from "../theme/theme.ts";
 import { shortenPath } from "../tool-renderers/render-utils.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
-import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";
+import {
+	filterAndSortSessions,
+	findRegexMatches,
+	getSessionSearchText,
+	hasSessionName,
+	type NameFilter,
+	parseSearchQuery,
+	SESSION_REGEX_SEARCH_TIMEOUT_MS,
+	type SortMode,
+} from "./session-selector-search.ts";
 
 type SessionScope = "current" | "all";
 
@@ -299,7 +308,15 @@ class SessionList implements Component, Focusable {
 	public onDeleteSession?: (sessionPath: string) => Promise<void>;
 	public onRenameSession?: (sessionPath: string) => void;
 	public onError?: (message: string) => void;
+	/** Called when a `re:` search finishes after `filterSessions` returned. */
+	public onResultsChanged?: () => void;
 	private maxVisible: number = 10; // Max sessions visible (one line each)
+	/** Counts filter calls, so a regex answer for an older query is dropped. */
+	private filterRun = 0;
+	/** Shown instead of the empty-list message when a regex search did not finish. */
+	private regexSearchNote?: string;
+	/** Search texts for the name-filtered sessions, reused so the regex worker keeps one copy. */
+	private searchTextCache?: { sessions: SessionInfo[]; nameFilter: NameFilter; texts: string[] };
 
 	// Focusable implementation - propagate to searchInput for IME cursor positioning
 	private _focused = false;
@@ -357,9 +374,17 @@ class SessionList implements Component, Focusable {
 	}
 
 	private filterSessions(query: string): void {
+		const run = ++this.filterRun;
+		this.regexSearchNote = undefined;
 		const trimmed = query.trim();
 		const nameFiltered =
 			this.nameFilter === "all" ? this.allSessions : this.allSessions.filter((session) => hasSessionName(session));
+		const regex = parseSearchQuery(query).regex;
+		if (regex) {
+			// The list keeps its previous results until the worker answers.
+			void this.filterByRegex(run, nameFiltered, query, regex);
+			return;
+		}
 
 		if (this.sortMode === "threaded" && !trimmed) {
 			// Threaded mode without search: show tree structure
@@ -367,15 +392,40 @@ class SessionList implements Component, Focusable {
 			this.filteredSessions = flattenSessionTree(roots);
 		} else {
 			// Other modes or with search: flat list
-			const filtered = filterAndSortSessions(nameFiltered, query, this.sortMode, "all");
-			this.filteredSessions = filtered.map((session) => ({
-				session,
-				depth: 0,
-				isLast: true,
-				ancestorContinues: [],
-			}));
+			this.setFlatList(filterAndSortSessions(nameFiltered, query, this.sortMode, "all"));
 		}
 		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1));
+	}
+
+	private async filterByRegex(run: number, sessions: SessionInfo[], query: string, regex: RegExp): Promise<void> {
+		const cache = this.searchTextCache;
+		const texts =
+			cache?.sessions === this.allSessions && cache.nameFilter === this.nameFilter
+				? cache.texts
+				: sessions.map(getSessionSearchText);
+		this.searchTextCache = { sessions: this.allSessions, nameFilter: this.nameFilter, texts };
+		const matches = await findRegexMatches(sessions, regex, texts);
+		if (run !== this.filterRun) return;
+		if (typeof matches === "string") {
+			this.filteredSessions = [];
+			this.regexSearchNote =
+				matches === "stopped"
+					? `  Regex search stopped after ${SESSION_REGEX_SEARCH_TIMEOUT_MS / 1000} s; simplify the pattern.`
+					: "  Regex search is unavailable.";
+		} else {
+			this.setFlatList(filterAndSortSessions(sessions, query, this.sortMode, "all", matches));
+		}
+		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1));
+		this.onResultsChanged?.();
+	}
+
+	private setFlatList(sessions: SessionInfo[]): void {
+		this.filteredSessions = sessions.map((session) => ({
+			session,
+			depth: 0,
+			isLast: true,
+			ancestorContinues: [],
+		}));
 	}
 
 	private setConfirmingDeletePath(path: string | null): void {
@@ -412,7 +462,9 @@ class SessionList implements Component, Focusable {
 
 		if (this.filteredSessions.length === 0) {
 			let emptyMessage: string;
-			if (this.nameFilter === "named") {
+			if (this.regexSearchNote) {
+				emptyMessage = this.regexSearchNote;
+			} else if (this.nameFilter === "named") {
 				const toggleKey = keyText("app.session.toggleNamedFilter");
 				if (this.showCwd) {
 					emptyMessage = `  No named sessions found. Press ${toggleKey} to show all.`;
@@ -782,6 +834,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		);
 
 		this.buildBaseLayout(this.sessionList);
+		this.sessionList.onResultsChanged = () => this.requestRender();
 
 		this.renameInput.onSubmit = (value) => {
 			void this.confirmRename(value);

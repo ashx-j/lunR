@@ -1,6 +1,6 @@
 import type { AgentToolResult, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
-import { checkSync } from "recheck";
+import { searchTexts } from "../../utils/regex-worker.ts";
 import type { McpExtensionState } from "./state.ts";
 import type { ToolMetadata, McpContent } from "./types.ts";
 import { getServerPrefix, parseUiPromptHandoff } from "./types.ts";
@@ -16,11 +16,8 @@ import { supportsOAuth } from "./mcp-auth-flow.ts";
 type ProxyToolResult = AgentToolResult<Record<string, unknown>>;
 
 const MAX_REGEX_SEARCH_QUERY_LENGTH = 256;
-const REGEX_SAFETY_CHECK_PARAMS = {
-  attackTimeout: 50,
-  incubationTimeout: 50,
-  timeout: 250,
-} as const;
+/** Hard limit for one regex search over every tool name and description. */
+const REGEX_SEARCH_TIMEOUT_MS = 100;
 
 type AutoAuthResult =
   | { status: "skipped" }
@@ -358,13 +355,13 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
   };
 }
 
-export function executeSearch(
+export async function executeSearch(
   state: McpExtensionState,
   query: string,
   regex?: boolean,
   server?: string,
   includeSchemas?: boolean,
-): ProxyToolResult {
+): Promise<ProxyToolResult> {
   const showSchemas = includeSchemas !== false;
 
   const matches: Array<{ server: string; tool: ToolMetadata }> = [];
@@ -379,23 +376,8 @@ export function executeSearch(
         };
       }
 
+      // Compiles only, to report a syntax error; matching runs in the regex worker.
       pattern = new RegExp(query, "i");
-      let safety;
-      try {
-        safety = checkSync(query, "i", REGEX_SAFETY_CHECK_PARAMS);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: "text" as const, text: "Regex query rejected because safety analysis failed." }],
-          details: { mode: "search", error: "unsafe_pattern", query, reason: message },
-        };
-      }
-      if (safety.status !== "safe") {
-        return {
-          content: [{ type: "text" as const, text: `Regex query rejected as unsafe (${safety.status}).` }],
-          details: { mode: "search", error: "unsafe_pattern", query, safetyStatus: safety.status },
-        };
-      }
     } else {
       const terms = query.trim().split(/\s+/).filter(t => t.length > 0);
       if (terms.length === 0) {
@@ -414,16 +396,29 @@ export function executeSearch(
     };
   }
 
+  const candidates: Array<{ server: string; tool: ToolMetadata }> = [];
   for (const [serverName, metadata] of state.toolMetadata.entries()) {
     if (server && serverName !== server) continue;
-    for (const tool of metadata) {
-      if (pattern.test(tool.name) || pattern.test(tool.description)) {
-        matches.push({
-          server: serverName,
-          tool,
-        });
-      }
+    for (const tool of metadata) candidates.push({ server: serverName, tool });
+  }
+  if (regex) {
+    const found = await searchTexts(query, "i", candidates.flatMap(({ tool }) => [tool.name, tool.description]), REGEX_SEARCH_TIMEOUT_MS);
+    if (found.kind === "timeout") {
+      return {
+        content: [{ type: "text" as const, text: `Regex query stopped after ${REGEX_SEARCH_TIMEOUT_MS} ms; simplify the pattern.` }],
+        details: { mode: "search", error: "unsafe_pattern", query, timeoutMs: REGEX_SEARCH_TIMEOUT_MS },
+      };
     }
+    if (found.kind === "unavailable") {
+      return {
+        content: [{ type: "text" as const, text: `Regex search is unavailable: ${found.reason}. Retry, or search without regex.` }],
+        details: { mode: "search", error: "regex_unavailable", query, reason: found.reason },
+      };
+    }
+    const { indexes } = found;
+    matches.push(...candidates.filter((_, index) => indexes[index * 2] >= 0 || indexes[index * 2 + 1] >= 0));
+  } else {
+    matches.push(...candidates.filter(({ tool }) => pattern.test(tool.name) || pattern.test(tool.description)));
   }
 
   const totalCount = matches.length;
