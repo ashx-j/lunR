@@ -32,7 +32,7 @@ import {
   isWriteToolResult,
   isEditToolResult,
 } from "../../../core/extensions/types.js";
-import { DiagnosticSeverity } from "vscode-languageserver-protocol";
+import { DiagnosticSeverity, type Diagnostic } from "vscode-languageserver-protocol";
 
 import type { WorkspaceProvider } from "./workspace-provider.js";
 import { LspRuntimeHost, type LspRuntimeBindOptions, type LspRuntimeCallbacks } from "./runtime.js";
@@ -51,7 +51,8 @@ import { syntheticDotLocks } from "./tools/completions.js";
 import { relative } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DIAGNOSTIC_SETTLE_DELAY_MS } from "./shared/timing.js";
+import { DIAGNOSTIC_WAIT_CAP_MS } from "./shared/timing.js";
+import { LateDiagnostics } from "./late-diagnostics.js";
 
 /**
  * Project-level LSP config — loaded from `.pi-lsp.json` in the workspace root.
@@ -139,8 +140,28 @@ function registerToolWithRuntime<T extends TSchema, D>(pi: ExtensionAPI, tool: T
   });
 }
 
+/** Compact summary of a file's errors (at most 10 lines), or undefined when it has none. */
+function formatErrors(relPath: string, diagnostics: Diagnostic[]): string | undefined {
+  const errors = diagnostics.filter((d) => d.severity === DiagnosticSeverity.Error);
+  if (errors.length === 0) return undefined;
+  const lines = errors.slice(0, 10).map((d) => {
+    const line = d.range.start.line + 1;
+    const col = d.range.start.character + 1;
+    const source = d.source ? ` [${d.source}]` : "";
+    return `${relPath}:${line}:${col} error: ${d.message}${source}`;
+  });
+  if (errors.length > 10) {
+    lines.push(`... and ${errors.length - 10} more error(s)`);
+  }
+  return `\n\n⚠ LSP: ${errors.length} error(s) in ${relPath}:\n${lines.join("\n")}`;
+}
+
 export default function lspExtension(pi: ExtensionAPI) {
   const host = new LspRuntimeHost();
+  // Edit diagnostics that missed their wait. A later tool result carries them if no file changed since.
+  const lateDiagnostics = new LateDiagnostics();
+  // Each reason diagnostics are unavailable is said once per language.
+  const reportedUnavailable = new Set<string>();
   let pendingProvider: WorkspaceProvider | null = null;
   let latestCtx: any = null;
   let projectConfig: ProjectLspConfig | null = null;
@@ -262,6 +283,7 @@ export default function lspExtension(pi: ExtensionAPI) {
   // session_start binds cwd/config only. Heavy managers load on first use,
   // unless autoStart is configured (then ensure + startEagerly).
   pi.on("session_start", async (_event, ctx) => {
+    lateDiagnostics.clear();
     latestCtx = ctx;
     sessionCwd = ctx.cwd;
 
@@ -346,6 +368,7 @@ export default function lspExtension(pi: ExtensionAPI) {
   // when LSP was never used. Writes may start a server (existing behavior) so they
   // ensure runtime. After writes/edits, append file-scoped error diagnostics.
   pi.on("tool_result", async (event) => {
+    lateDiagnostics.noteToolResult(event.toolName);
     const generation = host.getGeneration();
     try {
       if (isReadToolResult(event) && !event.isError) {
@@ -370,55 +393,57 @@ export default function lspExtension(pi: ExtensionAPI) {
     }
 
     if (host.getGeneration() !== generation) return;
+    const notes: string[] = [];
     // Auto-append diagnostics for the changed file (write/edit only)
     const services = host.getServicesIfReady();
-    if ((isWriteToolResult(event) || isEditToolResult(event)) && !event.isError && services) {
-      const path = (event.input as any)?.path;
-      if (!path) return;
+    const input = (isWriteToolResult(event) || isEditToolResult(event)) && !event.isError ? event.input.path : undefined;
+    const path = typeof input === "string" && input ? input : undefined;
+    const manager = services?.manager;
+    const languageId = path ? manager?.getLanguageId(path) : undefined;
+    const inject = projectConfig?.autoInjectDiagnostics;
+    const client = manager && languageId && inject !== false && (!Array.isArray(inject) || inject.includes(languageId))
+      ? manager.getRunningClient(languageId)
+      : undefined;
+    const uri = manager && path ? manager.getFileUri(path) : undefined;
+    for (const late of lateDiagnostics.take()) {
+      const summary = formatErrors(late.relPath, late.diagnostics);
+      if (summary) notes.push(summary);
+    }
 
-      const manager = services.manager;
-      const languageId = manager.getLanguageId(path);
-      if (!languageId) return;
-
-      // Check autoInjectDiagnostics config
-      const inject = projectConfig?.autoInjectDiagnostics;
-      if (inject === false) return;
-      if (Array.isArray(inject) && !inject.includes(languageId)) return;
-
-      const client = manager.getRunningClient(languageId);
-      if (!client) return;
-
-      // Wait briefly for the LSP to publish updated diagnostics
-      await new Promise((r) => setTimeout(r, DIAGNOSTIC_SETTLE_DELAY_MS));
+    if (manager && client && languageId && path && uri) {
+      // Wait for the diagnostics of the version this edit sent, never an older version's.
+      const settled = client.diagnosticsForSentVersion(uri);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const result = await Promise.race([
+        settled,
+        new Promise<"pending">((resolve) => (timer = setTimeout(resolve, DIAGNOSTIC_WAIT_CAP_MS, "pending"))),
+      ]);
+      clearTimeout(timer);
       if (host.getGeneration() !== generation) return;
 
-      const uri = manager.getFileUri(path);
-      const diagnostics = client.getDiagnostics(uri);
-      const errors = diagnostics.filter((d) => d.severity === DiagnosticSeverity.Error);
-
-      if (errors.length === 0) return;
-
-      // Build a compact summary — just errors, max 10 lines
       const relPath = relative(manager.resolvePath("."), manager.resolvePath(path));
-      const lines = errors.slice(0, 10).map((d) => {
-        const line = d.range.start.line + 1;
-        const col = d.range.start.character + 1;
-        const source = d.source ? ` [${d.source}]` : "";
-        return `${relPath}:${line}:${col} error: ${d.message}${source}`;
-      });
-      if (errors.length > 10) {
-        lines.push(`... and ${errors.length - 10} more error(s)`);
+      if (result === "pending") {
+        lateDiagnostics.add(uri, relPath, settled.then((late) => (late.kind === "ready" ? late.diagnostics : undefined)));
+        notes.push(`\n\nLSP: diagnostics for ${relPath} were not ready in time.`);
+      } else if (result.kind === "ready") {
+        const summary = formatErrors(relPath, result.diagnostics);
+        if (summary) notes.push(summary);
+      } else if (result.kind === "unavailable" && !result.lasting) {
+        notes.push(`\n\nLSP: diagnostics for ${relPath} are unavailable for this edit: ${result.reason}.`);
+      } else if (result.kind === "unavailable" && !reportedUnavailable.has(`${languageId}:${result.reason}`)) {
+        // A lasting reason is said once; later edits of this language show nothing.
+        reportedUnavailable.add(`${languageId}:${result.reason}`);
+        notes.push(`\n\nLSP: ${languageId} diagnostics are unavailable after edits: ${result.reason}.`);
       }
-
-      const summary = `\n\n⚠ LSP: ${errors.length} error(s) in ${relPath}:\n${lines.join("\n")}`;
-
-      return {
-        content: [
-          ...event.content,
-          { type: "text" as const, text: summary },
-        ],
-      };
     }
+
+    if (notes.length === 0) return;
+    return {
+      content: [
+        ...event.content,
+        { type: "text" as const, text: notes.join("") },
+      ],
+    };
   });
 
   // Update status after tool execution ends
@@ -599,6 +624,11 @@ export default function lspExtension(pi: ExtensionAPI) {
   });
 
   // Clean shutdown — never loads heavy modules if they were unused
+  // A new turn may follow edits by the user, so an old answer could be wrong.
+  pi.on("agent_end", async () => {
+    lateDiagnostics.clear();
+  });
+
   pi.on("session_shutdown", async () => {
     // Drop the captured ctx immediately — once shutdown fires, any late
     // LSP manager callback that reaches setLspStatus/applyProvider would

@@ -40,6 +40,19 @@ Session replacement invalidates pending initialization. MCP cancels initializati
 and closes partially connected state. LSP drops stale write diagnostics. Web
 requests and curator callbacks cannot publish into a replacement session.
 
+After an edit or write, the LSP diagnostics hook shows only diagnostics for the
+version that edit sent, and waits at most 500 ms. typescript-language-server
+publishes without a version, so lunR asks tsserver through
+`typescript.tsserverRequest` (4.4.0 and newer); tsserver's request queue keeps it
+behind the change. Other servers count only a publish that carries the sent
+version. A server that publishes without one, such as typescript-language-server
+before 4.4.0, gets one "unavailable" note and no waits after that. So does a dead
+tsserver. An answer that misses the wait goes out with a later tool result only
+if no tool that can change files ran since (`late-diagnostics.ts`), and
+`agent_end` drops it. While tsserver loads a project and on a 6,000-line file,
+edits get "not ready in time". This path needs a `typescript` with
+`lib/tsserver.js` (TypeScript 7 has none) in the workspace.
+
 The Node bundle enables Node's compile cache (`<agent dir>/compile-cache`) only
 for non-interactive launches (`-p`, json, rpc, acp, `--help`, subcommands). On
 Linux it cut a one-turn print run by about 170 ms, but it delayed the interactive
