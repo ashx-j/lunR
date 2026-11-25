@@ -241,6 +241,7 @@ import {
 	type SmoothStreamingOptions,
 	sliceMessageContent,
 } from "./smooth-streaming.ts";
+import { logStrayOutput } from "./stray-output.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -605,7 +606,7 @@ export class InteractiveMode {
 			this.permissions.syncPermissionModeEffects(mode);
 		});
 		this.version = VERSION;
-		this.ui = options.startupView?.ui ?? new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
+		this.ui = options.startupView?.ui ?? this.createTui();
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.ui.setFocusReporting(this.settingsManager.getAttentionNotification() !== "off");
 
@@ -2288,6 +2289,13 @@ export class InteractiveMode {
 					reject(err);
 				});
 		});
+	}
+
+	/** The TUI for a launch without a startup view, which already made its own the same way. */
+	private createTui(): TUI {
+		const terminal = new ProcessTerminal();
+		terminal.setStrayOutputHandler(logStrayOutput);
+		return new TUI(terminal, this.settingsManager.getShowHardwareCursor());
 	}
 
 	/**

@@ -180,6 +180,8 @@ export default function (pi: ExtensionAPI) {
 
 Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript works without compilation.
 
+In the interactive TUI, anything an extension writes with `console.log` or `console.error` goes to `lunr-debug.log` in the agent folder (`~/.lunr/agent/`), not the screen; use `ctx.ui.notify` to show the user a message. Print, json, rpc and ACP modes still write it to stdout and stderr.
+
 If the factory returns a `Promise`, lunR awaits it before continuing startup. That means async initialization completes before `session_start`, before `resources_discover`, and before provider registrations queued via `pi.registerProvider()` are flushed.
 
 ### Async factory functions
@@ -678,7 +680,7 @@ This hook can rewrite provider-level system instructions or remove them entirely
 
 ```typescript
 pi.on("before_provider_request", (event, ctx) => {
-  console.log(JSON.stringify(event.payload, null, 2));
+  console.log(JSON.stringify(event.payload, null, 2)); // lunr-debug.log in the TUI
 
   // Optional: replace payload
   // return { ...event.payload, temperature: 0 };
@@ -696,7 +698,7 @@ pi.on("after_provider_response", (event, ctx) => {
   // event.status - HTTP status code
   // event.headers - normalized response headers
   if (event.status === 429) {
-    console.log("rate limited", event.headers["retry-after"]);
+    ctx.ui.notify(`Rate limited, retry after ${event.headers["retry-after"]}s`, "warning");
   }
 });
 ```
@@ -779,7 +781,7 @@ pi.on("tool_call", async (event, ctx) => {
 
   if (isToolCallEventType("read", event)) {
     // event.input is { path: string; offset?: number; limit?: number }
-    console.log(`Reading: ${event.input.path}`);
+    ctx.ui.notify(`Reading: ${event.input.path}`, "info");
   }
 });
 ```
@@ -1077,7 +1079,7 @@ Returns lunR's current system prompt string.
 ```typescript
 pi.on("before_agent_start", (event, ctx) => {
   const prompt = ctx.getSystemPrompt();
-  console.log(`System prompt length: ${prompt.length}`);
+  ctx.ui.notify(`System prompt length: ${prompt.length}`, "info");
 });
 ```
 
@@ -1440,7 +1442,7 @@ Get the current session name, if set.
 ```typescript
 const name = pi.getSessionName();
 if (name) {
-  console.log(`Session: ${name}`);
+  console.log(`Session: ${name}`); // lunr-debug.log in the TUI
 }
 ```
 

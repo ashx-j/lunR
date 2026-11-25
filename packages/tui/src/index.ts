@@ -81,7 +81,7 @@ export {
 // Input buffering for batch splitting
 export { StdinBuffer, type StdinBufferEventMap, type StdinBufferOptions } from "./stdin-buffer.ts";
 // Terminal interface and implementations
-export { ProcessTerminal, type Terminal } from "./terminal.ts";
+export { ProcessTerminal, type StrayOutputHandler, type Terminal, writeTerminalOutput } from "./terminal.ts";
 // Terminal colors
 export {
 	parseOsc11BackgroundColor,

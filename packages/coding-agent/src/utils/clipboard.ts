@@ -1,3 +1,4 @@
+import { writeTerminalOutput } from "@earendil-works/pi-tui";
 import { execSync, spawn } from "child_process";
 import { platform } from "os";
 import { isWaylandSession } from "./clipboard-image.ts";
@@ -28,7 +29,7 @@ function emitOsc52(text: string): boolean {
 	if (encoded.length > MAX_OSC52_ENCODED_LENGTH) {
 		return false;
 	}
-	process.stdout.write(`\x1b]52;c;${encoded}\x07`);
+	writeTerminalOutput(`\x1b]52;c;${encoded}\x07`);
 	return true;
 }
 

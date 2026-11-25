@@ -20,6 +20,7 @@ vi.mock("@earendil-works/pi-tui", async (original) => {
 				super(100, 30);
 				terminal.screen = this;
 			}
+			setStrayOutputHandler() {}
 			start(input: (data: string) => void, resize: () => void) {
 				super.start(input, resize);
 				terminal.starts++;
