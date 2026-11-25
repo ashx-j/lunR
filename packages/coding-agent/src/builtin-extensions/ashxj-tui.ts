@@ -796,9 +796,13 @@ export function renderStatsLine(
 		parts.push(color(theme, "white", `\u2191${formatCount(totals.input)} \u2193${formatCount(totals.output)}`)); // lunr: theme-polish — token totals white (was dim)
 	}
 
-	// 4) Latest prompt cache hit rate (gated on footerCacheHitRate).
+	// 4) Latest prompt cache hit rate (gated on footerCacheHitRate). Labeled `cache`; when that makes
+	// the line too wide it falls back to the old `CH` before anything is truncated.
+	let shortCacheSegment: string | undefined;
 	if (footerToggles.cacheHitRate && totals.cacheActivity && totals.latestCacheHitRate !== undefined) {
-		parts.push(color(theme, "white", `CH${totals.latestCacheHitRate.toFixed(1)}%`));
+		const rate = `${totals.latestCacheHitRate.toFixed(1)}%`;
+		parts.push(color(theme, "white", `cache ${rate}`));
+		shortCacheSegment = color(theme, "white", `CH${rate}`);
 	}
 
 	// lunr: cost/usage counter segment removed entirely (both the $x.xxx dollar
@@ -806,6 +810,10 @@ export function renderStatsLine(
 	// providers). Segments 1-3 (statuses, context, tokens) remain.
 
 	let line = parts.join(sep);
+	if (shortCacheSegment && displayWidth(line) > width) {
+		parts[parts.length - 1] = shortCacheSegment;
+		line = parts.join(sep);
+	}
 	if (displayWidth(line) > width) {
 		line = truncateToWidth(line, width, "");
 	}

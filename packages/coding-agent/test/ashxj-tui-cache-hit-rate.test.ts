@@ -4,9 +4,9 @@ import { renderStatsLine } from "../src/builtin-extensions/ashxj-tui.ts";
 const CUSTOMIZE_SYMBOL = Symbol.for("@lunr/customize");
 let previousBridge: unknown;
 
-function renderCacheHitRate(entries: unknown[]): string {
+function renderCacheHitRate(entries: unknown[], width = 120): string {
 	return renderStatsLine(
-		120,
+		width,
 		{
 			model: undefined,
 			sessionManager: { getEntries: () => entries },
@@ -48,7 +48,22 @@ describe("ashxj-tui cache hit rate", () => {
 			},
 		]);
 
-		expect(footer).toContain("CH16.7%");
+		expect(footer).toContain("cache 16.7%");
+	});
+
+	it("falls back to the short CH label when the labeled line does not fit", () => {
+		const entries = [
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					usage: { input: 100, output: 10, cacheRead: 25, cacheWrite: 25, cost: { total: 0 } },
+				},
+			},
+		];
+		// "12%/200k | ↑100 ↓10 | CH16.7%" is 30 columns; the labeled form is 34.
+		expect(renderCacheHitRate(entries, 34)).toContain("cache 16.7%");
+		expect(renderCacheHitRate(entries, 30)).toContain("CH16.7%");
 	});
 
 	it("hides the rate when cache usage is unavailable", () => {
@@ -62,7 +77,7 @@ describe("ashxj-tui cache hit rate", () => {
 			},
 		]);
 
-		expect(footer).not.toContain("CH");
+		expect(footer).not.toMatch(/cache|CH/);
 	});
 
 	it("hides the rate when the footer setting is disabled", () => {
@@ -77,6 +92,6 @@ describe("ashxj-tui cache hit rate", () => {
 			},
 		]);
 
-		expect(footer).not.toContain("CH");
+		expect(footer).not.toMatch(/cache|CH/);
 	});
 });

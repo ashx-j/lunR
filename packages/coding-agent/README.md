@@ -131,7 +131,7 @@ The interface from top to bottom:
 - **Startup header** - Shows shortcuts (`/hotkeys` for all), loaded AGENTS.md files, prompt templates, skills, and extensions
 - **Messages** - Your messages, assistant responses, tool calls and results, notifications, errors, and extension UI
 - **Editor** - Where you type; border color indicates thinking level
-- **Footer** - Permission mode with plan and goal status, TPS, MCP and LSP status, git branch with changed lines, subscription plan usage, context usage, token totals, and cache hit rate. Customize its segments under `/settings` → Customize. The current model and thinking level are on the editor's border.
+- **Footer** - Permission mode with plan and goal status, TPS, MCP and LSP status, git branch with changed lines, subscription plan usage, context usage, token totals, and cache hit rate (`cache 99.7%`, the share of the last request's prompt read from the prompt cache). Customize its segments under `/settings` → Customize. The current model and thinking level are on the editor's border.
 
 The editor can be temporarily replaced by other UI, like built-in `/settings` or custom UI from extensions. [Extensions](#extensions) can also replace the editor, add widgets above/below it, a status line, custom footer, or overlays.
 
@@ -524,7 +524,7 @@ lunr [options] [@files...] [messages...]
 lunr setup                         # Install Chromium and configure optional features
 lunr browser install               # Repair missing Chromium after a skipped/failed install
 lunr features [list|enable|disable]
-lunr doctor                        # Check logins, default model, catalog, browser, Claude Code and gateway
+lunr doctor                        # Check version, logins, default model, catalog, browser, Claude Code and gateway
 lunr doctor keys                   # Test whether Shift+Enter, Alt+Enter and image paste reach lunR
 lunr gateway […]                   # Chat gateway daemon (requires chat-platforms feature)
 lunr uninstall [--purge]           # Print the npm removal command; --purge also deletes ~/.lunr/agent
