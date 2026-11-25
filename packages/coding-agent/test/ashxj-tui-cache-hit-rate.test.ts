@@ -4,12 +4,16 @@ import { renderStatsLine } from "../src/builtin-extensions/ashxj-tui.ts";
 const CUSTOMIZE_SYMBOL = Symbol.for("@lunr/customize");
 let previousBridge: unknown;
 
-function renderCacheHitRate(entries: unknown[]): string {
+function renderCacheHitRate(
+	entries: unknown[],
+	width = 120,
+	sessionManager: { getEntries: () => unknown[] } = { getEntries: () => entries },
+): string {
 	return renderStatsLine(
-		120,
+		width,
 		{
 			model: undefined,
-			sessionManager: { getEntries: () => entries },
+			sessionManager,
 			getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
 		} as Parameters<typeof renderStatsLine>[1],
 		{ fg: (_token, text) => text } as Parameters<typeof renderStatsLine>[2],
@@ -48,7 +52,29 @@ describe("ashxj-tui cache hit rate", () => {
 			},
 		]);
 
-		expect(footer).toContain("CH16.7%");
+		expect(footer).toContain("cache 16.7%");
+	});
+
+	it("picks one label per width from the widest line, so growing counts never flip it", () => {
+		const usage = (input: number, output: number) => [
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					usage: { input, output, cacheRead: 25, cacheWrite: 25, cost: { total: 0 } },
+				},
+			},
+		];
+		(globalThis as Record<symbol, unknown>)[CUSTOMIZE_SYMBOL] = { getFooterTokens: () => true };
+		let entries = usage(100, 10);
+		const session = { getEntries: () => entries };
+		// Widest line: "no model · /login | ↑999k ↓999k | cache 100.0%" is 46 columns.
+		expect(renderCacheHitRate(entries, 46, session)).toContain("cache 16.7%");
+		expect(renderCacheHitRate(entries, 45, session)).toContain("CH16.7%");
+		entries = usage(400_000, 300_000);
+		expect(renderCacheHitRate(entries, 46, session)).toContain("↑400k ↓300k | cache 0.0%");
+		entries = usage(100, 10);
+		expect(renderCacheHitRate(entries, 45, session)).toContain("CH16.7%");
 	});
 
 	it("hides the rate when cache usage is unavailable", () => {
@@ -62,7 +88,7 @@ describe("ashxj-tui cache hit rate", () => {
 			},
 		]);
 
-		expect(footer).not.toContain("CH");
+		expect(footer).not.toMatch(/cache|CH/);
 	});
 
 	it("hides the rate when the footer setting is disabled", () => {
@@ -77,6 +103,6 @@ describe("ashxj-tui cache hit rate", () => {
 			},
 		]);
 
-		expect(footer).not.toContain("CH");
+		expect(footer).not.toMatch(/cache|CH/);
 	});
 });

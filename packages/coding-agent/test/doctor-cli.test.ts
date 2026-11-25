@@ -6,6 +6,7 @@ import {
 	checkDefaultModel,
 	checkNode,
 	checkTerminal,
+	checkVersion,
 	collectDoctorChecks,
 	formatDoctorReport,
 } from "../src/cli/doctor-cli.ts";
@@ -109,6 +110,17 @@ describe("lunr doctor", () => {
 			status: "ok",
 			note: "Claude Code signs in to your Claude account. Check that account for usage and any extra charges.",
 		});
+	it("tells a checkout behind npm from an install behind npm", () => {
+		expect(checkVersion("0.2.39", "0.2.40", false, "@ashx-j/lunr")).toMatchObject({
+			status: "warn",
+			detail: "this checkout is 0.2.39; @ashx-j/lunr 0.2.40 is published",
+		});
+		expect(checkVersion("0.2.39", "0.2.40", true, "@ashx-j/lunr")).toMatchObject({
+			status: "warn",
+			fix: "Run lunr update.",
+		});
+		expect(checkVersion("0.2.40", "0.2.40", true, "@ashx-j/lunr")).toMatchObject({ status: "ok" });
+		expect(checkVersion("0.2.40", undefined, true, "@ashx-j/lunr")).toMatchObject({ status: "ok" });
 	});
 
 	it("never prints saved API keys", async () => {
