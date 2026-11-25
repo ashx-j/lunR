@@ -41,6 +41,8 @@ jobs:
 
       - name: Install fd and ripgrep
         if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
         run: brew install fd ripgrep
 
       - name: Install fd and ripgrep

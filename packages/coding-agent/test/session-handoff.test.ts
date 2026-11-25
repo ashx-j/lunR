@@ -252,15 +252,16 @@ describe("exclusive session ownership and handoff", () => {
 		expect(retry.buildSessionContext().messages).toHaveLength(1);
 	});
 
-	// Product bug on Windows: SessionOwnership lowercases the session path (canonicalSessionPath) and
-	// creates and renames files through it, so the file on disk gets a lowercased name. See PR #320.
-	it.skipIf(process.platform === "win32")("does not prune another runtime's owned session", async () => {
+	it("does not prune another runtime's owned session", async () => {
 		const manager = saved();
 		const file = manager.getSessionFile()!;
 		const now = Date.now() + 10 * 24 * 60 * 60 * 1000;
 		expect((await pruneOldSessions(join(directory, "custom"), 1, { now })).deleted).toEqual([]);
 		manager.dispose();
-		expect((await pruneOldSessions(join(directory, "custom"), 1, { now })).deleted).toEqual([file]);
+		// Windows: SessionOwnership writes the file under a lowercased name (a product bug listed in PR #320).
+		const deleted = (await pruneOldSessions(join(directory, "custom"), 1, { now })).deleted;
+		const fold = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
+		expect(deleted.map(fold)).toEqual([fold(file)]);
 	});
 
 	it("cancels an accepted request before its owner commits release", async () => {

@@ -1,4 +1,7 @@
 import type { ChildProcessByStdio } from "node:child_process";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnProcess, waitForChildProcess } from "../../../src/utils/child-process.ts";
@@ -17,13 +20,13 @@ import { spawnProcess, waitForChildProcess } from "../../../src/utils/child-proc
  * reading while a genuinely idle held-open handle still releases after the
  * grace elapses. Both behaviours are covered below.
  */
-// On macOS CI runners only HEAD and at most TICK1 arrive: the ticks come more than the 100 ms grace apart.
-// Unconfirmed whether that is runner load or a grace too short for macOS; listed in the CI PR (#320).
-const skipped = process.platform === "win32" || process.platform === "darwin";
-describe.skipIf(skipped)("issue #5303 bash output truncation past exit", () => {
+describe.skipIf(process.platform === "win32")("issue #5303 bash output truncation past exit", () => {
 	let child: ChildProcessByStdio<null, Readable, Readable> | undefined;
 
+	const ready = join(tmpdir(), `pi-5303-${process.pid}.ready`);
+
 	afterEach(() => {
+		rmSync(ready, { force: true });
 		if (child?.pid) {
 			try {
 				process.kill(-child.pid, "SIGKILL");
@@ -35,9 +38,11 @@ describe.skipIf(skipped)("issue #5303 bash output truncation past exit", () => {
 	});
 
 	it("captures output emitted after exit while a detached child holds stdout open", async () => {
-		// The shell exits immediately, but a backgrounded subshell keeps the stdout
-		// pipe open and emits ticks every 50ms, the last well past the 100ms grace.
-		const command = 'printf "HEAD\\n"; ( for i in 1 2 3 4 5 6; do sleep 0.05; printf "TICK$i\\n"; done ) &';
+		// The shell exits as soon as a backgrounded node ticker is running. The ticker keeps the stdout
+		// pipe open and writes every 40 ms, the last well past the 100 ms grace. One process for all
+		// ticks: forking `sleep` per tick put the gaps past 100 ms on loaded macOS runners.
+		const ticker = `require("fs").writeFileSync(${JSON.stringify(ready)}, ""); let i = 0; const t = setInterval(() => { process.stdout.write("TICK" + ++i + "\\n"); if (i === 8) clearInterval(t); }, 40);`;
+		const command = `"${process.execPath}" -e '${ticker}' & until [ -e "${ready}" ]; do sleep 0.01; done; printf "HEAD\\n"`;
 		child = spawnProcess("/bin/sh", ["-c", command], {
 			stdio: ["ignore", "pipe", "pipe"],
 			detached: true,
@@ -52,7 +57,7 @@ describe.skipIf(skipped)("issue #5303 bash output truncation past exit", () => {
 
 		expect(exitCode).toBe(0);
 		expect(output).toContain("HEAD");
-		expect(output).toContain("TICK6");
+		expect(output).toContain("TICK8");
 	});
 
 	it("resolves promptly when a detached child holds stdout open but stays quiet", async () => {
