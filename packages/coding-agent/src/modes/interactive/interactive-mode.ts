@@ -4833,15 +4833,10 @@ export class InteractiveMode {
 		this.footerDataProvider.setAvailableProviderCount(uniqueProviders.size);
 	}
 
-	// Called only after a login, once per session: a notice on every launch or model switch was noise.
-	// `lunr doctor` repeats it for a Claude Code login.
-	private async maybeWarnAboutAnthropicSubscriptionAuth(
-		model: Model<Api> | undefined = this.session.model,
-	): Promise<void> {
-		if (this.anthropicSubscriptionWarningShown) {
-			return;
-		}
-		if (!model || model.provider !== "anthropic") {
+	// Called only after a login to `providerId`, once per session: a notice on every launch or model
+	// switch was noise. `lunr doctor` repeats it for a Claude Code login.
+	private async maybeWarnAboutAnthropicSubscriptionAuth(providerId: string): Promise<void> {
+		if (this.anthropicSubscriptionWarningShown || providerId !== "anthropic") {
 			return;
 		}
 
@@ -4851,7 +4846,7 @@ export class InteractiveMode {
 				this.showWarning(ANTHROPIC_SUBSCRIPTION_AUTH_WARNING);
 				return;
 			}
-			const apiKey = (await this.session.modelRuntime.getAuth(model.provider))?.auth.apiKey;
+			const apiKey = (await this.session.modelRuntime.getAuth(providerId))?.auth.apiKey;
 			if (!isAnthropicSubscriptionAuthKey(apiKey)) {
 				return;
 			}
@@ -5220,7 +5215,8 @@ export class InteractiveMode {
 			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
 			showExtensionInput: (title, placeholder) => this.showExtensionInput(title, placeholder),
 			requestRender: () => this.ui.requestRender(),
-			maybeWarnAboutAnthropicSubscriptionAuth: (model) => this.maybeWarnAboutAnthropicSubscriptionAuth(model),
+			maybeWarnAboutAnthropicSubscriptionAuth: (providerId) =>
+				this.maybeWarnAboutAnthropicSubscriptionAuth(providerId),
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),

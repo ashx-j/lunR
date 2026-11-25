@@ -24,7 +24,10 @@ export interface DoctorCheck {
 	status: DoctorStatus;
 	label: string;
 	detail: string;
+	/** What to do about a warn or fail. */
 	fix?: string;
+	/** Information worth keeping that is not a fix, printed the same way. */
+	note?: string;
 }
 
 const MIN_NODE = [22, 19] as const;
@@ -85,7 +88,8 @@ export function formatDoctorReport(checks: DoctorCheck[]): string {
 	const lines = [`lunR ${VERSION} doctor`, ""];
 	for (const check of checks) {
 		lines.push(`${mark[check.status]} ${chalk.bold(check.label)}: ${check.detail}`);
-		if (check.fix) lines.push(`  ${chalk.dim(check.fix)}`);
+		const hint = check.fix ?? check.note;
+		if (hint) lines.push(`  ${chalk.dim(hint)}`);
 	}
 	const problems = checks.filter((check) => check.status !== "ok").length;
 	lines.push(
@@ -288,7 +292,7 @@ async function checkClaudeCode(
 		status: "ok",
 		label,
 		detail: `Claude Code at ${credential.command}`,
-		fix: "Claude Code signs in to your Claude account. Check that account for usage and any extra charges.",
+		note: "Claude Code signs in to your Claude account. Check that account for usage and any extra charges.",
 	};
 }
 

@@ -10,7 +10,12 @@ const unknownModel = { provider: "unknown", id: "unknown", api: "unknown" } as M
 const claude = (id: string) =>
 	({ provider: "anthropic", id, api: "anthropic-messages" }) as Model<"anthropic-messages">;
 
-async function logIn(available: Model<"anthropic-messages">[], providerId = "anthropic", providerName = "Anthropic") {
+async function logIn(
+	available: Model<"anthropic-messages">[],
+	providerId = "anthropic",
+	providerName = "Anthropic",
+	previousModel: Model<Api> = unknownModel,
+) {
 	const host = {
 		session: { modelRuntime: { getAvailable: async () => available }, setModel: vi.fn(async () => {}) },
 		updateAvailableProviderCount: vi.fn(async () => {}),
@@ -27,7 +32,7 @@ async function logIn(available: Model<"anthropic-messages">[], providerId = "ant
 		providerId,
 		providerName,
 		"oauth",
-		unknownModel,
+		previousModel,
 		{
 			savedNote: "Saved.",
 		},
@@ -52,6 +57,13 @@ describe("model selection after /login", () => {
 		const context = await logIn([model], "nebius", "Nebius");
 		expect(context.session.setModel).toHaveBeenCalledWith(model);
 		expect(context.showError).not.toHaveBeenCalled();
+	});
+
+	it("shows the Claude subscription notice for an Anthropic login while another provider's model is selected", async () => {
+		const gpt = { provider: "openai", id: "gpt-5.5", api: "openai-responses" } as Model<Api>;
+		const context = await logIn([claude("claude-sonnet-5")], "anthropic", "Anthropic", gpt);
+		expect(context.session.setModel).not.toHaveBeenCalled();
+		expect(context.maybeWarnAboutAnthropicSubscriptionAuth).toHaveBeenCalledWith("anthropic");
 	});
 
 	it("still prefers the provider default when it is offered", async () => {

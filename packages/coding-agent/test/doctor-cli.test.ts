@@ -107,7 +107,7 @@ describe("lunr doctor", () => {
 
 		expect(checks.find((check) => check.label === "Claude subscription")).toMatchObject({
 			status: "ok",
-			fix: "Claude Code signs in to your Claude account. Check that account for usage and any extra charges.",
+			note: "Claude Code signs in to your Claude account. Check that account for usage and any extra charges.",
 		});
 	});
 
