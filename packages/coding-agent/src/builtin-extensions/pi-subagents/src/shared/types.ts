@@ -335,7 +335,8 @@ export interface SteeringStatus {
 
 export interface SteerActionTarget {
 	index: number;
-	state: SteeringTargetState;
+	// "pending" when the steer action returns before the child acknowledged it.
+	state: SteeringTargetState | "pending";
 	deliveredAt?: number;
 	lateDeliveredAt?: number;
 	reason?: string;

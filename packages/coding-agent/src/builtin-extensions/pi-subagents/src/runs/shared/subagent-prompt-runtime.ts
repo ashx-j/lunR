@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -156,19 +155,20 @@ function isSubagentToolCallBlock(block: unknown): boolean {
 	return b?.type === "toolCall" && b.name === "subagent";
 }
 
-function stripAssistantSubagentToolCallBlocks(message: unknown): unknown | undefined {
+function stripAssistantSubagentToolCallBlocks<T>(message: T): T | undefined {
 	const m = message as { role?: string; content?: unknown };
 	if (m?.role !== "assistant" || !Array.isArray(m.content)) return message;
 	const filteredContent = m.content.filter((block) => !isSubagentToolCallBlock(block));
 	if (filteredContent.length === m.content.length) return message;
 	if (filteredContent.length === 0) return undefined;
-	return { ...m, content: filteredContent };
+	// The copy is the same message with fewer content blocks.
+	return { ...m, content: filteredContent } as T;
 }
 
-export function stripParentOnlySubagentMessages(messages: unknown[]): unknown[] {
+export function stripParentOnlySubagentMessages<T>(messages: T[]): T[] {
 	const preserveCurrentFanoutToolHistory = process.env[SUBAGENT_FANOUT_CHILD_ENV] === "1";
 	let changed = false;
-	const filtered: unknown[] = [];
+	const filtered: T[] = [];
 	for (const message of messages) {
 		if (isParentOnlySubagentMessage(message) || (!preserveCurrentFanoutToolHistory && isSubagentToolResultMessage(message))) {
 			changed = true;
@@ -372,14 +372,14 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 		nativeSupervisorFallbackRegistered = true;
 		registerNativeSupervisorClient(pi);
 	};
-	const onRuntimeEvent = pi.on as unknown as (event: string, handler: (event: unknown) => unknown) => void;
-	onRuntimeEvent("session_start", (_event: unknown, ctx: unknown) => {
+	const onRuntimeEvent: ExtensionAPI["on"] = pi.on;
+	onRuntimeEvent("session_start", (_event, ctx) => {
 		const sessionManager = (ctx as { sessionManager?: Parameters<typeof resolveCurrentSessionId>[0] } | undefined)?.sessionManager;
 		waitState.currentSessionId = sessionManager ? resolveCurrentSessionId(sessionManager) : null;
 		registerNativeSupervisorClientOnce();
 		refreshChildToolDiagnostic(pi);
 	});
-	onRuntimeEvent("agent_end", async (_event: unknown, ctx: unknown) => {
+	onRuntimeEvent("agent_end", async (_event, ctx) => {
 		if ((ctx as { hasUI?: boolean } | undefined)?.hasUI === true) return;
 		await drainOutstandingWork({ state: waitState, events: pi.events, hasPendingMessages: () => ctx.hasPendingMessages() });
 	});
@@ -421,13 +421,13 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 		});
 	}
 
-	onRuntimeEvent("context", (event: { messages: unknown[] }) => {
+	onRuntimeEvent("context", (event) => {
 		const messages = stripParentOnlySubagentMessages(event.messages);
 		if (messages === event.messages) return undefined;
 		return { messages };
 	});
 
-	onRuntimeEvent("before_agent_start", async (event: { systemPrompt: string }) => {
+	onRuntimeEvent("before_agent_start", async (event) => {
 		registerNativeSupervisorFallbackOnce();
 		const toolDiagnostic = refreshChildToolDiagnostic(pi);
 		const intercomSessionName = process.env[SUBAGENT_INTERCOM_SESSION_NAME_ENV]?.trim();
