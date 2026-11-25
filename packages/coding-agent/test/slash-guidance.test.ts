@@ -2,7 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { PERMISSION_MODES } from "../src/core/permissions.ts";
 import {
+	buildHelpLines,
 	findUnknownSlashCommand,
 	formatUnknownSlashCommandStatus,
 	INTERACTIVE_BUILTIN_COMMAND_NAMES,
@@ -83,5 +85,14 @@ describe("unknown command status", () => {
 		expect(formatUnknownSlashCommandStatus("x", [])).toBe(
 			"Unknown command /x. Start with a space to send it as a message.",
 		);
+	});
+});
+
+describe("/help", () => {
+	it("names every permission mode, with read-only as read", () => {
+		const modeRow = buildHelpLines({ cyclePermissionMode: "", interrupt: "" }, (title) => title).find((line) =>
+			line.trimStart().startsWith("/mode"),
+		);
+		for (const mode of PERMISSION_MODES) expect(modeRow).toContain(mode === "read-only" ? "read" : mode);
 	});
 });

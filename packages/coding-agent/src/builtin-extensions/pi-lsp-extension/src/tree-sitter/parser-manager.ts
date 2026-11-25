@@ -2,11 +2,15 @@
  * Tree-sitter Parser Manager — loads and caches WASM parsers per language.
  *
  * Uses web-tree-sitter (WASM) so no native compilation is needed.
- * Grammar .wasm files come from the tree-sitter-wasms npm package.
+ * Grammar .wasm files come from the tree-sitter-wasms npm package. The build copies only the
+ * ones mapped below into ./grammars (scripts/copy-tree-sitter-grammars.mjs), and the published
+ * package ships those instead of depending on tree-sitter-wasms.
  */
 
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import Parser from "web-tree-sitter";
 
 const require = createRequire(import.meta.url);
@@ -57,9 +61,11 @@ export class TreeSitterManager {
   private grammarsDir: string;
 
   constructor() {
-    // Use Node's module resolution so this works for local, global, and hoisted installs
-    const wasmsPkgJson = require.resolve("tree-sitter-wasms/package.json");
-    this.grammarsDir = resolve(dirname(wasmsPkgJson), "out");
+    const bundled = fileURLToPath(new URL("./grammars", import.meta.url));
+    // Source runs (tests, tsx) have no copied grammars and use the workspace dev dependency.
+    this.grammarsDir = existsSync(bundled)
+      ? bundled
+      : resolve(dirname(require.resolve("tree-sitter-wasms/package.json")), "out");
   }
 
   /** Initialize web-tree-sitter WASM runtime. Must be called before any parsing. */

@@ -42,6 +42,11 @@ export {
 export const PERMISSION_MODES = ["yolo", "auto", "ask", "read-only"] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
+/** The name the TUI shows and accepts for a mode: read-only is `read` there. */
+export function permissionModeLabel(mode: PermissionMode): string {
+	return mode === "read-only" ? "read" : mode;
+}
+
 export function nextPermissionMode(current: PermissionMode): PermissionMode {
 	const i = PERMISSION_MODES.indexOf(current);
 	return PERMISSION_MODES[(i + 1) % PERMISSION_MODES.length];

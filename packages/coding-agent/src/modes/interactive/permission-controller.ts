@@ -14,7 +14,9 @@ import { nextModeForGoal } from "../../core/permission-mode-control.ts";
 import {
 	type ApprovalResponse,
 	nextPermissionMode,
+	PERMISSION_MODES,
 	type PermissionMode,
+	permissionModeLabel,
 	restorePermissionModeAfterPlan,
 } from "../../core/permissions.ts";
 import { disableRollbackForSession, enableRollbackForSession } from "../../core/rollback.ts";
@@ -120,7 +122,9 @@ export class PermissionModeController {
 		}
 
 		if (sub !== "") {
-			this.host.showStatus("Usage: /mode [yolo|auto|ask|read] — bare /mode opens the selector.");
+			this.host.showStatus(
+				`Usage: /mode [${PERMISSION_MODES.map(permissionModeLabel).join("|")}] — bare /mode opens the selector.`,
+			);
 			return;
 		}
 

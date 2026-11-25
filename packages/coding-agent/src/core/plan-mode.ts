@@ -35,7 +35,10 @@ const SYSTEM_BIN_DIRS = new Set(["/bin", "/usr/bin", "/usr/local/bin", "/opt/hom
 /** Characters after `$` that start an expansion: names, positional and special parameters, `${`, `$(`, `$[`. */
 const DOLLAR_EXPANSION_START = /[A-Za-z0-9_{([@*#?$!-]/;
 
-/** Small allowlist of read-only commands permitted in read-only mode. Everything else is rejected. */
+/**
+ * Allowlist of read-only commands permitted in read-only mode. Everything else is rejected.
+ * It also decides scheduling: bash calls outside it run one after another (`toolCallMutates`).
+ */
 const ALLOWED_COMMANDS = new Set([
 	"ls",
 	"ll",
@@ -83,6 +86,35 @@ const ALLOWED_COMMANDS = new Set([
 	"npm",
 	"pnpm",
 	"bun",
+	// These only read their inputs and print. None has an option that writes a file or runs
+	// a program (checked against GNU coreutils, procps, util-linux and jq 1.8).
+	"sleep",
+	"cut",
+	"tr",
+	"basename",
+	"dirname",
+	"seq",
+	"nl",
+	"rev",
+	"paste",
+	"join",
+	"column",
+	"fold",
+	"od",
+	"hexdump",
+	"strings",
+	"md5sum",
+	"sha1sum",
+	"sha256sum",
+	"sha512sum",
+	"cksum",
+	"expr",
+	"ps",
+	"df",
+	"free",
+	// Checked below: du and jq.
+	"du",
+	"jq",
 ]);
 
 const READ_ONLY_GIT_SUBCOMMANDS = new Set([
@@ -624,6 +656,19 @@ function isMutatingSegment(segment: string): boolean {
 	if (command === "env") {
 		// env may launch any executable or parse a command with -S.
 		return args.length > 0 && !(args.length === 1 && ["--version", "--help", "-0", "--null"].includes(args[0]));
+	}
+	if (command === "du") {
+		// --files0-from opens every file named in another file; the plain forms are enough.
+		// GNU accepts any unambiguous prefix (--f).
+		return args.some((a) => {
+			const option = a.split("=")[0];
+			return option.length >= 3 && "--files0-from".startsWith(option);
+		});
+	}
+	if (command === "jq") {
+		// jq has no in-place option and cannot run programs. --rawfile/--slurpfile read extra
+		// files into the filter, which the plain forms do not need.
+		return args.some((a) => ["--rawfile", "--slurpfile"].includes(a.split("=")[0]));
 	}
 	if (command === "sort") {
 		return args.some((arg) => {

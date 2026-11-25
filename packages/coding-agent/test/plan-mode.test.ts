@@ -90,6 +90,22 @@ describe("isMutatingBashCommand", () => {
 		}
 	});
 
+	// These also run in parallel when one message holds several of them.
+	it("allows commands that only read and print, but not their file-reading options", () => {
+		for (const command of [
+			"sleep 0.5",
+			"jq -r .name package.json",
+			"ps aux | cut -c1-40",
+			"du -sh *",
+			"sha256sum a",
+		]) {
+			expect(isMutatingBashCommand(command), command).toBe(false);
+		}
+		for (const command of ["du --files0-from=list", "du --f=list", "jq --rawfile a secret .", "sleep 1 > x"]) {
+			expect(isMutatingBashCommand(command), command).toBe(true);
+		}
+	});
+
 	it("blocks non-allowlist read-only-looking commands", () => {
 		for (const command of ["vim file.ts", "nano file.ts", "make", "ninja", "cmake --version", "rustc file.rs"]) {
 			expect(isMutatingBashCommand(command), command).toBe(true);
