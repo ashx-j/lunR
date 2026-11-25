@@ -75,6 +75,15 @@ Options for the owner:
 
 Not verified: npm 10 and Bun, and whether a dependency without a shrinkwrap of its own, placed inside lunR's shrinkwrapped tree, would be resolved at install time. Arborist's comments suggest it would not.
 
+## Tree-sitter grammars (2026-11-25)
+
+`tree-sitter-wasms` is a dev dependency now. The build copies the 18 grammars `parser-manager.ts` maps (19 language IDs, JavaScript and JSX share one) into `dist/builtin-extensions/pi-lsp-extension/src/tree-sitter/grammars`, and the parser manager loads from there, falling back to the workspace package for source runs. Its other 18 grammars (C#, Elixir, PHP, Vue, Zig and others) were never loaded: their extensions map to language IDs with no grammar entry. Measured with npm 11.19.1, `npm i -g --prefix <dir> --ignore-scripts` of locally packed tarballs through a local registry that sets `_hasShrinkwrap`:
+
+| | Before | After |
+|---|---|---|
+| Global install, Linux x64 | 475 MB, 32,082 files | 448 MB, 32,061 files |
+| `@ashx-j/lunr` tarball | 4.89 MB packed, 21.7 MB unpacked | 7.25 MB packed, 45.6 MB unpacked |
+
 ## What the entry points load
 
 I ran each case with `strace -f -e trace=%file,execve` against the installed 0.2.38 package (no `src/` next to `dist/`), with a disposable `HOME` and `PI_CODING_AGENT_DIR` and `PI_OFFLINE=1`. Counts are package files opened, excluding `node_modules`.
