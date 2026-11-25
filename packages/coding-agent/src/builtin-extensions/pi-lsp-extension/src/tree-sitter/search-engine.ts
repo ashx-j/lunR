@@ -8,10 +8,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import type Parser from "web-tree-sitter";
 import type { TreeSitterManager } from "./parser-manager.js";
+import { PARSE_TIMEOUT_SECONDS } from "../shared/timing.js";
 import type {
   CompiledPattern,
   PatternNode,
@@ -42,6 +43,13 @@ export interface SearchMatch {
   captures: Record<string, string>;
 }
 
+/** The note a tool appends for files skipped because their parse hit the time bound. */
+export function slowParseNote(files: string[], rootDir: string): string {
+  const names = files.slice(0, 5).map((file) => relative(rootDir, file)).join(", ");
+  const more = files.length > 5 ? ` and ${files.length - 5} more` : "";
+  return `\n\nSkipped ${files.length} file${files.length === 1 ? "" : "s"} that took over ${PARSE_TIMEOUT_SECONDS} s to parse, so they were not searched: ${names}${more}.`;
+}
+
 // ── Directories to skip ─────────────────────────────────────────────────────
 
 // Shared constants imported from ../shared/constants.ts
@@ -60,6 +68,8 @@ export async function searchFiles(
     maxResults?: number;
     /** Called when lunR's saved logins under the search root were left out, so the tool can say so. */
     onSkippedCredentials?: () => void;
+    /** Called with the files whose parse stopped at the time bound, so the tool can say so. */
+    onSlowFiles?: (files: string[]) => void;
   } = {},
 ): Promise<SearchMatch[]> {
   const searchRoot = options.path ? resolve(rootDir, options.path) : rootDir;
@@ -80,6 +90,7 @@ export async function searchFiles(
   }
 
   const matches: SearchMatch[] = [];
+  const slow: string[] = [];
 
   for (const file of files) {
     if (matches.length >= maxResults) break;
@@ -87,7 +98,10 @@ export async function searchFiles(
     try {
       const content = await readFile(file, "utf-8");
       const tree = await treeSitter.parseWithLanguage(file, content, pattern.languageId);
-      if (!tree) continue;
+      if (!tree) {
+        if (treeSitter.parseTimedOut(file)) slow.push(file);
+        continue;
+      }
 
       const sourceHash = createHash("sha256").update(content).digest("hex");
       const fileMatches = findMatches(tree.rootNode, pattern.root);
@@ -109,6 +123,7 @@ export async function searchFiles(
     }
   }
 
+  if (slow.length > 0) options.onSlowFiles?.(slow);
   return matches;
 }
 

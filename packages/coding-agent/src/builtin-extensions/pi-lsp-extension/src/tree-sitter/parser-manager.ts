@@ -2,9 +2,9 @@
  * Tree-sitter Parser Manager — loads and caches WASM parsers per language.
  *
  * Uses web-tree-sitter (WASM) so no native compilation is needed.
- * Grammar .wasm files come from the tree-sitter-wasms npm package. The build copies only the
- * ones mapped below into ./grammars (scripts/copy-tree-sitter-grammars.mjs), and the published
- * package ships those instead of depending on tree-sitter-wasms.
+ * The build copies the grammars mapped below into ./grammars (scripts/copy-tree-sitter-grammars.mjs):
+ * the newer build in ./vendored-grammars when there is one (see its README), otherwise the
+ * tree-sitter-wasms file. Source runs (tests, tsx) have no ./grammars and pick per file the same way.
  */
 
 import { existsSync } from "node:fs";
@@ -15,6 +15,7 @@ import Parser from "web-tree-sitter";
 
 const require = createRequire(import.meta.url);
 import { getLanguageIdFromPath } from "../shared/language-map.js";
+import { PARSE_TIMEOUT_SECONDS } from "../shared/timing.js";
 
 type Language = Parser.Language;
 type Tree = Parser.Tree;
@@ -34,7 +35,8 @@ const LANGUAGE_TO_GRAMMAR: Record<string, string> = {
   ruby: "tree-sitter-ruby.wasm",
   kotlin: "tree-sitter-kotlin.wasm",
   scala: "tree-sitter-scala.wasm",
-  swift: "tree-sitter-swift.wasm",
+  // No swift: every ABI 14 Swift build has a lexer V8 cannot optimize; the process dies of
+  // "Fatal process out of memory: Zone" seconds after the first Swift parse.
   lua: "tree-sitter-lua.wasm",
   bash: "tree-sitter-bash.wasm",
   json: "tree-sitter-json.wasm",
@@ -43,6 +45,27 @@ const LANGUAGE_TO_GRAMMAR: Record<string, string> = {
 };
 
 // File extension → language ID mapping is in shared/language-map.ts
+
+/** Thrown by parseDetached when a parse runs past PARSE_TIMEOUT_SECONDS. */
+export class ParseTimeoutError extends Error {
+  constructor() {
+    super(`parsing took over ${PARSE_TIMEOUT_SECONDS} s`);
+    this.name = "ParseTimeoutError";
+  }
+}
+
+const VENDORED_GRAMMARS = fileURLToPath(new URL("./vendored-grammars", import.meta.url));
+
+/** Where a grammar comes from in a source run: the vendored build, else tree-sitter-wasms. */
+function sourceGrammarPath(file: string): string | undefined {
+  const vendored = resolve(VENDORED_GRAMMARS, file);
+  if (existsSync(vendored)) return vendored;
+  try {
+    return resolve(dirname(require.resolve("tree-sitter-wasms/package.json")), "out", file);
+  } catch {
+    return undefined;
+  }
+}
 
 interface CachedTree {
   tree: Tree;
@@ -58,14 +81,20 @@ export class TreeSitterManager {
   private loadingLanguages: Map<string, Promise<Language | null>> = new Map();
   private parsers: Map<string, Parser> = new Map();
   private cachedTrees: Map<string, CachedTree> = new Map();
-  private grammarsDir: string;
+  private timedOut: Set<string> = new Set();
+  /** The folder the build copied the grammars into, or undefined in a source run. */
+  private copiedGrammars: string | undefined;
 
   constructor() {
-    const bundled = fileURLToPath(new URL("./grammars", import.meta.url));
-    // Source runs (tests, tsx) have no copied grammars and use the workspace dev dependency.
-    this.grammarsDir = existsSync(bundled)
-      ? bundled
-      : resolve(dirname(require.resolve("tree-sitter-wasms/package.json")), "out");
+    const copied = fileURLToPath(new URL("./grammars", import.meta.url));
+    this.copiedGrammars = existsSync(copied) ? copied : undefined;
+  }
+
+  /** The grammar file a language loads from, or undefined when the language has none. */
+  grammarPath(languageId: string): string | undefined {
+    const file = LANGUAGE_TO_GRAMMAR[languageId];
+    if (!file) return undefined;
+    return this.copiedGrammars ? resolve(this.copiedGrammars, file) : sourceGrammarPath(file);
   }
 
   /** Initialize web-tree-sitter WASM runtime. Must be called before any parsing. */
@@ -110,13 +139,12 @@ export class TreeSitterManager {
     const loading = this.loadingLanguages.get(languageId);
     if (loading) return loading;
 
-    const grammarFile = LANGUAGE_TO_GRAMMAR[languageId];
-    if (!grammarFile) return null;
+    const grammarPath = this.grammarPath(languageId);
+    if (!grammarPath) return null;
 
     const loadPromise = (async (): Promise<Language | null> => {
       await this.init();
       try {
-        const grammarPath = resolve(this.grammarsDir, grammarFile);
         const language = await Parser.Language.load(grammarPath);
         this.languages.set(languageId, language);
         return language;
@@ -141,6 +169,7 @@ export class TreeSitterManager {
 
     const parser = new Parser();
     parser.setLanguage(language);
+    parser.setTimeoutMicros(PARSE_TIMEOUT_SECONDS * 1_000_000);
     this.parsers.set(languageId, parser);
     return parser;
   }
@@ -162,10 +191,15 @@ export class TreeSitterManager {
       return cached.tree;
     }
 
-    const parser = await this.getParser(languageId);
-    if (!parser) return null;
-
-    const tree = parser.parse(content);
+    let tree: Tree | null;
+    try {
+      tree = await this.parseDetached(content, languageId);
+      this.timedOut.delete(filePath);
+    } catch (error) {
+      if (!(error instanceof ParseTimeoutError)) throw error;
+      this.timedOut.add(filePath);
+      return null;
+    }
     if (!tree) return null;
 
     // Evict old tree
@@ -173,6 +207,28 @@ export class TreeSitterManager {
 
     this.cachedTrees.set(filePath, { tree, contentLength: length, hashHead: head, hashTail: tail });
     return tree;
+  }
+
+  /** Whether the last parse of this file stopped at PARSE_TIMEOUT_SECONDS, so a null tree is not "no syntax". */
+  parseTimedOut(filePath: string): boolean {
+    return this.timedOut.has(filePath);
+  }
+
+  /**
+   * Parse without caching. The caller owns the tree and must call tree.delete(), since wasm
+   * memory is not garbage collected. Returns null for a missing grammar and throws
+   * ParseTimeoutError when the parse runs past PARSE_TIMEOUT_SECONDS.
+   */
+  async parseDetached(content: string, languageId: string): Promise<Tree | null> {
+    const parser = await this.getParser(languageId);
+    if (!parser) return null;
+    try {
+      return parser.parse(content);
+    } catch {
+      // A timed-out parse keeps its state for resuming; drop it so the next parse starts fresh.
+      parser.reset();
+      throw new ParseTimeoutError();
+    }
   }
 
   /** Invalidate the cached tree for a file */

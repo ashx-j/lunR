@@ -13,7 +13,7 @@ import { resolveToCwd } from "../../../../core/tools/path-utils.js";
 import { relative } from "node:path";
 import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
 import { compilePattern } from "../tree-sitter/pattern-compiler.js";
-import { searchFiles } from "../tree-sitter/search-engine.js";
+import { searchFiles, slowParseNote } from "../tree-sitter/search-engine.js";
 import { computeRewrites, applyRewrites } from "../tree-sitter/rewrite-engine.js";
 
 /** Callback to notify when files are modified by rewrites */
@@ -87,15 +87,17 @@ export function createCodeRewriteTool(
 
       // Find matches
       let skipNote = "";
+      let slowNote = "";
       const matches = await searchFiles(compiled, rootDir, treeSitter, {
         path: path ? resolveToCwd(path, rootDir) : undefined,
         maxResults: 500,
         onSkippedCredentials: () => { skipNote = `\n\n${CREDENTIAL_SKIP_NOTE}`; },
+        onSlowFiles: (files) => { slowNote = slowParseNote(files, rootDir); },
       });
 
       if (matches.length === 0) {
         return {
-          content: [{ type: "text", text: `No matches found. No changes to make.${skipNote}` }],
+          content: [{ type: "text", text: `No matches found. No changes to make.${slowNote}${skipNote}` }],
           details: { matchCount: 0, filesModified: 0, dryRun: isDryRun },
         };
       }
@@ -130,7 +132,7 @@ export function createCodeRewriteTool(
         if (truncation.truncated) {
           output += `\n\n[Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines]`;
         }
-        output += skipNote;
+        output += slowNote + skipNote;
 
         const uniqueFiles = new Set(changes.map((c) => c.file));
         return {
@@ -170,7 +172,7 @@ export function createCodeRewriteTool(
       if (truncation.truncated) {
         output += `\n\n[Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines]`;
       }
-      output += skipNote;
+      output += slowNote + skipNote;
 
       return {
         content: [{ type: "text", text: output }],

@@ -12,7 +12,7 @@ import { CREDENTIAL_SKIP_NOTE } from "../../../../core/credential-files.js";
 import { relative } from "node:path";
 import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
 import { compilePattern } from "../tree-sitter/pattern-compiler.js";
-import { searchFiles } from "../tree-sitter/search-engine.js";
+import { searchFiles, slowParseNote } from "../tree-sitter/search-engine.js";
 
 const SearchParams = Type.Object({
   pattern: Type.String({ description: "Structural pattern with metavariables ($NAME for single node, $$$NAME for variadic)" }),
@@ -58,15 +58,17 @@ export function createCodeSearchTool(
 
       // Run the search
       let skipNote = "";
+      let slowNote = "";
       const matches = await searchFiles(compiled, rootDir, treeSitter, {
         path,
         maxResults: max_results ?? 50,
         onSkippedCredentials: () => { skipNote = `\n\n${CREDENTIAL_SKIP_NOTE}`; },
+        onSlowFiles: (files) => { slowNote = slowParseNote(files, rootDir); },
       });
 
       if (matches.length === 0) {
         return {
-          content: [{ type: "text", text: `No matches found.${skipNote}` }],
+          content: [{ type: "text", text: `No matches found.${slowNote}${skipNote}` }],
           details: { matchCount: 0, filesSearched: 0 },
         };
       }
@@ -103,7 +105,7 @@ export function createCodeSearchTool(
       if (truncation.truncated) {
         output += `\n\n[Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines]`;
       }
-      output += skipNote;
+      output += slowNote + skipNote;
 
       return {
         content: [{ type: "text", text: output }],
