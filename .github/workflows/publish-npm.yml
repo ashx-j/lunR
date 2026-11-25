@@ -18,6 +18,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      statuses: read
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -78,6 +79,8 @@ jobs:
         run: node scripts/publish.mjs --manifest "$RUNNER_TEMP/npm-release.json"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # publish.mjs reads the lunr/qualify-release commit status with gh.
+          GH_TOKEN: ${{ github.token }}
 
       # npm metadata and tarballs can lag the publish by minutes; the script retries until its deadline.
       - name: Verify registry tarballs and a fresh install
