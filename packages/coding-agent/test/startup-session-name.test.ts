@@ -81,9 +81,11 @@ async function runCli(args: string[], dirs: CliDirs): Promise<CliResult> {
 	});
 
 	return new Promise((resolvePromise, reject) => {
+		// The CLI starts from source through tsx, which takes 7 to 8 s on a busy machine. The limit only
+		// has to stay under the suite's 30 s test timeout.
 		const timeout = setTimeout(() => {
 			child.kill("SIGKILL");
-		}, 10_000);
+		}, 25_000);
 		child.on("error", (error) => {
 			clearTimeout(timeout);
 			reject(error);
