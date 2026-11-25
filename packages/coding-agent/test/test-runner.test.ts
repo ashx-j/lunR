@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "vitest";
 
@@ -81,8 +81,9 @@ process.exit(${exitCode});
 				assert.equal(env.CI, "true");
 				assert.equal(env.PI_NO_LOCAL_LLM, "1");
 				assert.notEqual(env.HOME, home);
-				assert.equal(env.USERPROFILE, env.HOME);
-				assert.equal(osHome, env.HOME);
+				// Git Bash on Windows passes paths set inside test.sh as D:/a/... and inherited ones as D:\a\...
+				assert.equal(resolve(env.USERPROFILE), resolve(env.HOME));
+				assert.equal(resolve(osHome), resolve(env.HOME));
 				assert.equal(initialAuth, false);
 				for (const name of [
 					"HOME",

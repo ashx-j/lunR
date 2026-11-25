@@ -3,8 +3,11 @@ import { claudeCodeEnvironment } from "../src/api/claude-code-process.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
+const windows = process.platform === "win32";
+
 describe("claudeCodeEnvironment proxy settings", () => {
-	it("keeps the user's proxy and bypass list and adds loopback to the bypass list", () => {
+	// Windows environment names are case-insensitive, so NO_PROXY and no_proxy are one variable there.
+	it.skipIf(windows)("keeps the user's proxy and bypass list and adds loopback to the bypass list", () => {
 		vi.stubEnv("HTTPS_PROXY", "http://proxy.example:8080");
 		vi.stubEnv("NO_PROXY", "internal.example, .corp.example");
 		vi.stubEnv("no_proxy", "");

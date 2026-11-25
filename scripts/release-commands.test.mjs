@@ -116,7 +116,7 @@ test("build plan compiles AI offline in dependency order and reuses public stagi
 	assert.match(commands[4][1].join(" "), /packages\/orchestrator/);
 	assert.deepEqual(localPackCommand("/repo", "/packs"), [
 		process.execPath,
-		["/repo/scripts/publish.mjs", "--dry-run", "--pack-dir", "/packs"],
+		[join("/repo", "scripts", "publish.mjs"), "--dry-run", "--pack-dir", "/packs"],
 	]);
 });
 
