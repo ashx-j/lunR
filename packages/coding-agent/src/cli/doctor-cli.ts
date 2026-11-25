@@ -2,7 +2,8 @@
  * lunR: `lunr doctor` checks the local setup and prints one line per check, with a fix for
  * anything that needs attention. `lunr doctor keys` shows which shortcuts reach lunR from
  * the current terminal. Neither command prints credentials or changes any file. `lunr doctor`
- * makes one network request, to npm for the newest published version.
+ * makes one network request, to npm for the newest published version, and exits once the report is
+ * written so a stalled connection cannot hold it open.
  */
 
 import { accessSync, constants, existsSync, statSync } from "node:fs";
@@ -43,8 +44,10 @@ export async function handleDoctorCli(args: string[]): Promise<boolean> {
 		// The npm lookup runs beside the local checks, so its timeout adds no time unless npm is slow.
 		const [checks, latest] = await Promise.all([collectDoctorChecks(), fetchPublishedVersion(NPM_CLI_PACKAGE)]);
 		checks.unshift(checkVersion(VERSION, latest, isPublishedInstall(), NPM_CLI_PACKAGE));
-		console.log(formatDoctorReport(checks));
-		process.exitCode = checks.some((check) => check.status === "fail") ? 1 : 0;
+		const exitCode = checks.some((check) => check.status === "fail") ? 1 : 0;
+		// An aborted npm fetch keeps its socket until undici's own 10 s connect timeout on a network that
+		// drops packets. Exit once the report is flushed instead of waiting for it.
+		process.stdout.write(`${formatDoctorReport(checks)}\n`, () => process.exit(exitCode));
 	} else {
 		console.log(
 			"Usage: lunr doctor        check version, logins, models, browser, Claude Code and gateway\n       lunr doctor keys   test which shortcuts reach lunR in this terminal",
