@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { beforeAll, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { renderSubagentCall } from "../src/builtin-extensions/pi-subagents/src/extension/index.ts";
 import { renderSubagentResult } from "../src/builtin-extensions/pi-subagents/src/tui/render.ts";
 import { formatSearchDetail } from "../src/builtin-extensions/pi-web-access/render-search-chrome.ts";
@@ -1527,5 +1527,71 @@ describe("ToolExecutionComponent density", () => {
 		expect(errorIdx).toBeGreaterThan(0);
 		expect(leafIdx).toBeGreaterThan(errorIdx);
 		expect(visible[leafIdx]?.trim().startsWith("└─")).toBe(true);
+	});
+});
+
+describe("ToolExecutionComponent ask-mode approval", () => {
+	beforeAll(() => {
+		initTheme("moon");
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	function askedBash(command: string): ToolExecutionComponent {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"call-1",
+			{ command },
+			{},
+			createBashToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.beginApproval();
+		return component;
+	}
+
+	test("the time the user spends deciding is not part of Took", () => {
+		vi.useFakeTimers({ now: 0 });
+		const component = askedBash("touch a.txt");
+		vi.setSystemTime(9_000);
+		component.endApproval(true);
+		vi.setSystemTime(9_200);
+		component.updateResult({ content: [{ type: "text", text: "" }], details: undefined, isError: false }, false);
+
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("$ touch a.txt — Took 0.2s");
+	});
+
+	test.each([
+		["bash", { command: "touch b.txt" }, createBashToolDefinition(process.cwd()), "$ touch b.txt — rejected"],
+		[
+			"edit",
+			{ path: "f.txt", edits: [{ oldText: "a", newText: "b" }] },
+			createEditToolDefinition(process.cwd()),
+			"edit f.txt — rejected",
+		],
+		["write", { path: "w.txt", content: "hi\n" }, createWriteToolDefinition(process.cwd()), "write w.txt — rejected"],
+	])("a rejected %s call says so on its header", (toolName, args, definition, header) => {
+		const component = new ToolExecutionComponent(
+			toolName,
+			"call-1",
+			args,
+			{},
+			definition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.beginApproval();
+		component.endApproval(false);
+		component.updateResult(
+			{ content: [{ type: "text", text: "The user rejected this call." }], details: undefined, isError: true },
+			false,
+		);
+
+		expect(stripAnsi(component.render(80).join("\n"))).toContain(header);
 	});
 });

@@ -231,3 +231,33 @@ describe("ProcessTerminal dimensions", () => {
 		}
 	});
 });
+
+describe("ProcessTerminal stray output", () => {
+	it("hands other stdout writes to the handler while started and lets them through after stop", () => {
+		const screen: string[] = [];
+		const stray: string[] = [];
+		const previousWrite = process.stdout.write;
+		process.stdout.write = ((chunk: string | Uint8Array) => {
+			screen.push(String(chunk));
+			return true;
+		}) as typeof process.stdout.write;
+		const terminal = new ProcessTerminal();
+		terminal.setStrayOutputHandler((text) => stray.push(text));
+		try {
+			terminal.start(
+				() => {},
+				() => {},
+			);
+			console.log("from an extension");
+			terminal.write("frame");
+			terminal.stop();
+			console.log("after stop");
+		} finally {
+			process.stdout.write = previousWrite;
+		}
+		assert.deepEqual(stray, ["from an extension\n"]);
+		assert.ok(screen.includes("frame"));
+		assert.ok(screen.includes("after stop\n"));
+		assert.ok(!screen.some((chunk) => chunk.includes("from an extension")));
+	});
+});

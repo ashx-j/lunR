@@ -48,7 +48,8 @@ export interface LoginFlowHost {
 	showExtensionInput(title: string, placeholder?: string): Promise<string | undefined>;
 	requestRender(): void;
 	/** Warns when the given (or current) Anthropic model would use subscription auth it cannot. */
-	maybeWarnAboutAnthropicSubscriptionAuth(model?: Model<Api>): Promise<void>;
+	/** Shows the Claude subscription notice once per session after a login to `providerId`. */
+	maybeWarnAboutAnthropicSubscriptionAuth(providerId: string): Promise<void>;
 	updateAvailableProviderCount(): Promise<void>;
 	invalidateFooter(): void;
 	updateEditorBorderColor(): void;
@@ -626,15 +627,12 @@ export async function completeProviderAuthentication(
 	host.updateEditorBorderColor();
 	if (selectedModel) {
 		host.showStatus(`${actionLabel}. Selected ${selectedModel.id}. ${savedNote}`);
-		void host.maybeWarnAboutAnthropicSubscriptionAuth(selectedModel);
 	} else {
 		host.showStatus(`${actionLabel}. ${savedNote}`);
-		if (selectionError) {
-			host.showError(selectionError);
-		} else {
-			void host.maybeWarnAboutAnthropicSubscriptionAuth();
-		}
+		if (selectionError) host.showError(selectionError);
 	}
+	// Whatever model the session is on: this login is the only place the notice shows.
+	void host.maybeWarnAboutAnthropicSubscriptionAuth(providerId);
 	await host.onLoginSucceeded();
 	await host.openModelSelectorIfUnset();
 }

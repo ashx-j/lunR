@@ -1118,7 +1118,10 @@ export async function main(args: string[], options?: MainOptions) {
 
 		await interactiveMode.init();
 		time("interactiveMode.init");
-		printTimings();
+		// The TUI owns a TTY stderr now and would send these to lunr-debug.log; print them once it
+		// has stopped, the way the benchmark path above does.
+		if (process.stderr.isTTY) process.once("exit", printTimings);
+		else printTimings();
 		await interactiveMode.run();
 	} else {
 		const { runPrintMode } = await import("./modes/print-mode.ts");

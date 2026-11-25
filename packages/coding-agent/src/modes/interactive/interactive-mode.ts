@@ -241,6 +241,7 @@ import {
 	type SmoothStreamingOptions,
 	sliceMessageContent,
 } from "./smooth-streaming.ts";
+import { logStrayOutput } from "./stray-output.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -469,6 +470,8 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	// The card whose tool_execution_start came last; ask mode's approval dialog belongs to it.
+	private lastStartedTool: ToolExecutionComponent | undefined;
 	private browserActivityComponent: ToolExecutionComponent | undefined;
 
 	// Tool output expansion state
@@ -605,7 +608,7 @@ export class InteractiveMode {
 			this.permissions.syncPermissionModeEffects(mode);
 		});
 		this.version = VERSION;
-		this.ui = options.startupView?.ui ?? new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
+		this.ui = options.startupView?.ui ?? this.createTui();
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.ui.setFocusReporting(this.settingsManager.getAttentionNotification() !== "off");
 
@@ -1086,8 +1089,6 @@ export class InteractiveMode {
 		void this.showModelSetupGuidance(modelFallbackMessage).catch((error: unknown) =>
 			this.showStartupNotice("error", error instanceof Error ? error.message : String(error)),
 		);
-
-		void this.maybeWarnAboutAnthropicSubscriptionAuth();
 
 		// Process initial messages
 		if (initialMessage) {
@@ -2290,6 +2291,13 @@ export class InteractiveMode {
 		});
 	}
 
+	/** The TUI for a launch without a startup view, which already made its own the same way. */
+	private createTui(): TUI {
+		const terminal = new ProcessTerminal();
+		terminal.setStrayOutputHandler(logStrayOutput);
+		return new TUI(terminal, this.settingsManager.getShowHardwareCursor());
+	}
+
 	/**
 	 * Show an extension error in the UI.
 	 */
@@ -3045,6 +3053,8 @@ export class InteractiveMode {
 					component.beginNextExecution(event.toolCallId, event.args);
 				}
 				component.markExecutionStarted();
+				// The agent loop asks for a call's approval right after its start event.
+				this.lastStartedTool = component;
 				this.ui.requestRender();
 				break;
 			}
@@ -3914,7 +3924,6 @@ export class InteractiveMode {
 			} else {
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				void this.maybeWarnAboutAnthropicSubscriptionAuth(result.model);
 			}
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
@@ -4871,13 +4880,10 @@ export class InteractiveMode {
 		this.footerDataProvider.setAvailableProviderCount(uniqueProviders.size);
 	}
 
-	private async maybeWarnAboutAnthropicSubscriptionAuth(
-		model: Model<Api> | undefined = this.session.model,
-	): Promise<void> {
-		if (this.anthropicSubscriptionWarningShown) {
-			return;
-		}
-		if (!model || model.provider !== "anthropic") {
+	// Called only after a login to `providerId`, once per session: a notice on every launch or model
+	// switch was noise. `lunr doctor` repeats it for a Claude Code login.
+	private async maybeWarnAboutAnthropicSubscriptionAuth(providerId: string): Promise<void> {
+		if (this.anthropicSubscriptionWarningShown || providerId !== "anthropic") {
 			return;
 		}
 
@@ -4887,7 +4893,7 @@ export class InteractiveMode {
 				this.showWarning(ANTHROPIC_SUBSCRIPTION_AUTH_WARNING);
 				return;
 			}
-			const apiKey = (await this.session.modelRuntime.getAuth(model.provider))?.auth.apiKey;
+			const apiKey = (await this.session.modelRuntime.getAuth(providerId))?.auth.apiKey;
 			if (!isAnthropicSubscriptionAuthKey(apiKey)) {
 				return;
 			}
@@ -5256,7 +5262,8 @@ export class InteractiveMode {
 			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
 			showExtensionInput: (title, placeholder) => this.showExtensionInput(title, placeholder),
 			requestRender: () => this.ui.requestRender(),
-			maybeWarnAboutAnthropicSubscriptionAuth: (model) => this.maybeWarnAboutAnthropicSubscriptionAuth(model),
+			maybeWarnAboutAnthropicSubscriptionAuth: (providerId) =>
+				this.maybeWarnAboutAnthropicSubscriptionAuth(providerId),
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
@@ -5282,7 +5289,6 @@ export class InteractiveMode {
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
-			maybeWarnAboutAnthropicSubscriptionAuth: (model) => this.maybeWarnAboutAnthropicSubscriptionAuth(model),
 		};
 	}
 
@@ -6067,6 +6073,16 @@ export class InteractiveMode {
 	// allow" when the request carries a `rule`). "Reject with feedback" collects a one-line
 	// reason that becomes the block reason the model sees, so it can adjust the plan.
 	private async showToolApprovalDialog(req: ApprovalRequest): Promise<ApprovalResponse> {
+		// Ask mode's question belongs to the call that started last. Its card leaves the time spent
+		// deciding out of "Took" and says "rejected" in words.
+		const card = req.kind === "tool" ? this.lastStartedTool : undefined;
+		card?.beginApproval();
+		const response = await this.askToolApproval(req);
+		card?.endApproval((typeof response === "string" ? response : response.decision) !== "reject");
+		return response;
+	}
+
+	private askToolApproval(req: ApprovalRequest): Promise<ApprovalResponse> {
 		const always = req.rule ? `Always allow in every project (saves ${req.rule} to global settings)` : undefined;
 		return new Promise((resolve) => {
 			this.showSelector((done) => {

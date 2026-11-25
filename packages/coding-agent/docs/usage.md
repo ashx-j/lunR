@@ -9,7 +9,7 @@ The interface has four main areas:
 - **Startup header** - shortcuts, loaded context files, prompt templates, skills, and extensions
 - **Messages** - user messages, assistant responses, tool calls, tool results, notifications, errors, and extension UI
 - **Editor** - where you type; border color indicates the current thinking level
-- **Footer** - permission mode with plan and goal status, TPS, MCP and LSP status, git branch with changed lines, subscription plan usage, context usage, token totals, and cache hit rate. Most parts can be turned off in `/settings` → Customize. The current model, provider and thinking level are on the editor's border
+- **Footer** - permission mode with plan and goal status, TPS, MCP and LSP status, git branch with changed lines, subscription plan usage, context usage, token totals, and cache hit rate (`cache 99.7%`: the share of the last request's prompt that was read from the provider's prompt cache; it reads `CH99.7%` on a terminal too narrow for the label, chosen once per width so it does not change as the counts grow). Most parts can be turned off in `/settings` → Customize. The current model, provider and thinking level are on the editor's border
 
 The editor can be replaced temporarily by built-in UI such as `/settings` or by custom extension UI. Click a thinking or tool card to expand or collapse that item. Smooth streaming (`smoothStreaming`, default off) is interactive TUI only.
 
