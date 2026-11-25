@@ -284,7 +284,12 @@ async function checkClaudeCode(
 			fix: `Run /login anthropic to refresh the models it offers. Until then, pick one by id, for example /model ${newer[0]}.`,
 		};
 	}
-	return { status: "ok", label, detail: `Claude Code at ${credential.command}` };
+	return {
+		status: "ok",
+		label,
+		detail: `Claude Code at ${credential.command}`,
+		fix: "Claude Code signs in to your Claude account. Check that account for usage and any extra charges.",
+	};
 }
 
 async function checkBrowser(enabled: boolean): Promise<DoctorCheck> {

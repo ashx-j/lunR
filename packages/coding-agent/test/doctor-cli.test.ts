@@ -84,6 +84,33 @@ describe("lunr doctor", () => {
 		});
 	});
 
+	it("keeps the Claude account note that the TUI now shows only after a login", async () => {
+		const command = join(agentDir, "claude");
+		writeFileSync(command, "");
+		writeFileSync(
+			join(agentDir, "auth.json"),
+			JSON.stringify({
+				anthropic: {
+					type: "external_claude_code",
+					version: 3,
+					manager: "claude-code",
+					command,
+					models: [
+						{ id: "claude-opus-5-5", route: "claude-opus-5-5" },
+						{ id: "claude-sonnet-5-5", route: "claude-sonnet-5-5" },
+					],
+				},
+			}),
+		);
+
+		const checks = await collectDoctorChecks(agentDir);
+
+		expect(checks.find((check) => check.label === "Claude subscription")).toMatchObject({
+			status: "ok",
+			fix: "Claude Code signs in to your Claude account. Check that account for usage and any extra charges.",
+		});
+	});
+
 	it("never prints saved API keys", async () => {
 		writeFileSync(
 			join(agentDir, "auth.json"),

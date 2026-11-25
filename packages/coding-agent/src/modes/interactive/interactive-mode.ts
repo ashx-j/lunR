@@ -1084,8 +1084,6 @@ export class InteractiveMode {
 			this.showError(error instanceof Error ? error.message : String(error)),
 		);
 
-		void this.maybeWarnAboutAnthropicSubscriptionAuth();
-
 		// Process initial messages
 		if (initialMessage) {
 			try {
@@ -3910,7 +3908,6 @@ export class InteractiveMode {
 			} else {
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				void this.maybeWarnAboutAnthropicSubscriptionAuth(result.model);
 			}
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
@@ -4836,6 +4833,8 @@ export class InteractiveMode {
 		this.footerDataProvider.setAvailableProviderCount(uniqueProviders.size);
 	}
 
+	// Called only after a login, once per session: a notice on every launch or model switch was noise.
+	// `lunr doctor` repeats it for a Claude Code login.
 	private async maybeWarnAboutAnthropicSubscriptionAuth(
 		model: Model<Api> | undefined = this.session.model,
 	): Promise<void> {
@@ -5247,7 +5246,6 @@ export class InteractiveMode {
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
-			maybeWarnAboutAnthropicSubscriptionAuth: (model) => this.maybeWarnAboutAnthropicSubscriptionAuth(model),
 		};
 	}
 
