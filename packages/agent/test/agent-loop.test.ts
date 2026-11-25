@@ -307,6 +307,46 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
+	it("treats a returned isError result as a failed call and keeps its details", async () => {
+		const toolSchema = Type.Object({});
+		const tool: AgentTool<typeof toolSchema, { reason: string }> = {
+			name: "refuse",
+			label: "Refuse",
+			description: "Refuses without throwing",
+			parameters: toolSchema,
+			async execute() {
+				return { content: [{ type: "text", text: "refused" }], details: { reason: "read-only" }, isError: true };
+			},
+		};
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [tool] };
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+		let callIndex = 0;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message =
+					callIndex === 0
+						? createAssistantMessage(
+								[{ type: "toolCall", id: "tool-1", name: "refuse", arguments: {} }],
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+				stream.push({ type: "done", reason: callIndex === 0 ? "toolUse" : "stop", message });
+				callIndex++;
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, streamFn);
+		for await (const event of stream) events.push(event);
+
+		const toolEnd = events.find((e) => e.type === "tool_execution_end");
+		expect(toolEnd).toMatchObject({ isError: true, result: { details: { reason: "read-only" } } });
+		const toolResult = (await stream.result()).find((m) => m.role === "toolResult");
+		expect(toolResult).toMatchObject({ isError: true, details: { reason: "read-only" } });
+	});
+
 	it("tells the model to load a declared but unloaded tool and keeps not-found for unknown tools", async () => {
 		const tool = (name: string): AgentTool => ({
 			name,

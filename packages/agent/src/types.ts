@@ -365,6 +365,8 @@ export interface AgentToolResult<T> {
 	details: T;
 	/** Names of tools introduced by this result and available from this transcript point onward. */
 	addedToolNames?: string[];
+	/** Marks the call as failed without throwing, so `details` still reach renderers and hooks. */
+	isError?: boolean;
 	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
