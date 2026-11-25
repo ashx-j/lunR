@@ -1,3 +1,4 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -5,6 +6,7 @@ import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
+import { registerConversationCleanup, registerSessionResourceCleanup } from "../session-resources.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { stream as streamMessages, streamSimple as streamSimpleMessages } from "./anthropic-messages.ts";
@@ -162,8 +164,9 @@ function queryFrame(history: readonly Frame[]): Frame {
 }
 
 /**
- * Validates the request lunR's Messages implementation built and maps it onto Claude Code's inputs. The
- * route is the one setup saved for the model, so Claude Code gets exactly the variant discovery chose.
+ * Validates the request lunR's Messages implementation built and maps it onto Claude Code's inputs, with the
+ * history as stdin frames (`oneShotRequest` moves it into the body). The route is the one setup saved for
+ * the model, so Claude Code gets exactly the variant discovery chose.
  */
 function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredential): ClaudeCodeRequest {
 	if (!isRecord(body) || typeof body.model !== "string" || !Array.isArray(body.messages))
@@ -219,9 +222,17 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 			...(maxTokens ? { max_tokens: maxTokens } : {}),
 		},
 	};
-	const extraBody = { ...request.extraBody, messages: historyMessages(history) };
-	return Buffer.byteLength(settingsJson(extraBody)) <= SETTINGS_LIMIT
-		? { ...request, frames: [queryFrame(history)], extraBody }
+	return request;
+}
+
+/**
+ * The request with lunR's history in the body when its settings JSON fits `limit`, and with the history
+ * replayed through stdin otherwise.
+ */
+function oneShotRequest(request: ClaudeCodeRequest, limit = SETTINGS_LIMIT): ClaudeCodeRequest {
+	const extraBody = { ...request.extraBody, messages: historyMessages(request.frames) };
+	return Buffer.byteLength(settingsJson(extraBody)) <= limit
+		? { ...request, frames: [queryFrame(request.frames)], extraBody }
 		: request;
 }
 
@@ -285,9 +296,17 @@ function answerStream(
 	next: () => Promise<ClaudeCodeEvent | undefined>,
 	inventory: ReadonlySet<string>,
 	finish: (graceful?: boolean) => Promise<void>,
+	/** Told when the answer ends, and whether it stopped for tool use (another request follows). */
+	nextRequest?: NextRequestHooks,
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	let pending: ClaudeCodeEvent | undefined = first;
+	let stopReason: unknown;
+	let ended = false;
+	const end = (toolUse: boolean) => {
+		if (!ended) nextRequest?.end(toolUse);
+		ended = true;
+	};
 	return new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			try {
@@ -303,23 +322,28 @@ function answerStream(
 						});
 					controller.enqueue(encoder.encode(sseEvent("error", body)));
 					controller.close();
+					end(false);
 					await finish(!!error);
 					return;
 				}
 				if (!isRecord(event.event) || typeof event.event.type !== "string") return;
 				const data = renameToolCall(event.event, inventory);
+				if (data.type === "message_delta" && isRecord(data.delta)) stopReason = data.delta.stop_reason;
 				controller.enqueue(encoder.encode(sseEvent(event.event.type, JSON.stringify(data))));
 				if (data.type === "message_stop") {
 					// The answer is complete; stopping now also keeps Claude Code from any further request.
 					controller.close();
+					end(stopReason === "tool_use");
 					await finish();
 				}
 			} catch (error) {
 				controller.error(error);
+				end(false);
 				await finish();
 			}
 		},
 		async cancel() {
+			end(false);
 			await finish();
 		},
 	});
@@ -333,13 +357,31 @@ function localFailure(message: string): Response {
 	});
 }
 
-async function runClaudeCode(
+/** Hooks that start a session's spare once a request has left, and drop it when no request follows. */
+interface NextRequestHooks {
+	start(): void;
+	end(toolUse: boolean): void;
+}
+
+/** A started Claude Code process with its MCP endpoint and its private directory. */
+interface ClaudeCodeProcess {
+	child: ChildProcessWithoutNullStreams;
+	loopback: ClaudeCodeLoopback;
+	directory: string;
+}
+
+/**
+ * Writes a process's files and starts Claude Code. `settings` is the `--settings` JSON: the body for a cold
+ * request, none for a spare. `inBody` says the history travels in the body, which runs Claude Code in an
+ * empty directory.
+ */
+async function startClaudeCode(
 	connection: ExternalClaudeCodeCredential,
 	request: ClaudeCodeRequest,
-	signal: AbortSignal | undefined,
-	idleMs: number,
 	upstream: string | undefined,
-): Promise<Response> {
+	settings: string,
+	inBody: boolean,
+): Promise<ClaudeCodeProcess> {
 	if (!existsSync(connection.command))
 		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
 	const loopback = await ClaudeCodeLoopback.open(request.tools);
@@ -347,45 +389,16 @@ async function runClaudeCode(
 		loopback.close();
 		throw error;
 	});
-	let pid: number | undefined;
-	let cleanup: Promise<void> | undefined;
-	let exited: Promise<void> | undefined;
-	// With `graceful`, a Claude Code that is still saving its own state (for example a sign-in refreshed after
-	// a 401) gets CLAUDE_CODE_EXIT_GRACE_MS to exit before the tree is killed. A user abort ends the wait.
-	const finish = (graceful = false) => {
-		cleanup ??= (async () => {
-			loopback.close();
-			if (graceful && exited && !signal?.aborted) {
-				let timer: NodeJS.Timeout | undefined;
-				const aborted = new Promise<void>((resolve) =>
-					signal?.addEventListener("abort", () => resolve(), { once: true }),
-				);
-				const grace = new Promise<void>((resolve) => {
-					timer = setTimeout(resolve, CLAUDE_CODE_EXIT_GRACE_MS);
-				});
-				await Promise.race([exited, grace, aborted]);
-				clearTimeout(timer);
-			}
-			await stopProcessTree(pid);
-			// Windows can hold the working directory briefly after the process tree ends.
-			await rm(directory, { recursive: true, force: true }).catch(() => {});
-		})();
-		return cleanup;
-	};
-	// An abort while lunR reads the body must still end Claude Code and close the MCP endpoint.
-	signal?.addEventListener("abort", () => void finish(), { once: true });
 	try {
-		await writeFile(join(directory, "system.md"), request.system, { encoding: "utf8", mode: 0o600 });
+		const file = { encoding: "utf8", mode: 0o600 } as const;
+		await writeFile(join(directory, "system.md"), request.system, file);
 		// Settings carry the body override inside the process, avoiding per-argument size limits for large tool schemas.
-		await writeFile(join(directory, "settings.json"), settingsJson(request.extraBody), {
-			encoding: "utf8",
-			mode: 0o600,
-		});
+		await writeFile(join(directory, "settings.json"), settings, file);
 		// The MCP URL carries a secret path, so it goes in a file rather than on the visible command line.
 		await writeFile(
 			join(directory, "mcp.json"),
 			JSON.stringify({ mcpServers: { lunr: { type: "http", url: loopback.mcpUrl } } }),
-			{ encoding: "utf8", mode: 0o600 },
+			file,
 		);
 		const env = {
 			...claudeCodeEnvironment(connection.configDir),
@@ -398,11 +411,8 @@ async function runClaudeCode(
 		// lunR's own directory there. lunR's history replaces that note otherwise, and an empty directory skips
 		// Claude Code's per-start git checks and file listing of the project. Empty setting sources keep the
 		// directory's CLAUDE.md and settings out.
-		const historyInBody = "messages" in request.extraBody;
-		const cwd = historyInBody ? join(directory, "cwd") : process.cwd();
-		if (historyInBody) await mkdir(cwd);
-		// Cleanup that already ran during the writes above had no process to stop, so never start one.
-		if (signal?.aborted) throw new Error("Claude Code request cancelled");
+		const cwd = inBody ? join(directory, "cwd") : process.cwd();
+		if (inBody) await mkdir(cwd);
 		const child = spawnClaudeCode(
 			connection.command,
 			[
@@ -437,20 +447,93 @@ async function runClaudeCode(
 			env,
 			cwd,
 		);
-		pid = child.pid;
-		// Output already written stays readable after the process closes, so cleanup is safe here too.
-		exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
-		child.once("close", () => void finish());
+		return { child, loopback, directory };
+	} catch (error) {
+		loopback.close();
+		await rm(directory, { recursive: true, force: true }).catch(() => {});
+		throw error;
+	}
+}
+
+/** Stops a process and releases its endpoint and files. */
+async function discardProcess({ child, loopback, directory }: ClaudeCodeProcess): Promise<void> {
+	loopback.close();
+	await stopProcessTree(child.pid);
+	// Windows can hold the working directory briefly after the process tree ends.
+	await rm(directory, { recursive: true, force: true }).catch(() => {});
+}
+
+/** Thrown when a spare did not confirm its body; the request then runs cold. */
+class SpareRefused extends Error {}
+
+/**
+ * How long a spare may take to confirm its body. 2.1.310 answered in 12 to 36 ms for a small body and about
+ * 35 ms per MiB above that (673 ms at 20 MiB); the bound leaves several times that before the cold route.
+ */
+function spareConfirmMs(body: string): number {
+	return 500 + 50 * Math.ceil(Buffer.byteLength(body) / (1024 * 1024));
+}
+
+/**
+ * Runs one request on a Claude Code process: a new one, or `spare`, started earlier without a body, which
+ * gets the request body through the `apply_flag_settings` control request. The query frame goes out only
+ * after Claude Code confirmed that body; otherwise the spare is stopped and SpareRefused thrown.
+ */
+async function runClaudeCode(
+	connection: ExternalClaudeCodeCredential,
+	request: ClaudeCodeRequest,
+	signal: AbortSignal | undefined,
+	idleMs: number,
+	upstream: string | undefined,
+	{ spare, nextRequest }: { spare?: ClaudeCodeProcess; nextRequest?: NextRequestHooks } = {},
+): Promise<Response> {
+	const started =
+		spare ??
+		(await startClaudeCode(
+			connection,
+			request,
+			upstream,
+			settingsJson(request.extraBody),
+			"messages" in request.extraBody,
+		));
+	const { child } = started;
+	let cleanup: Promise<void> | undefined;
+	// Output already written stays readable after the process closes, so cleanup is safe here too.
+	const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
+	// With `graceful`, a Claude Code that is still saving its own state (for example a sign-in refreshed after
+	// a 401) gets CLAUDE_CODE_EXIT_GRACE_MS to exit before the tree is killed. A user abort ends the wait.
+	const finish = (graceful = false) => {
+		cleanup ??= (async () => {
+			started.loopback.close();
+			if (graceful && !signal?.aborted) {
+				let timer: NodeJS.Timeout | undefined;
+				const aborted = new Promise<void>((resolve) =>
+					signal?.addEventListener("abort", () => resolve(), { once: true }),
+				);
+				const grace = new Promise<void>((resolve) => {
+					timer = setTimeout(resolve, CLAUDE_CODE_EXIT_GRACE_MS);
+				});
+				await Promise.race([exited, grace, aborted]);
+				clearTimeout(timer);
+			}
+			await discardProcess(started);
+		})();
+		return cleanup;
+	};
+	// An abort while lunR reads the body must still end Claude Code and close the MCP endpoint.
+	signal?.addEventListener("abort", () => void finish(), { once: true });
+	child.once("close", () => void finish());
+	try {
+		if (signal?.aborted) throw new Error("Claude Code request cancelled");
 		const interrupted = new Promise<never>((_, reject) => {
 			child.once("error", reject);
-			if (signal?.aborted) reject(new Error("Claude Code request cancelled"));
 			signal?.addEventListener("abort", () => reject(new Error("Claude Code request cancelled")), { once: true });
 		});
 		interrupted.catch(() => {});
-		const within = async <T>(promise: Promise<T>, message: string): Promise<T> => {
+		const within = async <T>(promise: Promise<T>, message: string, ms = idleMs): Promise<T> => {
 			let timer: NodeJS.Timeout | undefined;
 			const timeout = new Promise<never>((_, reject) => {
-				timer = setTimeout(() => reject(new Error(message)), idleMs);
+				timer = setTimeout(() => reject(new Error(message)), ms);
 			});
 			try {
 				return await Promise.race([promise, timeout, interrupted]);
@@ -459,7 +542,20 @@ async function runClaudeCode(
 			}
 		};
 
-		const events = claudeCodeEvents(child.stdout);
+		// The next request's spare starts once this request has left (Claude Code reports it as requesting), so the
+		// two never compete for the CPU and the spare has the whole answer time to start.
+		const events = nextRequest
+			? onRequestSent(claudeCodeEvents(child.stdout), nextRequest.start)
+			: claudeCodeEvents(child.stdout);
+		if (spare) {
+			const body = JSON.stringify(request.extraBody);
+			const id = `lunr-body-${child.pid}`;
+			const apply = { subtype: "apply_flag_settings", settings: { env: { CLAUDE_CODE_EXTRA_BODY: body } } };
+			child.stdin.write(`${JSON.stringify({ type: "control_request", request_id: id, request: apply })}\n`);
+			const reply = await within(nextControlResponse(events, id), "", spareConfirmMs(body)).catch(() => undefined);
+			if (!isRecord(reply?.response) || reply.response.subtype !== "success")
+				throw new SpareRefused("Claude Code did not confirm the request body");
+		}
 		for (const [index, frame] of request.frames.entries()) {
 			// Earlier user turns are appended without a generation; Claude Code acknowledges each with a zero-turn result.
 			const replay = frame.type === "user" && index < request.frames.length - 1;
@@ -485,7 +581,7 @@ async function runClaudeCode(
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
 		const next = () => within(nextAnswerEvent(events), "Claude Code request timed out.");
-		return new Response(answerStream(first, next, inventory, finish), {
+		return new Response(answerStream(first, next, inventory, finish, nextRequest), {
 			status: 200,
 			headers: { "content-type": "text/event-stream" },
 		});
@@ -495,20 +591,194 @@ async function runClaudeCode(
 	}
 }
 
+/** Passes `events` through, calling `onSent` once Claude Code reports its request sent or its answer arrives. */
+async function* onRequestSent(
+	events: AsyncGenerator<ClaudeCodeEvent>,
+	onSent: () => void,
+): AsyncGenerator<ClaudeCodeEvent> {
+	let sent = false;
+	for await (const event of events) {
+		const requesting = event.type === "system" && event.subtype === "status" && event.status === "requesting";
+		if (!sent && (requesting || event.type === "stream_event")) {
+			sent = true;
+			onSent();
+		}
+		yield event;
+	}
+}
+
+/** Reads events up to the control response with `id`, or undefined when Claude Code's output ends first. */
+async function nextControlResponse(
+	events: AsyncGenerator<ClaudeCodeEvent>,
+	id: string,
+): Promise<ClaudeCodeEvent | undefined> {
+	for (let next = await events.next(); !next.done; next = await events.next()) {
+		const { type, response } = next.value;
+		if (type === "control_response" && isRecord(response) && response.request_id === id) return next.value;
+	}
+	return undefined;
+}
+
+/**
+ * Spares: Claude Code processes started before their request is ready, so a request skips Claude Code's
+ * startup (about 0.4 s). A spare starts without a body and gets the whole request body through the stdin
+ * control request `apply_flag_settings` just before its query frame, so every request still runs on its
+ * own fresh process with lunR's exact body. A spare starts as soon as the current request has left (so the
+ * two never compete for the CPU) and is dropped when the answer ends unless it stopped for tool use, since
+ * only then do a tool result and another request follow. One spare per lunR session id; compaction
+ * and other side calls pass none and run cold. POSIX only.
+ */
+interface Spare {
+	key: string;
+	process: ClaudeCodeProcess;
+	timer: NodeJS.Timeout;
+}
+
+const spares = new Map<string, Spare>();
+/** Spares still starting, by session id; a request that arrives meanwhile waits, as that is sooner than a cold start. */
+const startingSpares = new Map<string, Promise<void>>();
+/** Each spare holds about 200 MB; spares live only between a tool call and the next request. */
+const MAX_SPARES = 3;
+/**
+ * A spare reads Claude Code's sign-in when it starts. Another Claude Code that refreshes the sign-in while the
+ * spare waits could leave it with a stale token (untested), so a spare older than this is dropped.
+ */
+const SPARE_MAX_AGE_MS = 2 * 60 * 1000;
+/** A spare can carry a history over the settings file limit: 2.1.310 accepted bodies up to 20 MiB. */
+const SPARE_BODY_LIMIT = 20 * 1024 * 1024;
+/**
+ * Claude Code binaries whose spare failed to confirm its body, for example a pin that dropped or changed
+ * `apply_flag_settings`. Their requests go cold at once for the rest of the lunR process.
+ */
+const noSpares = new Set<string>();
+
+/**
+ * Everything fixed when Claude Code starts, so a spare fits a request only when these match: the binary
+ * and its config directory, the model route (`--model`), the system prompt file, the tool list the MCP
+ * endpoint serves, the output limit (`CLAUDE_CODE_MAX_OUTPUT_TOKENS`) and the test upstream. The rest of
+ * the body, history included, arrives with `apply_flag_settings`.
+ */
+function spareKey(connection: ExternalClaudeCodeCredential, request: ClaudeCodeRequest, upstream?: string): string {
+	const { route, system, tools, maxTokens } = request;
+	return JSON.stringify([connection.command, connection.configDir, route, system, tools, maxTokens, upstream]);
+}
+
+/** Stops the spare of one lunR session, or all spares; one still starting stops once it has started. */
+function stopSpares(sessionId?: string): void {
+	for (const id of startingSpares.keys()) if (sessionId === undefined || id === sessionId) startingSpares.delete(id);
+	for (const [id, spare] of spares) {
+		if (sessionId !== undefined && id !== sessionId) continue;
+		spares.delete(id);
+		clearTimeout(spare.timer);
+		void discardProcess(spare.process);
+	}
+}
+registerSessionResourceCleanup(stopSpares);
+registerConversationCleanup(stopSpares);
+// SIGINT, SIGTERM and SIGHUP end lunR through process.exit. After a kill -9 a spare's stdin closes and it exits.
+process.once("exit", () => {
+	for (const { process: spare } of spares.values()) {
+		try {
+			if (spare.child.pid) process.kill(-spare.child.pid, "SIGKILL");
+		} catch {
+			/* Already exited. */
+		}
+	}
+});
+
+/** Starts a spare for the next request of `sessionId`, unless it has one or the process cap is reached. */
+async function prepareSpare(
+	sessionId: string,
+	connection: ExternalClaudeCodeCredential,
+	request: ClaudeCodeRequest,
+	upstream: string | undefined,
+): Promise<void> {
+	if (noSpares.has(connection.command) || spares.has(sessionId) || startingSpares.has(sessionId)) return;
+	if (spares.size + startingSpares.size >= MAX_SPARES) return;
+	const starting = startSpare(sessionId, connection, request, upstream);
+	startingSpares.set(sessionId, starting);
+	try {
+		await starting;
+	} finally {
+		startingSpares.delete(sessionId);
+	}
+}
+
+async function startSpare(
+	sessionId: string,
+	connection: ExternalClaudeCodeCredential,
+	request: ClaudeCodeRequest,
+	upstream: string | undefined,
+): Promise<void> {
+	const started = await startClaudeCode(connection, request, upstream, "{}", true);
+	if (!startingSpares.has(sessionId)) {
+		void discardProcess(started);
+		return;
+	}
+	const timer = setTimeout(() => {
+		if (spares.get(sessionId)?.process !== started) return;
+		spares.delete(sessionId);
+		void discardProcess(started);
+	}, SPARE_MAX_AGE_MS);
+	timer.unref();
+	spares.set(sessionId, { key: spareKey(connection, request, upstream), process: started, timer });
+	started.child.once("close", () => {
+		if (spares.get(sessionId)?.process === started) stopSpares(sessionId);
+	});
+}
+
+/** The session's spare when it fits `key`; a spare that does not is stopped. */
+function takeSpare(sessionId: string, key: string): ClaudeCodeProcess | undefined {
+	const spare = spares.get(sessionId);
+	if (!spare) return undefined;
+	spares.delete(sessionId);
+	clearTimeout(spare.timer);
+	const { child } = spare.process;
+	if (spare.key === key && child.exitCode === null && child.signalCode === null) return spare.process;
+	void discardProcess(spare.process);
+	return undefined;
+}
+
 /**
  * `fetch` for the Anthropic SDK that sends each Messages request through lunR's pinned Claude Code
- * instead of HTTPS. Exported for tests, which point `upstream` at a loopback fixture.
+ * instead of HTTPS. With a session id, a request runs on that session's spare when one fits, and any doubt
+ * about the spare sends it cold. Exported for tests, which point `upstream` at a loopback fixture.
  */
 export function claudeCodeFetch(
 	connection: ExternalClaudeCodeCredential,
 	idleMs: number,
 	upstream?: string,
+	sessionId?: string,
 ): (input: string | URL | Request, init?: RequestInit) => Promise<Response> {
 	return async (_input, init) => {
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			return await runClaudeCode(connection, claudeCodeRequest(body, connection), signal, idleMs, upstream);
+			const request = claudeCodeRequest(body, connection);
+			const live =
+				sessionId && process.platform !== "win32" && !noSpares.has(connection.command) ? sessionId : undefined;
+			// The spare starts once this request has left, so it never slows this one; it is dropped unless the
+			// answer stops for tool use, after which a tool result and the next request follow.
+			const nextRequest = live
+				? {
+						start: () => void prepareSpare(live, connection, request, upstream).catch(() => {}),
+						end: (toolUse: boolean) => {
+							if (!toolUse) stopSpares(live);
+						},
+					}
+				: undefined;
+			if (live) await startingSpares.get(live)?.catch(() => {});
+			const spare = live ? takeSpare(live, spareKey(connection, request, upstream)) : undefined;
+			const onSpare = spare && oneShotRequest(request, SPARE_BODY_LIMIT);
+			if (spare && onSpare && "messages" in onSpare.extraBody) {
+				try {
+					return await runClaudeCode(connection, onSpare, signal, idleMs, upstream, { spare, nextRequest });
+				} catch (error) {
+					if (!(error instanceof SpareRefused)) throw error;
+					noSpares.add(connection.command);
+				}
+			} else if (spare) void discardProcess(spare);
+			return await runClaudeCode(connection, oneShotRequest(request), signal, idleMs, upstream, { nextRequest });
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));
@@ -579,7 +849,7 @@ export function streamClaudeCode(
 		// Never sent anywhere: the fetch override replaces HTTP, and Claude Code supplies its own sign-in.
 		apiKey: "claude-code-subscription",
 		maxRetries: 0,
-		fetch: claudeCodeFetch(connection, idleMs, upstream),
+		fetch: claudeCodeFetch(connection, idleMs, upstream, options.sessionId),
 	});
 	const transportModel: Model<"anthropic-messages"> = {
 		...model,
