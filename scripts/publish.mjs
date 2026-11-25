@@ -21,7 +21,7 @@ import {
 
 import { addPayloadDependencies, release as computerRelease, stagePayloadPackages } from "./computer-use-packages.mjs";
 import { stagePackageNotice } from "./distribution-assets.mjs";
-import { QUALIFY_STATUS_CONTEXT } from "./qualify-release.mjs";
+import { QUALIFY_STATUS_CONTEXT, qualifyStatus } from "./qualify-release.mjs";
 
 const REWRITE_EXT = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
 
@@ -61,20 +61,21 @@ const packages = [
 ];
 
 const dryRun = process.argv.includes("--dry-run");
-// --skip-qualify publishes without the real-turn release qualification (scripts/qualify-release.mjs).
-const skipQualify = process.argv.includes("--skip-qualify");
+// --require-qualify refuses to publish unless HEAD has a passing `npm run qualify` commit status
+// (scripts/qualify-release.mjs). Off by default; the stable workflow passes it when the owner turns the gate on.
+const requireQualify = process.argv.includes("--require-qualify");
 const packIndex = process.argv.indexOf("--pack-dir");
 const packDirectory = packIndex === -1 ? undefined : process.argv[packIndex + 1];
 // --manifest <file> records each package's name, version and packed integrity for scripts/verify-npm-release.mjs.
 const manifestIndex = process.argv.indexOf("--manifest");
 const manifestPath = manifestIndex === -1 ? undefined : process.argv[manifestIndex + 1];
 const valueIndexes = new Set([packIndex, manifestIndex].filter((index) => index !== -1).flatMap((index) => [index, index + 1]));
-const unknownArgs = process.argv.slice(2).filter((arg, index) => arg !== "--dry-run" && arg !== "--skip-qualify" && !valueIndexes.has(index + 2));
+const unknownArgs = process.argv.slice(2).filter((arg, index) => arg !== "--dry-run" && arg !== "--require-qualify" && !valueIndexes.has(index + 2));
 if (packIndex !== -1 && (!dryRun || !packDirectory)) throw new Error("--pack-dir requires --dry-run and an existing destination directory.");
 if (manifestIndex !== -1 && !manifestPath) throw new Error("--manifest requires a file path.");
 
 if (unknownArgs.length > 0) {
-	console.error(`Usage: node scripts/publish.mjs [--dry-run [--pack-dir <directory>]] [--manifest <file>] [--skip-qualify]`);
+	console.error(`Usage: node scripts/publish.mjs [--dry-run [--pack-dir <directory>]] [--manifest <file>] [--require-qualify]`);
 	process.exit(1);
 }
 
@@ -180,23 +181,13 @@ if (!dryRun && computerRelease.approval !== "production-approved") {
 	throw new Error("Computer-use runtime has development-only approval. Production publication is blocked.");
 }
 
-// `npm run qualify` records a pass as a commit status, so the tag-triggered workflow can check it without a login.
-function qualificationState() {
+if (requireQualify) {
 	const sha = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
-	const query = spawnSync(
-		"gh",
-		["api", `repos/{owner}/{repo}/commits/${sha}/statuses`, "--jq", `[.[] | select(.context == "${QUALIFY_STATUS_CONTEXT}")][0].state // "missing"`],
-		{ encoding: "utf8" },
-	);
-	return { sha, state: query.status === 0 ? query.stdout.trim() : `unknown (${query.stderr.trim().split("\n").at(-1)})` };
-}
-
-const qualification = skipQualify ? undefined : qualificationState();
-if (qualification) console.log(`Release qualification ${QUALIFY_STATUS_CONTEXT} on ${qualification.sha}: ${qualification.state}`);
-if (!dryRun && qualification && qualification.state !== "success") {
-	throw new Error(
-		`${qualification.sha} has no passing release qualification. Run \`npm run qualify -- --profile <signed-in agent dir>\` on this commit, or pass --skip-qualify.`,
-	);
+	const state = qualifyStatus(sha);
+	console.log(`Release qualification ${QUALIFY_STATUS_CONTEXT} on ${sha}: ${state}`);
+	if (state !== "success" && !dryRun) {
+		throw new Error(`${sha} has no passing release qualification. Run \`npm run qualify -- --profile <signed-in agent dir>\` on this commit.`);
+	}
 }
 
 console.log(`Publishing lunR packages at ${versions[0]} as @ashx-j/*${dryRun ? " (dry run)" : ""}\n`);
