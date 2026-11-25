@@ -6,6 +6,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { subagentCommunicationEnabled } from "../../../../../core/settings-manager.ts";
+import { removeOnExit } from "../../../../../core/temp-files.ts";
 import { getAgentDir } from "../../shared/utils.ts";
 import { allocateChildId, normalizeChildSpec } from "../../shared/child-spec.ts";
 import { getArtifactsDir, getProjectChainRunsDir } from "../../shared/artifacts.ts";
@@ -799,7 +800,7 @@ function appendStepToAsyncChain(input: {
 	try {
 		appendParams = internalizePromptDrivenChildren(input.params, {
 			runId: appendChildRunId,
-			parentMode: snapshotParentPermissionMode(input.deps.state.currentSessionId),
+			parentMode: snapshotParentPermissionMode(input.ctx.sessionManager.getSessionId() ?? undefined),
 			dynamicFanoutMaxItems: input.deps.config.chain?.dynamicFanout?.maxItems,
 		}).params;
 	} catch (error) {
@@ -1211,7 +1212,7 @@ async function resumeAsyncRun(input: {
 			availableModels,
 			cwd: effectiveCwd,
 			maxOutput: input.params.maxOutput,
-			artifactsDir: getArtifactsDir(parentSessionFile, effectiveCwd),
+			artifactsDir: getArtifactsDir(parentSessionFile),
 			artifactConfig,
 			sessionRoot: input.deps.getSubagentSessionRoot(parentSessionFile),
 			chainSkills: normalized === false ? [] : (normalized ?? []),
@@ -1241,7 +1242,7 @@ async function resumeAsyncRun(input: {
 
 	const runId = randomUUID().slice(0, 8);
 	const artifactConfig: ArtifactConfig = recoveryDescriptor?.artifactConfig ?? { ...DEFAULT_ARTIFACT_CONFIG, enabled: input.params.artifacts !== false };
-	const artifactsDir = recoveryDescriptor?.artifactsDir ?? getArtifactsDir(parentSessionFile, effectiveCwd);
+	const artifactsDir = recoveryDescriptor?.artifactsDir ?? getArtifactsDir(parentSessionFile);
 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
 	let restoredAcceptance: ReturnType<typeof restorePersistedAcceptance> | undefined;
 	if (recoveryDescriptor?.acceptance !== undefined && input.params.acceptance === undefined) {
@@ -1274,7 +1275,7 @@ async function resumeAsyncRun(input: {
 			acceptance: input.params.acceptance,
 			toolBudget: recoveryDescriptor?.initialToolBudget,
 		}, {
-			parentMode: snapshotParentPermissionMode(input.deps.state.currentSessionId),
+			parentMode: snapshotParentPermissionMode(input.ctx.sessionManager.getSessionId() ?? undefined),
 			runId,
 			index: 0,
 			childId: recoveryDescriptor?.childId ?? target.childId ?? `${runId}-0`,
@@ -1353,7 +1354,11 @@ function resultSummaryForIntercom(result: SingleResult): string {
 	if (result.exitCode !== 0 && result.error) {
 		return output ? `${result.error}\n\nOutput:\n${output}` : result.error;
 	}
-	return output || result.error || "(no output)";
+	const summary = output || result.error || "(no output)";
+	// Inline mode sends the reply as the summary, so name the saved output file too: a relative
+	// `output` lands in the run's directory, not where the model would guess.
+	const reference = result.outputReference?.message;
+	return reference && !summary.includes(reference) ? `${summary}\n\n${reference}` : summary;
 }
 
 function formatFailedSingleRunOutput(result: SingleResult, displayOutput: string): string {
@@ -2183,7 +2188,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			acceptance: params.acceptance,
 			toolBudget: params.toolBudget,
 		}, {
-			parentMode: snapshotParentPermissionMode(deps.state.currentSessionId),
+			parentMode: snapshotParentPermissionMode(ctx.sessionManager.getSessionId() ?? undefined),
 			runId: id,
 			index: 0,
 			childId: params.agent,
@@ -2253,7 +2258,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 	const chain = wrapChainTasksForFork(params.chain as ChainStep[], contextPolicy);
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
 	// The chain writes its files under chainDir, so read-only chains keep the project's own chain-runs directory.
-	if (params.chainDir && snapshotParentPermissionMode(deps.state.currentSessionId ?? undefined) === "read-only") {
+	if (params.chainDir && snapshotParentPermissionMode(ctx.sessionManager.getSessionId() ?? undefined) === "read-only") {
 		return {
 			content: [{ type: "text", text: `Read-only mode cannot put a chain's files in ${params.chainDir}. Leave chainDir unset.` }],
 			isError: true,
@@ -2909,7 +2914,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		for (let index = 0; index < tasks.length; index++) {
 			const taskCwd = resolveParallelTaskCwd(tasks[index]!, effectiveCwd, worktreeSetup, index);
 			const outputPath = resolveSingleOutputPath(behaviors[index]?.output, ctx.cwd, taskCwd, outputBaseDir);
-			const validationError = validateFileOnlyOutputMode(behaviors[index]?.outputMode, outputPath, `Parallel task ${index + 1} (${tasks[index]!.agent})`) ?? outputTargetError(outputPath, ctx.cwd) ?? readOnlyOutputError(outputPath, outputBaseDir, deps.state.currentSessionId ?? undefined);
+			const validationError = validateFileOnlyOutputMode(behaviors[index]?.outputMode, outputPath, `Parallel task ${index + 1} (${tasks[index]!.agent})`) ?? outputTargetError(outputPath, ctx.cwd) ?? readOnlyOutputError(outputPath, outputBaseDir, ctx.sessionManager.getSessionId() ?? undefined);
 			if (validationError) return buildParallelModeError(validationError);
 		}
 
@@ -2929,7 +2934,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			ctx,
 			state: deps.state,
 			intercomEvents: deps.pi.events,
-			parentSessionId: data.parentSessionId,
+			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 			signal,
 			runId,
 			sessionDirForIndex,
@@ -3085,7 +3090,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			outputMode: params.outputMode,
 			acceptance: params.acceptance,
 			toolBudget: params.toolBudget,
-		}, { parentMode: snapshotParentPermissionMode(deps.state.currentSessionId), runId, index: 0 });
+		}, { parentMode: snapshotParentPermissionMode(ctx.sessionManager.getSessionId() ?? undefined), runId, index: 0 });
 	} catch (error) {
 		return {
 			content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
@@ -3217,7 +3222,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	}
 	const cleanTask = task;
 	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, effectiveCwd, resolveSingleRunOutputBaseDir(deps, artifactsDir, runId));
-	const validationError = validateFileOnlyOutputMode(effectiveOutputMode, outputPath, `Single run (${params.agent})`) ?? outputTargetError(outputPath, ctx.cwd) ?? readOnlyOutputError(outputPath, path.join(artifactsDir, "outputs", runId), deps.state.currentSessionId ?? undefined);
+	const validationError = validateFileOnlyOutputMode(effectiveOutputMode, outputPath, `Single run (${params.agent})`) ?? outputTargetError(outputPath, ctx.cwd) ?? readOnlyOutputError(outputPath, path.join(artifactsDir, "outputs", runId), ctx.sessionManager.getSessionId() ?? undefined);
 	if (validationError) {
 		return { content: [{ type: "text", text: validationError }], isError: true, details: { mode: "single", results: [] } };
 	}
@@ -3694,7 +3699,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		const runId = randomUUID().slice(0, 8);
-		const parentPermissionMode = snapshotParentPermissionMode(deps.state.currentSessionId);
+		const parentPermissionMode = snapshotParentPermissionMode(ctx.sessionManager.getSessionId() ?? undefined);
 		let internalized: ReturnType<typeof internalizePromptDrivenChildren>;
 		try {
 			internalized = internalizePromptDrivenChildren(effectiveParams, {
@@ -3790,7 +3795,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			...DEFAULT_ARTIFACT_CONFIG,
 			enabled: effectiveParams.artifacts !== false,
 		};
-		const artifactsDir = getArtifactsDir(parentSessionFile, effectiveCwd);
+		const artifactsDir = getArtifactsDir(parentSessionFile);
 
 		let sessionRoot: string;
 		if (effectiveParams.sessionDir) {
@@ -3806,6 +3811,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const baseSessionRoot = deps.config.defaultSessionDir
 				? path.resolve(deps.expandTilde(deps.config.defaultSessionDir))
 				: deps.getSubagentSessionRoot(parentSessionFile);
+			// Without a parent session this is a new temp dir only this run uses. Foreground children end
+			// with lunR; a background run may outlive it and keeps the dir.
+			if (!deps.config.defaultSessionDir && !parentSessionFile && !effectiveAsync) removeOnExit(baseSessionRoot);
 			sessionRoot = path.join(baseSessionRoot, runId);
 		}
 		try {

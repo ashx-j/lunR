@@ -9,16 +9,16 @@ export function getProjectSubagentsDir(cwd: string): string {
 	return path.join(cwd, PROJECT_ARTIFACT_ROOT);
 }
 
-export function getProjectArtifactsDir(cwd: string): string {
-	return path.join(getProjectSubagentsDir(cwd), "artifacts");
-}
-
 export function getProjectChainRunsDir(cwd: string): string {
 	return path.join(getProjectSubagentsDir(cwd), "chain-runs");
 }
 
-export function getArtifactsDir(sessionFile: string | null, projectCwd?: string): string {
-	if (projectCwd) return getProjectArtifactsDir(projectCwd);
+/**
+ * Where a run keeps its task, output copy, transcript and metadata, and where relative `output` files
+ * land (`outputs/<runId>`): next to the parent's session in the profile, or the temp dir without one.
+ * Never the project, so read-only runs write nothing there. Old project `.pi-subagents/` dirs stay as they are.
+ */
+export function getArtifactsDir(sessionFile: string | null): string {
 	if (sessionFile) {
 		const sessionDir = path.dirname(sessionFile);
 		return path.join(sessionDir, "subagent-artifacts");
