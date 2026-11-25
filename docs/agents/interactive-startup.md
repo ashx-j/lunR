@@ -48,8 +48,19 @@ before 4.4.0, gets one "unavailable" note and no waits after that. So does a dea
 tsserver. An answer that misses the wait goes out with a later tool result only
 if no tool that can change files ran since (`late-diagnostics.ts`), and
 `agent_end` drops it. While tsserver loads a project and on a 6,000-line file,
-edits get "not ready in time". This path needs a `typescript` with
-`lib/tsserver.js` (TypeScript 7 has none) in the workspace.
+edits get "not ready in time". The first open of a file makes tsserver load the
+project (2.4 s on a 2-file project, about 14 s on the lunR repo), and lunR opens a
+file only on its first write after the server is up.
+
+`lsp_diagnostics` on one file waits up to 15 s (`DIAGNOSTIC_TOOL_WAIT_MS`) for a
+starting server, sends the file's current content and waits for an answer tied
+to it. It answers "clean" only from such an answer. Otherwise it says type
+checking did not run and why, with tree-sitter's syntax check; it never reads an
+empty publish cache as clean. This path needs a `typescript` with
+`lib/tsserver.js` in the workspace. TypeScript 7 has none, so
+typescript-language-server does not start there; TypeScript 7's own
+`tsc --lsp --stdio` is a language server with pull diagnostics that lunR does not
+use yet.
 
 The Node bundle does not automatically enable Node's compile cache. Reusing that
 cache was slower in the measured bundle. Node's explicit compile-cache environment

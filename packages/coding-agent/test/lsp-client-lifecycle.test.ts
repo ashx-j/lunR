@@ -3,6 +3,8 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LateDiagnostics } from "../src/builtin-extensions/pi-lsp-extension/src/late-diagnostics.ts";
 import { LspClient } from "../src/builtin-extensions/pi-lsp-extension/src/lsp-client.ts";
+import type { LspManager } from "../src/builtin-extensions/pi-lsp-extension/src/lsp-manager.ts";
+import { createDiagnosticsTool } from "../src/builtin-extensions/pi-lsp-extension/src/tools/diagnostics.ts";
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -438,5 +440,61 @@ describe("late LSP diagnostics", () => {
 		await Promise.resolve();
 		late.noteToolResult("read");
 		expect(late.take()).toEqual([{ relPath: "b.ts", diagnostics: [diag("current error")] }]);
+	});
+});
+
+describe("lsp_diagnostics tool", () => {
+	it("waits for an answer about the current content instead of calling an empty cache clean", async () => {
+		const { client, child } = setup();
+		const answers: Array<(response: unknown) => void> = [];
+		mocks.connection.sendRequest.mockImplementation((method: string) =>
+			method === "initialize"
+				? Promise.resolve({
+						capabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } },
+					})
+				: new Promise((resolve) => answers.push(resolve)),
+		);
+		await startDirect(client, child);
+		const uri = "file:///w/mod.ts";
+		let version = 0;
+		const manager = {
+			waitForClientForFile: async () => client,
+			getFileUri: () => uri,
+			resolvePath: (path: string) => `/w/${path}`.replace("/w/.", "/w"),
+			getUnavailableReason: () => "unused",
+		} as unknown as LspManager;
+		const tool = createDiagnosticsTool(manager, null, async () => {
+			version++;
+			if (version === 1) client.didOpen(uri, "typescript", version, "x");
+			else client.didChange(uri, version, "x");
+		});
+		const run = () => tool.execute("call", { path: "mod.ts" });
+
+		// Like typescript-language-server 6.1.0 on a first open: tsserver answers once the project has loaded.
+		const loaded = run();
+		await vi.advanceTimersByTimeAsync(2500);
+		answers[0]({ success: true, body: [] });
+		answers[1]({
+			success: true,
+			body: [
+				{
+					start: { line: 1, offset: 12 },
+					end: { line: 1, offset: 17 },
+					text: "bad type",
+					code: 2322,
+					category: "error",
+				},
+			],
+		});
+		expect((await loaded).content[0]).toMatchObject({ text: expect.stringContaining("1 error(s)") });
+
+		// No answer at all: say that type checking did not run, never "clean".
+		const silent = run();
+		await vi.advanceTimersByTimeAsync(15_000);
+		const text = (await silent).content[0];
+		expect(text).toMatchObject({ text: expect.stringContaining("Type checking did not run for mod.ts") });
+		expect(text).not.toMatchObject({ text: expect.stringContaining("clean") });
+		child.exit();
+		await client.shutdown();
 	});
 });

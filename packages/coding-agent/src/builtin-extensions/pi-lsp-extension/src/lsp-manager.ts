@@ -232,6 +232,16 @@ export class LspManager {
     return this.getClientForLanguage(languageId);
   }
 
+  /** Like getClientForFile, but waits for a starting server instead of returning null. */
+  async waitForClientForFile(filePath: string): Promise<LspClient | null> {
+    const languageId = this.getLanguageId(filePath);
+    if (!languageId) return null;
+    const client = await this.getClientForLanguage(languageId);
+    if (client) return client;
+    const started = await this.startingServers.get(languageId)?.catch(() => null);
+    return started?.initialized ? started : null;
+  }
+
   /**
    * Get a user-friendly message about why no client is available for a file.
    */
