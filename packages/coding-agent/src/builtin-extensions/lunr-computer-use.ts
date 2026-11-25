@@ -12,6 +12,8 @@ const loadedGuidance =
 export default function computerUse(pi: ExtensionAPI): void {
 	if (process.env.PI_SUBAGENT_CHILD === "1") return;
 	let workflow: ComputerWorkflow | undefined;
+	// Shows a first-use runtime download in the card of the computer tool that triggered it.
+	let status: ((message: string) => void) | undefined;
 	let generation = 0;
 	let loaded = false;
 	const windows = process.platform === "win32" && ["x64", "arm64"].includes(process.arch);
@@ -71,7 +73,7 @@ export default function computerUse(pi: ExtensionAPI): void {
 				await ctx.waitForIdle();
 				await close();
 				const { installRuntime } = await import("../core/computer-use/runtime.ts");
-				const { app } = await installRuntime(AbortSignal.timeout(60000));
+				const { app } = await installRuntime(undefined, (message) => ctx.ui.notify(message, "info"));
 				ctx.ui.notify(
 					app
 						? `Bundled runtime verified. In System Settings > Privacy & Security, add this app to both Accessibility and Screen & System Audio Recording. On older macOS, the second entry is Screen Recording. Choose this app:\n${app}\nEnable both grants, then restart lunR. Setup has not captured the screen or controlled any application.`
@@ -124,7 +126,7 @@ export default function computerUse(pi: ExtensionAPI): void {
 							computer_end: "End this workflow and release the desktop lease.",
 						}[name],
 			parameters: computerSchemas[name],
-			async execute(_id, params, signal, _update, ctx) {
+			async execute(_id, params, signal, onUpdate, ctx) {
 				const input: Record<string, unknown> = Object.fromEntries(Object.entries(params));
 				const settings = SettingsManager.create(ctx.cwd);
 				const refusal = computerRefusal(name, input, {
@@ -159,9 +161,10 @@ export default function computerUse(pi: ExtensionAPI): void {
 						import("../core/computer-use/workflow.ts"),
 					]);
 					if (current !== generation) throw new Error("Computer session replaced.");
-					workflow ??= new ComputerWorkflow(new CuaAdapter());
+					workflow ??= new ComputerWorkflow(new CuaAdapter((message) => status?.(message)));
 				}
 				const active = workflow;
+				status = (text) => onUpdate?.({ content: [{ type: "text", text }], details: {} });
 				try {
 					const result = await active.execute(name, input, signal);
 					if (current !== generation) throw new Error("Computer session replaced; discard the old observation.");

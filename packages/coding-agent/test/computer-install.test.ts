@@ -1,12 +1,17 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertOwnedPath, installRuntime, resolveRuntimeArchive } from "../src/core/computer-use/runtime.ts";
 
-const state = vi.hoisted(() => ({ root: "", archive: undefined as { bytes: number; sha256: string } | undefined }));
+const state = vi.hoisted(() => ({
+	root: "",
+	archive: undefined as { bytes: number; sha256: string } | undefined,
+	target: undefined as { platform: string; arch: string } | undefined,
+}));
 vi.mock("../src/core/computer-use/release.generated.ts", async (original) => {
 	const { computerRelease } = await original<typeof import("../src/core/computer-use/release.generated.ts")>();
 	return {
@@ -14,7 +19,9 @@ vi.mock("../src/core/computer-use/release.generated.ts", async (original) => {
 			...computerRelease,
 			get artifacts() {
 				return computerRelease.artifacts.map((artifact) =>
-					artifact.platform === process.platform && artifact.arch === process.arch && state.archive
+					artifact.platform === (state.target?.platform ?? process.platform) &&
+					artifact.arch === (state.target?.arch ?? process.arch) &&
+					state.archive
 						? { ...artifact, ...state.archive }
 						: artifact,
 				);
@@ -37,6 +44,7 @@ afterEach(async () => {
 	if (state.root) await rm(state.root, { recursive: true, force: true });
 	state.root = "";
 	state.archive = undefined;
+	state.target = undefined;
 });
 
 describe("verified native installation", () => {
@@ -44,7 +52,7 @@ describe("verified native installation", () => {
 		state.root = await mkdtemp(join(tmpdir(), "lunr-install-test-"));
 		await writeFile(join(state.root, "package.json"), JSON.stringify({ version: "0.9.0" }));
 		await expect(resolveRuntimeArchive(state.root, "linux", "x64")).rejects.toThrow("unsupported");
-		await expect(resolveRuntimeArchive(state.root, "win32", "x64")).rejects.toThrow("optional dependencies enabled");
+		await expect(resolveRuntimeArchive(state.root, "win32", "x64")).rejects.toThrow("payload is missing");
 		const payload = join(state.root, "node_modules", "@ashx-j", "lunr-computer-win32-x64");
 		await mkdir(payload, { recursive: true });
 		await writeFile(
@@ -52,6 +60,52 @@ describe("verified native installation", () => {
 			JSON.stringify({ name: "@ashx-j/lunr-computer-win32-x64", version: "0.8.0" }),
 		);
 		await expect(resolveRuntimeArchive(state.root, "win32", "x64")).rejects.toThrow("version does not match");
+	});
+	it("downloads the host payload once from its package and keeps it only when it matches the pin", async () => {
+		state.root = await mkdtemp(join(tmpdir(), "lunr-install-test-"));
+		state.target = { platform: "win32", arch: "x64" };
+		const { computerRelease } = await import("../src/core/computer-use/release.generated.ts");
+		const artifact = computerRelease.artifacts.find((item) => item.platform === "win32" && item.arch === "x64");
+		if (!artifact) throw new Error("No win32/x64 metadata.");
+		const packed = join(state.root, "packed");
+		await mkdir(join(packed, "package"), { recursive: true });
+		await writeFile(join(packed, "package", artifact.name), "pinned archive fixture");
+		const bytes = await readFile(join(packed, "package", artifact.name));
+		execFileSync("tar", ["-czf", join(packed, "payload.tgz"), "-C", packed, "package"]);
+		const tarball = await readFile(join(packed, "payload.tgz"));
+		const requests: string[] = [];
+		const server = createServer((request, response) => {
+			requests.push(request.url ?? "");
+			response.end(tarball);
+		});
+		await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("No test registry port.");
+		const registry = `http://127.0.0.1:${address.port}/`;
+		await writeFile(join(state.root, "package.json"), JSON.stringify({ version: "0.9.0" }));
+		try {
+			const messages: string[] = [];
+			const onDownload = (message: string) => messages.push(message);
+			state.archive = { bytes: bytes.length, sha256: "0".repeat(64) };
+			await expect(resolveRuntimeArchive(state.root, "win32", "x64", { registry, onDownload })).rejects.toThrow(
+				"failed size or SHA-256 verification",
+			);
+			state.archive = { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+			const { archive } = await resolveRuntimeArchive(state.root, "win32", "x64", { registry, onDownload });
+			expect(archive).toBe(join(state.root, ".lunr", "desktop", "payload", artifact.name));
+			expect(await readFile(archive, "utf8")).toBe("pinned archive fixture");
+			expect(await resolveRuntimeArchive(state.root, "win32", "x64", { registry, onDownload })).toEqual({
+				archive,
+				sha256: state.archive.sha256,
+			});
+			expect(requests).toEqual(
+				Array(2).fill("/@ashx-j/lunr-computer-win32-x64/-/lunr-computer-win32-x64-0.9.0.tgz"),
+			);
+			expect(messages).toHaveLength(2);
+			expect(messages[0]).toContain("Downloading the computer-use runtime for win32/x64");
+		} finally {
+			await new Promise((done) => server.close(done));
+		}
 	});
 	it.skipIf(process.platform !== "win32")(
 		"serializes extraction and rejects tampered cached helpers without overwriting them",

@@ -9,8 +9,10 @@ not implemented. See [Known limitations](#known-limitations).
 ## Setup and permissions
 
 Run `/computer setup` in the local lunR terminal. Setup verifies and installs the
-bundled runtime without downloading code, capturing the screen, or operating an
-application. It is unavailable in headless and gateway sessions.
+runtime without capturing the screen or operating an application. An npm install
+downloads the runtime for this machine once, on setup or the first computer tool
+call, and says so while it downloads. It is unavailable in headless and gateway
+sessions.
 
 Windows needs an active, unlocked desktop. On Apple Silicon macOS, setup prints
 the exact installed `CuaDriver.app` path. Add that app to Accessibility and
@@ -215,12 +217,16 @@ TUI cron continues to use its live permission context.
 lunR bundles [CuaDriver 0.28.1](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.28.1)
 as its native runtime. The upstream MIT license is under `native/computer-use`.
 
-The runtime resolves the host's optional payload package or matching archive
-beside a standalone executable. It verifies the archive, extracts a fresh
+The runtime uses the archive beside a standalone executable or an installed
+payload package. An npm install carries neither, because npm would install every
+platform's payload from lunR's shrinkwrap. On first use lunR downloads the host's
+`@ashx-j/lunr-computer-<platform>-<arch>` package at the lunR version from
+registry.npmjs.org and keeps its archive under `~/.lunr/desktop/payload` only if
+it matches the pinned size and SHA-256. It verifies the archive, extracts a fresh
 reference tree, and checks cached files/helpers against it. Redirected paths and
 escaping symlinks are refused. Installers do not overwrite an existing runtime.
 After confirming all owned processes stopped, an inactive cache can be removed
-for reinstallation. Runtime code is never downloaded at first use.
+for reinstallation.
 
 Windows uses system `tar.exe` and an isolated `mcp --direct --embedded
 --no-overlay` process. A hidden system PowerShell metadata probe refuses session
