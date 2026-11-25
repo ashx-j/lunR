@@ -155,10 +155,23 @@ interface GroupedCallOptions {
 export class GroupedCallText extends Text {
 	private call?: GroupedCallOptions;
 	private formattedWidth?: number;
+	private note?: string;
 
 	setCall(call: GroupedCallOptions): void {
-		this.setText(formatGroupedCall(call));
+		this.setText(formatGroupedCall(this.withNote(call)));
 		this.call = call;
+	}
+
+	/** Styled text after the detail that names a state the dot shows only by color ("— rejected"). */
+	setNote(note: string | undefined): void {
+		if (note === this.note) return;
+		this.note = note;
+		if (this.call) this.setCall(this.call);
+	}
+
+	private withNote(call: GroupedCallOptions): GroupedCallOptions {
+		if (!this.note) return call;
+		return { ...call, detail: call.detail?.trim() ? `${call.detail} ${this.note}` : this.note };
 	}
 
 	override setText(text: string): void {
@@ -169,7 +182,7 @@ export class GroupedCallText extends Text {
 
 	override render(width: number): string[] {
 		if (this.call && this.formattedWidth !== width) {
-			super.setText(formatGroupedCall(this.call, width));
+			super.setText(formatGroupedCall(this.withNote(this.call), width));
 			this.formattedWidth = width;
 		}
 		return super.render(width);

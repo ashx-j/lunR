@@ -5,6 +5,7 @@ import { theme } from "../theme/theme.ts";
 import { getBuiltinToolRenderer } from "../tool-renderers/index.ts";
 import {
 	formatGroupedCall,
+	GroupedCallText,
 	getTextOutput as getRenderedTextOutput,
 	toolGroupRole,
 	toolGroupTree,
@@ -40,6 +41,8 @@ export class ToolExecutionComponent extends Container {
 	private ui: TUI;
 	private cwd: string;
 	private executionStarted = false;
+	// Set when the user rejected this call in ask mode's approval dialog.
+	private rejected = false;
 	private argsComplete = false;
 	private result?: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
@@ -174,11 +177,15 @@ export class ToolExecutionComponent extends Container {
 				tree: toolGroupTree({ expanded: this.expanded, isError: this.result?.isError }),
 				dot: this.getStatusDot(),
 				title: theme.fg("toolTitle", theme.bold(this.toolName)),
-				detail: waitDuration && theme.fg("toolOutput", waitDuration),
+				detail: this.rejectedNote() ?? (waitDuration && theme.fg("toolOutput", waitDuration)),
 			}),
 			0,
 			0,
 		);
+	}
+
+	private rejectedNote(): string | undefined {
+		return this.rejected ? theme.fg("error", "— rejected") : undefined;
 	}
 
 	private createResultFallback(): Component | undefined {
@@ -192,6 +199,27 @@ export class ToolExecutionComponent extends Container {
 	updateArgs(args: unknown): void {
 		this.args = args;
 		this.updateDisplay();
+	}
+
+	/**
+	 * Ask mode's approval dialog for this call opened. Until it closes the call is not running, so the
+	 * renderer state from tool_execution_start (bash's start time) is dropped and restamped on approval.
+	 */
+	beginApproval(): void {
+		this.executionStarted = false;
+		this.rendererState = {};
+		this.updateDisplay();
+	}
+
+	/** The approval dialog closed: an approved call starts its clock now, a rejected one says so. */
+	endApproval(approved: boolean): void {
+		if (approved) {
+			this.markExecutionStarted();
+			return;
+		}
+		this.rejected = true;
+		this.updateDisplay();
+		this.ui.requestRender();
 	}
 
 	markExecutionStarted(): void {
@@ -265,6 +293,7 @@ export class ToolExecutionComponent extends Container {
 		this.result = undefined;
 		this.isPartial = true;
 		this.executionStarted = false;
+		this.rejected = false;
 		this.argsComplete = false;
 		this.expanded = false;
 		this.disposeComponent(this.resultRendererComponent);
@@ -429,6 +458,7 @@ export class ToolExecutionComponent extends Container {
 			} else {
 				try {
 					const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
+					if (component instanceof GroupedCallText) component.setNote(this.rejectedNote());
 					this.callRendererComponent = component;
 					renderContainer.addChild(component);
 					hasContent = true;
