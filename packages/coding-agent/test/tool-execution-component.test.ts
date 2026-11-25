@@ -14,7 +14,11 @@ import { createGrepToolDefinition } from "../src/core/tools/grep.ts";
 import { createLsToolDefinition } from "../src/core/tools/ls.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
-import { applySameToolGrouping, ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
+import {
+	applySameToolGrouping,
+	applyToolRunSpacing,
+	ToolExecutionComponent,
+} from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { formatGroupedCall, toolGroupTree } from "../src/modes/interactive/tool-renderers/render-utils.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -1128,6 +1132,16 @@ describe("ToolExecutionComponent density", () => {
 			compactRead("tool-read-c", "usage-service.ts"),
 		);
 		assertTreeGroup(lines, "read", ["resolve.ts", "model-runtime.ts", "usage-service.ts"]);
+	});
+
+	test("one-line bash calls from adjacent turns stack with no rows between them", () => {
+		const first = compactBash("tool-bash-run-1", "echo 1");
+		const second = compactBash("tool-bash-run-2", "echo 2");
+		applyToolRunSpacing(first, second);
+		const lines = [...first.render(80), ...second.render(80)].map((line) => stripAnsi(line).trim());
+
+		expect(lines.indexOf("● $ echo 2 — Took 0.0s")).toBe(lines.indexOf("● $ echo 1 — Took 0.0s") + 1);
+		expect(lines.filter((line) => line.startsWith("├─") || line.startsWith("└─"))).toEqual([]);
 	});
 
 	test("mixed read then bash keeps a blank line between headers", () => {

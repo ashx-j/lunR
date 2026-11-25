@@ -186,7 +186,7 @@ import {
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
 import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/thinking-summary.ts";
-import { applySameToolGrouping, ToolExecutionComponent } from "./components/tool-execution.ts";
+import { applySameToolGrouping, applyToolRunSpacing, ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { renderUsageBox } from "./components/usage-view.ts";
@@ -3981,10 +3981,25 @@ export class InteractiveMode {
 	// lunr: consecutive same-tool grouping — a tool component appended right after
 	// another component for the SAME tool becomes a group continuation (no top
 	// spacer / top pad); the previous card drops its bottom pad. Mixed neighbors
-	// and singletons keep Box(1, 1). Adjacency is decided at add time only.
+	// and singletons keep Box(1, 1). A same-tool card from the turn before, past an empty
+	// assistant message, only loses the padding between them (applyToolRunSpacing).
+	// Adjacency is decided at add time only.
 	private addToolComponentToChat(component: ToolExecutionComponent): void {
-		const last = this.chatContainer.children[this.chatContainer.children.length - 1];
-		applySameToolGrouping(last instanceof ToolExecutionComponent ? last : undefined, component);
+		const children = this.chatContainer.children;
+		const last = children[children.length - 1];
+		if (last instanceof ToolExecutionComponent) {
+			applySameToolGrouping(last, component);
+		} else {
+			// A tool-only assistant message renders nothing, so the card before it is the visible neighbor.
+			const previous = children[children.length - 2];
+			if (
+				last instanceof AssistantMessageComponent &&
+				previous instanceof ToolExecutionComponent &&
+				last.render(this.ui.terminal.columns).length === 0
+			) {
+				applyToolRunSpacing(previous, component);
+			}
+		}
 		this.chatContainer.addChild(component);
 	}
 
