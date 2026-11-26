@@ -1,11 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertOwnedPath, installRuntime, resolveRuntimeArchive } from "../src/core/computer-use/runtime.ts";
+import {
+	assertOwnedPath,
+	downloadRuntimeArchive,
+	installRuntime,
+	resolveRuntimeArchive,
+} from "../src/core/computer-use/runtime.ts";
 
 const state = vi.hoisted(() => ({
 	root: "",
@@ -47,64 +52,165 @@ afterEach(async () => {
 	state.target = undefined;
 });
 
+/**
+ * A registry serving one win32-x64 payload tarball that wraps `bytes`, pinned in the mocked
+ * release. `handler` replaces the default full response.
+ */
+async function registryFixture(
+	bytes: Buffer,
+	handler?: (request: IncomingMessage, response: ServerResponse, tarball: Buffer) => void,
+) {
+	state.root = await mkdtemp(join(tmpdir(), "lunr-install-test-"));
+	state.target = { platform: "win32", arch: "x64" };
+	state.archive = { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+	const { computerRelease } = await import("../src/core/computer-use/release.generated.ts");
+	const name = computerRelease.artifacts.find((item) => item.platform === "win32" && item.arch === "x64")?.name;
+	if (!name) throw new Error("No win32/x64 metadata.");
+	const packed = join(state.root, "packed");
+	await mkdir(join(packed, "package"), { recursive: true });
+	await writeFile(join(packed, "package", name), bytes);
+	execFileSync("tar", ["-czf", join(packed, "payload.tgz"), "-C", packed, "package"]);
+	const tarball = await readFile(join(packed, "payload.tgz"));
+	await writeFile(join(state.root, "package.json"), JSON.stringify({ version: "0.9.0" }));
+	const requests: Array<{ url: string; range?: string }> = [];
+	const server = createServer((request, response) => {
+		requests.push({ url: request.url ?? "", range: request.headers.range });
+		if (handler) handler(request, response, tarball);
+		else response.end(tarball);
+	});
+	await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("No test registry port.");
+	return {
+		bytes,
+		name,
+		requests,
+		registry: `http://127.0.0.1:${address.port}/`,
+		close: () => new Promise<void>((done) => server.close(() => done())),
+	};
+}
+
 describe("verified native installation", () => {
-	it("reports unsupported hosts, omitted optional packages, and mismatched package versions without downloads", async () => {
+	it("reports unsupported hosts, a runtime not downloaded yet, and mismatched package versions", async () => {
 		state.root = await mkdtemp(join(tmpdir(), "lunr-install-test-"));
 		await writeFile(join(state.root, "package.json"), JSON.stringify({ version: "0.9.0" }));
 		await expect(resolveRuntimeArchive(state.root, "linux", "x64")).rejects.toThrow("unsupported");
-		await expect(resolveRuntimeArchive(state.root, "win32", "x64")).rejects.toThrow("payload is missing");
+		await expect(resolveRuntimeArchive(state.root, "win32", "x64")).rejects.toThrow("not downloaded yet");
 		const payload = join(state.root, "node_modules", "@ashx-j", "lunr-computer-win32-x64");
 		await mkdir(payload, { recursive: true });
 		await writeFile(
 			join(payload, "package.json"),
-			JSON.stringify({ name: "@ashx-j/lunr-computer-win32-x64", version: "0.8.0" }),
+			JSON.stringify({ name: "@ashx-j/lunr-computer-win32-x64", version: "0.9.0-other" }),
 		);
 		await expect(resolveRuntimeArchive(state.root, "win32", "x64")).rejects.toThrow("version does not match");
 	});
-	it("downloads the host payload once from its package and keeps it only when it matches the pin", async () => {
-		state.root = await mkdtemp(join(tmpdir(), "lunr-install-test-"));
-		state.target = { platform: "win32", arch: "x64" };
-		const { computerRelease } = await import("../src/core/computer-use/release.generated.ts");
-		const artifact = computerRelease.artifacts.find((item) => item.platform === "win32" && item.arch === "x64");
-		if (!artifact) throw new Error("No win32/x64 metadata.");
-		const packed = join(state.root, "packed");
-		await mkdir(join(packed, "package"), { recursive: true });
-		await writeFile(join(packed, "package", artifact.name), "pinned archive fixture");
-		const bytes = await readFile(join(packed, "package", artifact.name));
-		execFileSync("tar", ["-czf", join(packed, "payload.tgz"), "-C", packed, "package"]);
-		const tarball = await readFile(join(packed, "payload.tgz"));
-		const requests: string[] = [];
-		const server = createServer((request, response) => {
-			requests.push(request.url ?? "");
-			response.end(tarball);
-		});
-		await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-		const address = server.address();
-		if (!address || typeof address === "string") throw new Error("No test registry port.");
-		const registry = `http://127.0.0.1:${address.port}/`;
-		await writeFile(join(state.root, "package.json"), JSON.stringify({ version: "0.9.0" }));
+	it("downloads the host payload once, keeps it only when it matches the pin, and refetches a corrupt cache", async () => {
+		const f = await registryFixture(Buffer.from("pinned archive fixture"));
 		try {
-			const messages: string[] = [];
-			const onDownload = (message: string) => messages.push(message);
-			state.archive = { bytes: bytes.length, sha256: "0".repeat(64) };
-			await expect(resolveRuntimeArchive(state.root, "win32", "x64", { registry, onDownload })).rejects.toThrow(
-				"failed size or SHA-256 verification",
+			const pin = state.archive;
+			state.archive = { bytes: f.bytes.length, sha256: "0".repeat(64) };
+			await expect(downloadRuntimeArchive(state.root, "win32", "x64", { registry: f.registry })).rejects.toThrow(
+				/^Could not download the computer-use runtime from 127\.0\.0\.1:\d+: the downloaded runtime does not match the pinned SHA-256\./,
 			);
-			state.archive = { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
-			const { archive } = await resolveRuntimeArchive(state.root, "win32", "x64", { registry, onDownload });
-			expect(archive).toBe(join(state.root, ".lunr", "desktop", "payload", artifact.name));
-			expect(await readFile(archive, "utf8")).toBe("pinned archive fixture");
-			expect(await resolveRuntimeArchive(state.root, "win32", "x64", { registry, onDownload })).toEqual({
+			state.archive = pin;
+			const archive = await downloadRuntimeArchive(state.root, "win32", "x64", { registry: f.registry });
+			expect(archive).toBe(join(state.root, ".lunr", "desktop", "payload", f.name));
+			expect(await resolveRuntimeArchive(state.root, "win32", "x64")).toEqual({
 				archive,
-				sha256: state.archive.sha256,
+				sha256: pin?.sha256,
+				verified: true,
 			});
-			expect(requests).toEqual(
-				Array(2).fill("/@ashx-j/lunr-computer-win32-x64/-/lunr-computer-win32-x64-0.9.0.tgz"),
+			expect(await downloadRuntimeArchive(state.root, "win32", "x64", { registry: f.registry })).toBe(archive);
+			expect(f.requests).toHaveLength(2);
+			const corrupt = Buffer.from(f.bytes);
+			corrupt[0] ^= 1;
+			await writeFile(archive, corrupt);
+			await expect(resolveRuntimeArchive(state.root, "win32", "x64")).rejects.toThrow("not downloaded yet");
+			await expect(readFile(archive)).rejects.toMatchObject({ code: "ENOENT" });
+			expect(
+				await readFile(await downloadRuntimeArchive(state.root, "win32", "x64", { registry: f.registry })),
+			).toEqual(f.bytes);
+			expect(f.requests.map((request) => request.url)).toEqual(
+				Array(3).fill("/@ashx-j/lunr-computer-win32-x64/-/lunr-computer-win32-x64-0.9.0.tgz"),
 			);
-			expect(messages).toHaveLength(2);
-			expect(messages[0]).toContain("Downloading the computer-use runtime for win32/x64");
 		} finally {
-			await new Promise((done) => server.close(done));
+			await f.close();
+		}
+	});
+	it("resumes an interrupted download with a range request and explains the failure in one sentence", async () => {
+		const f = await registryFixture(randomBytes(300_000), (request, response, tarball) => {
+			const range = /^bytes=(\d+)-$/.exec(request.headers.range ?? "");
+			if (!range) {
+				response.writeHead(200, { "content-length": tarball.length });
+				// Pause first: a stream that errors drops chunks the reader has not taken yet.
+				response.write(tarball.subarray(0, 100_000), () => setTimeout(() => response.destroy(), 300));
+				return;
+			}
+			const start = Number(range[1]);
+			response.writeHead(206, {
+				"content-length": tarball.length - start,
+				"content-range": `bytes ${start}-${tarball.length - 1}/${tarball.length}`,
+			});
+			response.end(tarball.subarray(start));
+		});
+		try {
+			const progress: number[] = [];
+			await expect(
+				downloadRuntimeArchive(state.root, "win32", "x64", {
+					registry: f.registry,
+					onProgress: ({ received }) => progress.push(received),
+				}),
+			).rejects.toThrow(
+				/^Could not download the computer-use runtime from 127\.0\.0\.1:\d+: the connection was refused or dropped\. Check the network or proxy/,
+			);
+			const archive = await downloadRuntimeArchive(state.root, "win32", "x64", { registry: f.registry });
+			expect(await readFile(archive)).toEqual(f.bytes);
+			const resumed = Number(/^bytes=(\d+)-$/.exec(f.requests[1]?.range ?? "")?.[1]);
+			expect(resumed).toBeGreaterThan(0);
+			expect(resumed).toBe(progress.at(-1));
+		} finally {
+			await f.close();
+		}
+	});
+	it("stops at the size the runtime package can hold", async () => {
+		let declared = true;
+		const f = await registryFixture(Buffer.from("small archive"), (_request, response) => {
+			if (declared) {
+				response.writeHead(200, { "content-length": 10_000_000 });
+				response.end();
+				return;
+			}
+			response.writeHead(200);
+			const chunk = Buffer.alloc(16_384);
+			const pump = () => {
+				while (!response.destroyed && response.write(chunk));
+				if (!response.destroyed) response.once("drain", pump);
+			};
+			pump();
+		});
+		try {
+			await expect(downloadRuntimeArchive(state.root, "win32", "x64", { registry: f.registry })).rejects.toThrow(
+				"offered 10000000 bytes, more than the runtime package can hold",
+			);
+			declared = false;
+			await expect(downloadRuntimeArchive(state.root, "win32", "x64", { registry: f.registry })).rejects.toThrow(
+				"sent more data than the runtime package can hold",
+			);
+			const part = join(state.root, ".lunr", "desktop", "payload", "lunr-computer-win32-x64-0.9.0.tgz.part");
+			expect((await stat(part)).size).toBeLessThanOrEqual(f.bytes.length + 64 * 1024);
+		} finally {
+			await f.close();
+		}
+	});
+	it("uses the npm-configured registry and lets concurrent downloads share one request", async () => {
+		const f = await registryFixture(Buffer.from("shared archive"));
+		vi.stubEnv("npm_config_registry", f.registry);
+		try {
+			const archives = await Promise.all([1, 2, 3].map(() => downloadRuntimeArchive(state.root, "win32", "x64")));
+			expect(new Set(archives).size).toBe(1);
+			expect(f.requests).toHaveLength(1);
+		} finally {
+			await f.close();
 		}
 	});
 	it.skipIf(process.platform !== "win32")(

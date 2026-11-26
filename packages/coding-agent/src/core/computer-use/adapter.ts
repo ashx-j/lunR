@@ -33,18 +33,12 @@ export class CuaAdapter implements ComputerDriver {
 	private closing?: Promise<void>;
 	private readonly abort = new AbortController();
 	private processObserver?: (pid: number) => Promise<void>;
-	private readonly onStatus?: (message: string) => void;
-	/** onStatus receives one line when the first connection must download the runtime. */
-	constructor(onStatus?: (message: string) => void) {
-		this.onStatus = onStatus;
-	}
 	setProcessObserver(observer: (pid: number) => Promise<void>): void {
 		this.processObserver = observer;
 	}
 
-	private async connect(callSignal: AbortSignal): Promise<void> {
-		const { command, app } = await installRuntime(callSignal, this.onStatus);
-		const signal = AbortSignal.any([callSignal, AbortSignal.timeout(60000)]);
+	private async connect(signal: AbortSignal): Promise<void> {
+		const { command, app } = await installRuntime(signal);
 		signal.throwIfAborted();
 		let args = ["mcp", "--direct", "--embedded", "--no-overlay"];
 		if (app) {
@@ -94,7 +88,7 @@ export class CuaAdapter implements ComputerDriver {
 		try {
 			await assertInteractiveDesktop(combined);
 			combined.throwIfAborted();
-			this.connecting ??= this.connect(combined);
+			this.connecting ??= this.connect(AbortSignal.any([combined, AbortSignal.timeout(60000)]));
 			await this.connecting;
 			combined.throwIfAborted();
 			if (!this.client) throw new Error("Computer connection closed.");

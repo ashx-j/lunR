@@ -10,8 +10,9 @@ not implemented. See [Known limitations](#known-limitations).
 
 Run `/computer setup` in the local lunR terminal. Setup verifies and installs the
 runtime without capturing the screen or operating an application. An npm install
-downloads the runtime for this machine once, on setup or the first computer tool
-call, and says so while it downloads. It is unavailable in headless and gateway
+downloads the runtime for this machine once (28 MB on Windows x64, 27 MB on
+Windows arm64, 70 MB on macOS), starting at `computer_load`, `/computer setup`
+or the first computer tool call. The footer and the tool card show progress. It is unavailable in headless and gateway
 sessions.
 
 Windows needs an active, unlocked desktop. On Apple Silicon macOS, setup prints
@@ -220,9 +221,20 @@ as its native runtime. The upstream MIT license is under `native/computer-use`.
 The runtime uses the archive beside a standalone executable or an installed
 payload package. An npm install carries neither, because npm would install every
 platform's payload from lunR's shrinkwrap. On first use lunR downloads the host's
-`@ashx-j/lunr-computer-<platform>-<arch>` package at the lunR version from
-registry.npmjs.org and keeps its archive under `~/.lunr/desktop/payload` only if
-it matches the pinned size and SHA-256. It verifies the archive, extracts a fresh
+`@ashx-j/lunr-computer-<platform>-<arch>` package at the lunR version and keeps
+its archive under `~/.lunr/desktop/payload` only if it matches the pinned size
+and SHA-256. It asks the registry npm uses: `npm_config_registry` when set,
+otherwise `npm config get @ashx-j:registry` or `registry`, otherwise
+registry.npmjs.org. A mirror is safe because of the pinned hash; a registry that
+needs a login token is not supported. Proxy variables such as `HTTPS_PROXY` apply.
+
+The download runs in the background, outside any single tool call. A tool call
+waits up to 60 seconds, then tells the model how much has arrived and to call
+again. A download that stops (no data for 60 seconds, a dropped connection, a
+closed lunR) resumes from where it stopped with an HTTP range request. Only one
+lunR process downloads at a time; others wait for it. A cached archive is hashed
+again the first time each process uses it, and a mismatching one is deleted and
+fetched again. It verifies the archive, extracts a fresh
 reference tree, and checks cached files/helpers against it. Redirected paths and
 escaping symlinks are refused. Installers do not overwrite an existing runtime.
 After confirming all owned processes stopped, an inactive cache can be removed

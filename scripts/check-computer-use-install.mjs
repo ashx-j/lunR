@@ -79,7 +79,7 @@ try {
 	const packageRoot = join(relocated, "node_modules", cliName);
 	assert.deepEqual(await readdir(join(packageRoot, "native", "computer-use")), ["LICENSE.md"]);
 	const { resolveRuntimeArchive } = await import(pathToFileURL(join(packageRoot, "dist", "core", "computer-use", "runtime.js")).href);
-	if (host) await assert.rejects(resolveRuntimeArchive(packageRoot), /payload is missing/);
+	if (host) await assert.rejects(resolveRuntimeArchive(packageRoot), /not downloaded yet/);
 	await assert.rejects(resolveRuntimeArchive(packageRoot, "linux", "x64"), /unsupported/);
 	await run(process.execPath, ["scripts/check-interactive-first-paint.mjs", join(packageRoot, cliEntry)], fileURLToPath(new URL("../", import.meta.url)));
 	console.log("Relocated public-name installation: ignore-scripts, no payload packages and first requests passed.");
@@ -99,7 +99,7 @@ try {
 	await mkdir(omitted);
 	await writeFile(join(omitted, "package.json"), JSON.stringify({ version: cli.manifest.version, optionalDependencies: Object.fromEntries(release.artifacts.map((artifact) => [artifact.packageName, cli.manifest.version])) }));
 	await run(npm, ["install", "--ignore-scripts", "--omit=optional", "--no-audit", "--no-fund"], omitted);
-	await assert.rejects(resolveRuntimeArchive(omitted, "win32", "x64"), /payload is missing/);
+	await assert.rejects(resolveRuntimeArchive(omitted, "win32", "x64"), /not downloaded yet/);
 	console.log("OS/CPU selection for all supported targets and Linux, plus omitted optional dependencies passed.");
 
 	const installer = join(root, "installer");
