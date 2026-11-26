@@ -54,6 +54,14 @@ describe("web_search after Gemini Web removal", () => {
 		expect(readFileSync(configPath, "utf8")).toBe(saved);
 	});
 
+	it("shows no notice for chromeProfile alone, which never turned Gemini Web on", async () => {
+		writeFileSync(join(dir, "web-search.json"), '{ "searchProvider": "gemini", "chromeProfile": "Default" }\n');
+		const { search } = await import("../src/builtin-extensions/pi-web-access/gemini-search.ts");
+		const message = await search("q").catch((err: Error) => err.message);
+		expect(message).not.toContain(REMOVED);
+		expect(message).toContain("Set GEMINI_API_KEY");
+	});
+
 	it("auto names no Google sign-in when nothing is configured", async () => {
 		const { search } = await import("../src/builtin-extensions/pi-web-access/gemini-search.ts");
 		const message = await search("q", { provider: "auto" }).catch((err: Error) => err.message);
