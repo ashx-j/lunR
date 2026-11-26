@@ -1,5 +1,17 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+	linkSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	readlinkSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -9,26 +21,81 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AutoReviewSkips } from "../src/core/auto-review-skip.ts";
 import { createHarness, type Harness } from "./suite/harness.ts";
 
-describe("auto mode's local rules", () => {
+/** Every entry under `dir` with its type and content, to prove a run changed nothing there. */
+function snapshot(dir: string): Record<string, string> {
+	const entries: Record<string, string> = {};
+	const walk = (path: string, rel: string) => {
+		for (const name of readdirSync(path)) {
+			const full = join(path, name);
+			const stat = lstatSync(full);
+			if (stat.isSymbolicLink()) entries[`${rel}${name}`] = `link:${readlinkSync(full)}`;
+			else if (stat.isDirectory()) {
+				entries[`${rel}${name}/`] = "dir";
+				walk(full, `${rel}${name}/`);
+			} else entries[`${rel}${name}`] = `file:${readFileSync(full, "utf8")}:${stat.mtimeMs}`;
+		}
+	};
+	walk(dir, "");
+	return entries;
+}
+
+describe.skipIf(process.platform === "win32")("auto mode's local rules", () => {
 	let dir: string;
 	let project: string;
+	let outside: string;
 	let skips: AutoReviewSkips;
-	const skipped = (command: string) => skips.allows("bash", { command }, project);
+	let calls = 0;
+	const decide = (command: string) => skips.allows("bash", { command }, project, { id: `call-${++calls}` });
+	/** Decides like auto mode, and when the command skips review, runs it for real as the bash tool would. */
+	const run = async (command: string) => {
+		const id = `call-${++calls}`;
+		const allowed = await skips.allows("bash", { command }, project, { id });
+		if (allowed) skips.finished(id, spawnSync("bash", ["-c", command], { cwd: project, timeout: 5000 }).status !== 0);
+		return allowed;
+	};
 
 	beforeEach(() => {
 		dir = realpathSync(mkdtempSync(join(tmpdir(), "lunr-auto-skip-")));
 		project = join(dir, "project");
+		outside = join(dir, "other");
 		mkdirSync(join(project, "src"), { recursive: true });
-		mkdirSync(join(dir, "other"));
+		mkdirSync(outside);
+		writeFileSync(join(outside, "secret"), "secret\n");
 		writeFileSync(join(project, "src", "tracked.ts"), "a\n");
 		writeFileSync(join(project, "src", "changed.ts"), "a\n");
-		const git = (...args: string[]) => execFileSync("git", args, { cwd: project, stdio: "ignore" });
-		git("init", "-q");
-		git("add", ".");
-		git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+		writeFileSync(join(project, "src", "skip.ts"), "a\n");
+		symlinkSync(outside, join(project, "src", "extlink"));
+		linkSync(join(outside, "secret"), join(project, "hardout"));
+		const git = (cwd: string, ...args: string[]) =>
+			execFileSync(
+				"git",
+				["-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always", ...args],
+				{
+					cwd,
+					stdio: "ignore",
+				},
+			);
+		git(project, "init", "-q");
+		git(project, "add", ".");
+		git(project, "commit", "-qm", "init");
 		writeFileSync(join(project, "src", "changed.ts"), "b\n");
+		git(project, "update-index", "--skip-worktree", "src/skip.ts");
+		writeFileSync(join(project, "src", "skip.ts"), "local\n");
 		writeFileSync(join(project, "notes.txt"), "mine\n");
-		symlinkSync(join(dir, "other"), join(project, "out"));
+		symlinkSync(outside, join(project, "out"));
+		execFileSync("mkfifo", [join(project, "fifo")]);
+		mkdirSync(join(project, "nested"));
+		git(join(project, "nested"), "init", "-q");
+		writeFileSync(join(project, "nested", "untracked"), "u\n");
+		const sub = join(dir, "subsrc");
+		mkdirSync(sub);
+		git(sub, "init", "-q");
+		writeFileSync(join(sub, "f"), "a\n");
+		git(sub, "add", "f");
+		git(sub, "commit", "-qm", "s");
+		git(project, "submodule", "add", "-q", sub, "subm");
+		git(project, "commit", "-qm", "sub");
+		writeFileSync(join(project, "subm", "f"), "dirty\n");
 		vi.stubEnv("PI_CODING_AGENT_DIR", join(dir, "profile", "agent"));
 		skips = new AutoReviewSkips();
 	});
@@ -37,7 +104,8 @@ describe("auto mode's local rules", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("runs file work inside the project without review", async () => {
+	it("runs file work inside the project without review and changes nothing outside it", async () => {
+		const before = snapshot(outside);
 		for (const command of [
 			"mkdir -p a",
 			"touch a/x",
@@ -47,26 +115,25 @@ describe("auto mode's local rules", () => {
 			"mv a/z a/w",
 			"rm a/x",
 			"ls a",
-			"mkdir -p b && cp -r a b/ && ls b",
+			"cat a/y > a/copy",
+			"grep hi a/y > a/found",
 			"cat > a/notes.md <<'EOF'\nsome 'quoted' text\nEOF",
-			"sed -i 's/a/b/' src/tracked.ts",
-			"rm src/tracked.ts",
+			"sed -i -e 's/a/b/' -e 's/c/d/' src/tracked.ts",
+			"rm a/w",
 			"npm --version 2>&1",
 		]) {
-			expect(await skipped(command), command).toBe(true);
+			expect(await run(command), command).toBe(true);
 		}
+		expect(snapshot(outside)).toEqual(before);
+		expect(readFileSync(join(project, "src", "tracked.ts"), "utf8")).toBe("b\n");
 	});
 
-	it("still reviews anything that reaches outside, runs a program, or deletes what it can't restore", async () => {
+	it("reviews commands that reach outside, run a program, or delete what git can't restore", async () => {
 		for (const command of [
 			"rm -rf a",
 			"rm -rf /",
 			"rm notes.txt",
 			"rm src/changed.ts",
-			"echo x > notes.txt",
-			"cp src/tracked.ts notes.txt",
-			"sed -i 's/a/b/' src/changed.ts",
-			"mv notes.txt t && rm t",
 			"rm src/*.ts",
 			"touch ../other/x",
 			"touch out/x",
@@ -93,30 +160,85 @@ describe("auto mode's local rules", () => {
 			"sed -i 's/a/b/w ../other/x' src/tracked.ts",
 			"find . -name x -delete",
 			"chmod +x src/tracked.ts",
+			"echo x > notes.txt",
+			"cp src/tracked.ts notes.txt",
+			"sed -i 's/a/b/' src/changed.ts",
+			"mv notes.txt t && rm t",
 		]) {
-			expect(await skipped(command), command).toBe(false);
+			expect(await decide(command), command).toBe(false);
 		}
 	});
 
-	it("lets rm skip review only for files this session made or git can restore", async () => {
-		expect(await skipped("rm notes.txt")).toBe(false);
-		expect(await skipped("mv notes.txt kept.txt")).toBe(true);
-		writeFileSync(join(project, "kept.txt"), "mine\n");
-		expect(await skipped("rm kept.txt")).toBe(false);
-		expect(await skipped("touch a.txt")).toBe(true);
-		expect(await skipped("mv a.txt b.txt")).toBe(true);
-		writeFileSync(join(project, "b.txt"), "");
-		expect(await skipped("rm b.txt")).toBe(true);
-		expect(await skips.allows("write", { path: "new.ts", content: "" }, project)).toBe(true);
-		writeFileSync(join(project, "new.ts"), "");
-		expect(await skipped("rm -f new.ts")).toBe(true);
+	// The escapes the review of #366 found: each must reach the reviewer, so nothing here runs.
+	it.each([
+		["a quoted here-document end marker hiding a later line", "cat > g <<\\EOF\nhi\nEOF\ntouch ../other/HD"],
+		["a quoted end marker in the middle of the word", 'cat > g <<E"O"F\nhi\nEOF\ntouch ../other/HD'],
+		["cp -r carrying a symlink a later part writes through", "cp -r src copy && echo pwned > copy/extlink/PWN"],
+		["mv of a directory holding a symlink", "mv src moved && echo pwned > moved/extlink/PWN"],
+		["cp -a into a new directory", "mkdir -p q && cp -a src q/ && echo x > q/src/extlink/PWN"],
+		["cp of a symlink", "cp src/extlink copied"],
+		["rm in a nested repository", "rm nested/untracked"],
+		["rm in a submodule", "rm subm/f"],
+		["rm of a skip-worktree file", "rm src/skip.ts"],
+		["overwrite of a skip-worktree file", "echo x > src/skip.ts"],
+		["a write to a FIFO", "echo hi > fifo"],
+		["cp onto a FIFO", "cp notes.txt fifo"],
+		["rm of a FIFO", "rm fifo"],
+		["an append to a hard link", "echo hi >> hardout"],
+		["an overwrite of a hard link", "echo hi > hardout"],
+		["cp onto a hard link", "cp notes.txt hardout"],
+		["touch of a hard link", "touch hardout"],
+		["a file outside copied in", "cat ../other/secret > leak.txt"],
+		["an outside file read through <", "cat < ../other/secret > leak.txt"],
+		["the environment copied in", "printenv > env.txt"],
+		["env copied in", "env > env.txt"],
+		["sed -i reading an outside file", "sed -i '1r ../other/secret' src/tracked.ts"],
+		["sed reading an outside file into a redirect", "sed '1r ../other/secret' src/tracked.ts > leak.txt"],
+	])("reviews %s", async (_name, command) => {
+		const before = snapshot(outside);
+		expect(await run(command)).toBe(false);
+		expect(snapshot(outside)).toEqual(before);
+	});
+
+	it("counts a file as the session's only after the call succeeded and while it is unchanged", async () => {
+		expect(await run("false && touch later.md")).toBe(true);
+		writeFileSync(join(project, "later.md"), "the user's\n");
+		expect(await decide("rm later.md")).toBe(false);
+
+		expect(await run("touch draft.md")).toBe(true);
+		writeFileSync(join(project, "draft.md"), "notes from another terminal\n");
+		expect(await decide("rm draft.md")).toBe(false);
+
+		expect(await skips.allows("write", { path: "new.md" }, project, { id: "write-1" })).toBe(true);
+		writeFileSync(join(project, "new.md"), "written by the tool\n");
+		skips.finished("write-1", false);
+		expect(await run("echo more >> new.md")).toBe(true);
+		expect(await run("rm new.md")).toBe(true);
+
+		expect(await skips.allows("write", { path: "edited.md" }, project, { id: "write-2" })).toBe(true);
+		writeFileSync(join(project, "edited.md"), "written by the tool\n");
+		skips.finished("write-2", false);
+		writeFileSync(join(project, "edited.md"), "changed by the user\n");
+		expect(await decide("echo x > edited.md")).toBe(false);
+
+		expect(await run("touch a.txt")).toBe(true);
+		expect(await run("mv a.txt b.txt")).toBe(true);
+		expect(await run("rm b.txt")).toBe(true);
+		expect(await run("mv notes.txt kept.txt")).toBe(true);
+		expect(await decide("rm kept.txt")).toBe(false);
+		expect(await run("rm src/tracked.ts")).toBe(true);
+	});
+
+	it("reviews every command when a bash prefix is configured", async () => {
+		const call = { id: "prefixed", shellCommandPrefix: "shopt -s expand_aliases" };
+		expect(await skips.allows("bash", { command: "mkdir -p a" }, project, call)).toBe(false);
 	});
 
 	it("reviews lunR's own files when the profile is inside the project", async () => {
 		vi.stubEnv("PI_CODING_AGENT_DIR", join(project, "profile", "agent"));
-		expect(await skipped("touch profile/agent/settings.json")).toBe(false);
-		expect(await skipped("touch profile/agent/auth.json")).toBe(false);
-		expect(await skipped("touch profile/notes.txt")).toBe(true);
+		expect(await decide("touch profile/agent/settings.json")).toBe(false);
+		expect(await decide("touch profile/agent/auth.json")).toBe(false);
+		expect(await decide("touch profile/notes.txt")).toBe(true);
 	});
 
 	it("decides a write command in microseconds", () => {

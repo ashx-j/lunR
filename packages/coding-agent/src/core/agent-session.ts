@@ -686,7 +686,10 @@ export class AgentSession {
 			if (
 				this.permissionMode === "auto" &&
 				this._autoReviewEnabled &&
-				!(await this._autoReviewSkips.allows(toolCall.name, args as Record<string, unknown>, this._cwd)) &&
+				!(await this._autoReviewSkips.allows(toolCall.name, args as Record<string, unknown>, this._cwd, {
+					id: toolCall.id,
+					shellCommandPrefix: this.settingsManager.getShellCommandPrefix(),
+				})) &&
 				needsAutoReview(toolCall.name, args as Record<string, unknown>, this._cwd) &&
 				!rules.allowed(toolCall.name, args as Record<string, unknown>)
 			) {
@@ -749,6 +752,7 @@ export class AgentSession {
 		};
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+			this._autoReviewSkips.finished(toolCall.id, isError);
 			// A job that exited during the run is announced in the next tool result, which the
 			// next request carries anyway. Steering would cost an extra request after a final answer.
 			const jobNotice = this.bashJobs.takeExitNotices();
