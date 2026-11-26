@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Subagent Tool
  *
@@ -20,7 +19,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolRenderContext } from "../../../../core/extensions/types.ts";
+import type { Static } from "typebox";
 import { awaitWithAbort } from "../../../../utils/await-with-abort.ts";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
@@ -166,14 +167,17 @@ function matchingActionJobs(state: SubagentState, requestedId: string): AsyncJob
 	return [...jobs.values()].filter((job) => job.asyncId.startsWith(requestedId));
 }
 
-export function resolveSubagentActionDisplayTitle(args, state: SubagentState): string | undefined {
+// The subagent tool's arguments as the schema types them (enums come through as strings).
+type SubagentToolArgs = Static<typeof SubagentParams>;
+
+export function resolveSubagentActionDisplayTitle(args: Pick<SubagentToolArgs, "id" | "runId" | "index">, state: SubagentState): string | undefined {
 	const requestedId = (args.id || args.runId || "").trim();
 	if (!requestedId) return undefined;
 	const matches = matchingActionJobs(state, requestedId);
 	if (matches.length !== 1) return undefined;
 	const job = matches[0]!;
 	const steps = job.steps ?? [];
-	if (Number.isInteger(args.index)) {
+	if (typeof args.index === "number" && Number.isInteger(args.index)) {
 		const step = steps.find((candidate) => candidate.index === args.index) ?? steps[args.index];
 		return step ? childRowLabel(step) : undefined;
 	}
@@ -184,10 +188,16 @@ export function resolveSubagentActionDisplayTitle(args, state: SubagentState): s
 	return undefined;
 }
 
-export function renderSubagentCall(rawArgs, theme, context, options) {
+export function renderSubagentCall(
+	rawArgs: SubagentToolArgs,
+	theme: Theme,
+	context: Pick<ToolRenderContext<unknown, SubagentToolArgs>, "result" | "isPartial" | "expanded" | "isError"> | undefined,
+	options?: { resolveActionTitle?: (args: SubagentToolArgs) => string | undefined },
+): Component {
 	const args = resolveSubagentRequestParams(rawArgs);
 	if (args.action) {
-		const resultTitle = context?.result?.details?.displayTitle;
+		const details = context?.result?.details;
+		const resultTitle = details && typeof details === "object" && "displayTitle" in details && typeof details.displayTitle === "string" ? details.displayTitle : undefined;
 		const resolvedTitle = resultTitle || options?.resolveActionTitle?.(args);
 		const target = resolvedTitle || args.id || args.runId || "";
 		if ((args.action === "steer" || args.action === "resume") && args.message) {
@@ -230,7 +240,7 @@ export function renderSubagentCall(rawArgs, theme, context, options) {
 	return new Text(rest ? `${title} ${rest}` : title, 0, 0);
 }
 
-export function renderSubagentNotify(details, theme) {
+export function renderSubagentNotify(details: SubagentNotifyDetails, theme: Theme): Component {
 	const status = typeof details?.status === "string" ? details.status : "";
 	const icon = status === "completed"
 		? theme.fg("success", "✓")
@@ -259,7 +269,7 @@ function ensureSubagentResultAnimation(context: { state: Record<string, unknown>
 				for (const entry of entries) entry.text.setText(entry.line(state.frame ?? 0, now));
 				context.requestRender();
 			} else {
-				context.invalidate();
+				context.invalidate?.();
 			}
 		} catch {}
 	}, SUBAGENT_PAINT_INTERVAL_MS);
@@ -306,10 +316,13 @@ function createSlashResultComponent(
 }
 
 class SubagentControlNoticeComponent implements Component {
-	constructor(
-		private readonly details: SubagentControlMessageDetails,
-		private readonly theme: ExtensionContext["ui"]["theme"],
-	) {}
+	private readonly details: SubagentControlMessageDetails;
+	private readonly theme: ExtensionContext["ui"]["theme"];
+
+	constructor(details: SubagentControlMessageDetails, theme: ExtensionContext["ui"]["theme"]) {
+		this.details = details;
+		this.theme = theme;
+	}
 
 	invalidate(): void {}
 
@@ -403,7 +416,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			supervisorChannel.settleRunQuestions(result.id, "async run settled");
 		}
 	};
-	let executorExecute: ((id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((r: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
+	let executorExecute: ((id: string, params: SubagentParamsLike, signal: AbortSignal | undefined, onUpdate: ((r: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
 	const scheduledRunManager = createScheduledRunManager({
 		config,
 		disabledReason: acpWorker ? ACP_SCHEDULING_DISABLED : undefined,
@@ -498,7 +511,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.registerMessageRenderer<SubagentControlMessageDetails>(SUBAGENT_CONTROL_MESSAGE_TYPE, () => undefined);
 
-	const executeSubagentCollapsed = async (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
+	const executeSubagentCollapsed = async (id: string, params: SubagentParamsLike, signal: AbortSignal | undefined, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
 		const isCommunication = (params.action === "steer" || params.action === "resume") && typeof params.message === "string";
 		const displayTitle = isCommunication ? resolveSubagentActionDisplayTitle(params, state) : undefined;
@@ -509,7 +522,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		if (isCommunication && result.details) {
 			const targets = result.details.steering?.targets.map((target) => targetNames.get(target.index) ?? `Subagent ${target.index + 1}`);
 			const peer = targets?.length ? targets.join(", ") : displayTitle || "Subagent";
-			result.details.communication = { direction: "to", peer, kind: "steer", message: params.message };
+			// Non-null: isCommunication above required a string message.
+			result.details.communication = { direction: "to", peer, kind: "steer", message: params.message! };
 		}
 		return result;
 	};
@@ -551,7 +565,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		},
 
 		execute(id, params, signal, onUpdate, ctx) {
-			return executeSubagentCollapsed(id, params, signal, onUpdate, ctx);
+			// The tool call was validated against the schema, whose enums TypeBox types as plain strings.
+			return executeSubagentCollapsed(id, params as SubagentParamsLike, signal, onUpdate, ctx);
 		},
 
 		renderCall: (args, theme, context) => renderSubagentCall(args, theme, context, {
