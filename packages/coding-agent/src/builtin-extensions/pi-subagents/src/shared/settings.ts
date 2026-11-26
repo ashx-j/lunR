@@ -4,6 +4,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { normalizeSkillInput } from "../agents/skills.ts";
 import { CHAIN_RUNS_DIR, type AcceptanceInput, type JsonSchemaObject, type OutputMode, type ToolBudgetConfig } from "./types.ts";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -57,6 +58,7 @@ export interface SequentialStep {
 	skill?: string | string[] | false;
 	model?: string;
 	tier?: "light" | "standard" | "heavy";
+	thinking?: ThinkingLevel;
 	toolBudget?: ToolBudgetConfig;
 	acceptance?: AcceptanceInput;
 }
@@ -80,6 +82,7 @@ export interface ParallelTaskItem {
 	skill?: string | string[] | false;
 	model?: string;
 	tier?: "light" | "standard" | "heavy";
+	thinking?: ThinkingLevel;
 	toolBudget?: ToolBudgetConfig;
 	acceptance?: AcceptanceInput;
 }
@@ -125,6 +128,19 @@ export interface ParallelStep {
 
 /** Union type for chain steps */
 export type ChainStep = SequentialStep | ParallelStep | DynamicParallelStep;
+
+/**
+ * A child whose `agent` the launcher filled in: internalizePromptDrivenChildren
+ * (subagent-executor.ts) and materializeDynamicParallelStep (dynamic-fanout.ts) set it
+ * to the child id, and the async step builder (async-execution.ts) to the description.
+ */
+export type Materialized<T> = T & { agent: string };
+
+export type MaterializedSequentialStep = Materialized<SequentialStep>;
+export type MaterializedParallelStep = Omit<ParallelStep, "parallel"> & { parallel: Materialized<ParallelTaskItem>[] };
+export type MaterializedDynamicParallelStep = Omit<DynamicParallelStep, "parallel"> & { parallel: Materialized<DynamicParallelTemplate> };
+/** A chain step whose children all went through Materialized. */
+export type MaterializedChainStep = MaterializedSequentialStep | MaterializedParallelStep | MaterializedDynamicParallelStep;
 
 // =============================================================================
 // Type Guards
