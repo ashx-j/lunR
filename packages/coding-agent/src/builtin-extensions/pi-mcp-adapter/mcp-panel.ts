@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { createPanelKeys, type PanelKeybindings, type PanelKeys } from "./panel-keys.ts";
 import { isToolExcluded } from "./types.ts";
@@ -175,15 +174,20 @@ class McpPanel {
   private static readonly MAX_VISIBLE = 12;
   private static readonly INACTIVITY_MS = 60_000;
 
+  private callbacks: McpPanelCallbacks;
+  private done: (result: McpPanelResult) => void;
+
   constructor(
     config: McpConfig,
     cache: MetadataCache | null,
     provenance: Map<string, ServerProvenance>,
-    private callbacks: McpPanelCallbacks,
+    callbacks: McpPanelCallbacks,
     tui: { requestRender(): void },
-    private done: (result: McpPanelResult) => void,
+    done: (result: McpPanelResult) => void,
     options: { noticeLines?: string[]; authOnly?: boolean; keybindings?: PanelKeybindings } = {},
   ) {
+    this.callbacks = callbacks;
+    this.done = done;
     this.tui = tui;
     this.noticeLines = options.noticeLines ?? [];
     this.authOnly = options.authOnly === true;
