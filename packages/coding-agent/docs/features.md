@@ -15,7 +15,7 @@ Permission modes: `yolo | auto | ask | read-only`. Shift+Tab cycles in that orde
 - **Which model reviews.** Anthropic sessions use the newest Claude Sonnet your login offers, since Claude Code reviews with Sonnet, falling back to the session model when the login offers no Sonnet. OpenAI (API and Codex), xAI and Qwen sessions use the session model at low reasoning effort, since their agents don't name one. Other providers' own agents offer no reviewer, so entering auto warns you and opens the model list to pick one. `/settings` → Auto review model changes or resets the choice. Without a usable reviewer, auto asks you before each risky action. If a review request fails, the blocked action names the review model that failed.
 - **No questions** is separate from the permission mode. `/goal`, subagents and the ACP Autonomous mode work without stopping to ask you and skip the large-launch confirmation. Subagents follow their parent's mode: reviewed in auto, unreviewed in yolo.
 - **ask** asks you before each call that read-only mode would block: shell commands that change things, edits and writes, MCP tool calls, browser and computer actions, cron changes, unknown extension tools and full-access subagent launches. Reads, informational shell commands, todos and goal updates run straight away. Choose Approve once, Approve for this session (only for shell commands and file tools, and only that exact command or file), Always allow (saves an allow rule for that exact command or file to global settings, so it applies in every project), Reject, or Reject with feedback, which the model sees. Subagent, browser, computer, MCP and cron calls have no session answer, because one such call says nothing about the next. A full-access child can't ask you, so its launch question says it runs commands and edits files without asking; it then runs as in yolo. The gateway asks with buttons (no feedback or Always allow). Where nobody can answer, such as `-p`, cron, subagents, and RPC or SDK sessions without an approval handler, or when a gateway question goes unanswered, the call is blocked and the model is told which allow rule would permit it. `/goal` keeps asking in ask mode. ACP has no ask mode: its client approves each tool already, so an ask default runs as Build there.
-- **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. Shell calls permit known informational forms. Project scripts and tests such as `npm test`, package executors, interpreter execution, and unknown Git operations require a writable mode. The shell command check is heuristic, not an OS sandbox.
+- **read-only** permits investigation but blocks writes, full-access child launches, MCP tool calls, and unknown extension actions. MCP search and tool descriptions remain available. Shell calls permit known informational forms. A here-document (`cat <<EOF`) is blocked. Project scripts and tests such as `npm test`, package executors, interpreter execution, and unknown Git operations require a writable mode. The shell command check is heuristic, not an OS sandbox.
 
 ### Allow and deny rules
 
@@ -73,6 +73,8 @@ Collapsed subagent rows (foreground and async) are one line: status glyph, descr
 
 Enable Confirm big subagent launches in `/settings` to receive one aggregate confirmation in **yolo** for 3+ parallel children in one `tasks`/`chain.parallel` call, or 3+ same-turn SINGLE `subagent` calls. This setting is off by default. Sequential work stays `chain`. Auto, where the reviewer checks full-access launches, and sessions that work without questions (`/goal`, subagents, ACP Autonomous) bypass confirmation even when the setting is enabled.
 
+Commands for running children: `/subagents-stop [run-id]` stops an async run from this session (it offers a list without an id), `/subagents-fleet` or Ctrl+Alt+F opens a read-only view of every child, `/subagent-cost` shows parent and child usage cost, `/subagents-doctor` prints diagnostics, and `/subagents-watchdog` shows or toggles the watchdog, which is off by default.
+
 `/goal` sets a session goal and makes the session work without asking questions, keeping your permission mode. A read-only session switches to yolo for the goal and back afterwards.
 
 ### Child communication
@@ -118,7 +120,7 @@ Costs use a provider's reported charge when available, otherwise catalog prices.
 ## Todos, memory, and global instructions
 
 - **Todos** — lunr-todos is a full-replace list. `/settings` → Todos disables its system-prompt guidance, model-facing tool, and editor widget. Collapsed lists show all four active items; lists of five or more show three and a `+N more` line. Completed todos prune on the next user turn, so the footer does not leave a `✓ N done` line.
-- **Agent memory** — durable established facts and stable preferences in `~/.lunr/simple-memory/memory.md`. `/settings` → Agent memory controls injection and the `memory_add`, `memory_remove`, and `memory_load` tools without deleting stored facts. `memoryCharCap` defaults to 5000. Behavior instructions, transient task state, transcripts, guesses, and secrets do not belong in memory.
+- **Agent memory** — durable established facts and stable preferences in `~/.lunr/simple-memory/memory.md`. `/settings` → Agent memory controls injection and the `memory_add`, `memory_remove`, and `memory_load` tools without deleting stored facts. `memoryCharCap` defaults to 5000; `/memory-char-cap [n]` shows or sets it. Behavior instructions, transient task state, transcripts, guesses, and secrets do not belong in memory.
 - **Global instructions** — create `~/.lunr/agent/agents/AGENTS.md` yourself when you want global behavior or instructions. lunR injects it through the normal context loader; `/reload` picks up changes. The model cannot modify this user-managed file.
 - **Model instructions** — `/settings` can enable `~/.lunr/agent/agents/<model-name>/AGENTS.md` and choose **Both** (global then model-specific) or **Model only**. The folder name is provider-independent and filesystem-safe. Project `AGENTS.md`/`CLAUDE.md` files are unaffected, and `--no-context-files` disables all instruction files.
 
@@ -215,8 +217,10 @@ All concurrent writers must use a lunR version with session ownership support. O
 ## MCP, LSP, web search
 
 - **MCP** — `/mcp`, `/mcp-auth`. Footer MCP segment is on by default (`footerMcp`).
-- **LSP** — `/lsp`, `/lsp-restart`, `/lsp-config`. Footer LSP segment is off by default (`footerLsp`). On Windows, npm `.cmd` shims need a real LSP start (`shell: true`); if the server never starts, tools silently fall back to tree-sitter. Check `/lsp` if language features look missing.
-- **Web search** — `/search <query>[, query...]` opens the search curator; `/search` alone lists stored results. Interactive TUI attaches web-access after first paint; print/RPC/gateway load it before the first turn.
+- **LSP** — `/lsp`, `/lsp-restart`, `/lsp-config`, and `/lsp-lombok <path-to-lombok.jar>` for Java. After an `edit` or `write`, the result lists the errors the file's language server reports, waiting at most 0.5 s; a later answer comes with a later tool result. Footer LSP segment is off by default (`footerLsp`). On Windows, npm `.cmd` shims need a real LSP start (`shell: true`); if the server never starts, tools silently fall back to tree-sitter. Check `/lsp` if language features look missing.
+- **Web search** — `/search <query>[, query...]` opens the search curator; `/search` alone lists stored results. `/curator [on|off]` turns the curator step on or off. `/google-account` shows the Google account Gemini Web uses, which needs `"allowBrowserCookies": true` in `~/.lunr/agent/web-search.json`. Interactive TUI attaches web-access after first paint; print/RPC/gateway load it before the first turn.
+
+On Claude Sonnet, Opus and Fable 4.5 or newer with the `anthropic` provider, new sessions start 17 rarely used tools unloaded: subagents, web search, LSP, `browser`, `code_rewrite`, `cron` and `pr_watch`. The model loads a group with `load_tools` when a task needs it, which keeps the first request small. Turn it off in `/settings` → Advanced → Load tools on demand (`deferredToolsEnabled`).
 
 Stored web results belong to the current session. `get_search_content` returns pages of at most 50 KiB and 2,000 lines, including selector lists and errors. Start with `responseId` and a query or URL selector. If the page is truncated, repeat the same call with `offset` set to the returned `nextOffset`. Offsets count UTF-8 bytes. Direct HTTP extraction limits decoded bodies to 5 MiB for text and 20 MiB for PDFs before parsing.
 
@@ -230,14 +234,14 @@ See [Headless browser](browser.md) for action parameters, installation exception
 
 ## Computer use
 
-`/computer setup` installs the bundled runtime for image-only desktop control on Windows and Apple Silicon macOS. Setup is unavailable in headless and gateway sessions, and the computer tools need an image-capable model. See [Computer use](computer-use.md) for permissions and limits.
+`/computer setup` downloads and installs the runtime for image-only desktop control on Windows and Apple Silicon macOS. Setup is unavailable in headless and gateway sessions, and the computer tools need an image-capable model. See [Computer use](computer-use.md) for permissions and limits.
 
 ## Thinking, usage, streaming, UI
 
 - `/thinking <level>` sets the level when the current model supports it; `/effort` and `/reasoning` are hidden aliases. `/thinking` completions follow the session model. `xhigh` and `max` are opt-in. `/thinking hide|show|toggle` still hides thinking blocks.
 - `/usage` is **this-session** context plus every stored-credential subscription plan. The current provider is included for env-only auth.
 - `/fast [on|off|status]` controls `service_tier: "fast"` for OpenAI Codex subscriptions only. It persists across new sessions, gateway turns, and subagents. Paid `openai` API models do not use it.
-- Footer plan bar prefers a 5h window and falls back to weekly (`planUsageWindow`). In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps the percent.
+- Footer plan usage shows the weekly window by default. Set `planUsageWindow` to `5h` in `/settings` → Plan usage window; a plan without a 5h window falls back to weekly. In Customize, Plan usage hides the whole segment while Plan bar hides only the █░ fill and keeps the percent.
 - `/settings` Notifications (default off) rings the terminal bell or sends a desktop notification when a run finishes or stops for an approval or question. lunR asks the terminal for focus reports and stays quiet while you are looking at it; terminals without focus reports get every notice. Desktop notices use OSC 9, which iTerm2, WezTerm and Ghostty show. Other terminals ignore it, so pick the bell there.
 - Click a ✻ Thought or tool card to expand/collapse that item. `app.tools.expand` is unbound. `/tree` still uses `ctrl+o` for filters.
 - Smooth streaming (`smoothStreaming`, default off) reveals assistant text and thinking in small character batches at about 30 FPS in the interactive TUI. The thinking preview shows the last four revealed lines. Completed thinking collapses after its reveal catches up. Message completion flushes any remaining text immediately. Print, RPC, and gateway stay unsmoothed.
@@ -255,5 +259,5 @@ See [Headless browser](browser.md) for action parameters, installation exception
 
 ## Intercom and skill-creator
 
-- **Intercom** — `/intercom` for the built-in intercom broker.
+- **Intercom** — `/intercom` or Alt+M for the built-in intercom broker.
 - **Skill-creator** — `/skill:skill-creator` (model invocation disabled by default). Global skills go in `~/.lunr/agent/skills/<name>/`; project skills in `.lunr/skills/<name>/` (requires trust).
