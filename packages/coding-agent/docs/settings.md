@@ -72,6 +72,11 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `modelTiers` | object | - | Enable model tiers and per-tier thinking |
 | `modelInstructions` | object | `{ enabled: false, mode: "both" }` | Model-specific instructions and whether they append to or replace global instructions |
 | `confirmLargeSubagentLaunches` | boolean | `false` | Ask once before aggregate launches of three or more children outside Auto mode |
+| `automaticSubagentDelegation` | boolean | `true` | Let the agent launch subagents on its own. Off, it launches them only when you ask |
+| `subagentCommunicationEnabled` | boolean | `true` | Messages between a running child and its parent: questions, handoffs and live steering. Global-only |
+| `prWatchDurationMs` | number | `1800000` | How long a new PR watch runs, in milliseconds (30 minutes). Global-only. See [PR watching](pr-watch.md) |
+| `computerUse` | boolean | `true` | Offer the computer use tools on Windows and Apple Silicon macOS. Global-only. See [Computer use](computer-use.md) |
+| `computerForeground` | boolean | `true` | Shown as Allow foreground control. Off blocks desktop input, foreground window input, launching apps and window management. Global-only |
 | `doubleEscapeAction` | string | `"tree"` | Idle action for double-escape: `"tree"`, `"fork"`, or `"none"`. Active async subagents take priority: double-Escape requests their stop |
 | `treeFilterMode` | string | `"default"` | Default filter for `/tree`: `"default"`, `"no-tools"`, `"user-only"`, `"labeled-only"`, `"all"` |
 | `editorPaddingX` | number | `0` | Horizontal padding for input editor (0-3) |
