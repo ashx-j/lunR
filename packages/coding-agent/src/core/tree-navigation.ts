@@ -213,8 +213,6 @@ export async function runTreeNavigation(
 			fromExtension: summaryText ? fromExtension : undefined,
 		});
 
-		// Emit to custom tools
-
 		return { editorText, editorImages, cancelled: false, summaryEntry };
 	} finally {
 		host.branchSummaryAbortController = undefined;
