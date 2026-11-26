@@ -11,8 +11,7 @@
  * Each word and each segment's here-documents are queued at most once, so the text queued at one
  * level adds up to at most the text above it, and all queued text to (MAX_DEPTH + 1) x the input.
  * Past `MAX_DEPTH` levels, `MAX_STAGES` lines in one segment or the work budget (`left`) the result
- * is `uncheckable`. The result also lists every redirect and whether any segment assigns a variable, which
- * auto mode's local rules (`auto-review-skip.ts`) read.
+ * is `uncheckable`.
  *
  * It does not see commands built while the shell runs (`$T`, `$(echo touch)`), text piped or
  * redirected into a shell, interpreters (`python -c`), `ssh`, `docker`, `su -c` or sourced files. A
@@ -43,10 +42,6 @@ export interface DeniedCommands {
 	queued: number;
 	/** Work units left: characters queued and words visited, here and by the matcher. Below 0 is `uncheckable`. */
 	left: number;
-	/** Every redirect in the text and queued bodies, also those of a segment with no command (`> f`). */
-	redirects: Array<{ op: string; target: string }>;
-	/** Some segment sets a variable (`A=1 cmd`, a bare `A=1`). */
-	assigns: boolean;
 }
 
 interface Segment {
@@ -71,8 +66,6 @@ interface Frame {
 	brace: number;
 	/** The next word is a redirect target. */
 	skipWord: boolean;
-	/** The operator of that redirect (`>`, `>>`, `2>&`, `<<<`). */
-	redirectOp: string;
 }
 
 const MAX_DEPTH = 4;
@@ -146,10 +139,10 @@ function heredocDelimiter(text: string, start: number): { delimiter: string | un
 }
 
 /**
- * Adds the segments of `text` to `segments` and its redirects to `result` in one pass (see the module comment). Returns true when
+ * Adds the segments of `text` to `segments` in one pass (see the module comment). Returns true when
  * a here-document's end marker can't be resolved, so later lines may be body or commands.
  */
-function scan(text: string, segments: Segment[], result: DeniedCommands): boolean {
+function scan(text: string, segments: Segment[]): boolean {
 	const newFrame = (closer?: ")" | "`"): Frame => ({
 		closer,
 		parens: 0,
@@ -158,7 +151,6 @@ function scan(text: string, segments: Segment[], result: DeniedCommands): boolea
 		expanded: false,
 		brace: -1,
 		skipWord: false,
-		redirectOp: "",
 	});
 	const stack = [newFrame()];
 	let f = stack[0];
@@ -170,10 +162,8 @@ function scan(text: string, segments: Segment[], result: DeniedCommands): boolea
 		return f.segment;
 	};
 	const endWord = () => {
-		if (f.inWord && f.skipWord) {
-			f.skipWord = false;
-			result.redirects.push({ op: f.redirectOp, target: f.word });
-		} else if (f.inWord) {
+		if (f.inWord && f.skipWord) f.skipWord = false;
+		else if (f.inWord) {
 			segment().words.push(f.word);
 			segment().expanded.push(f.expanded);
 		}
@@ -264,7 +254,6 @@ function scan(text: string, segments: Segment[], result: DeniedCommands): boolea
 			// A digit word right before is the redirect's file descriptor, not an argument.
 			if (f.inWord && /^\d+$/.test(f.word)) f.inWord = false;
 			endWord();
-			const opStart = i;
 			if (ch === "<" && next === "<" && text[i + 2] !== "<") {
 				i += 2;
 				const stripTabs = text[i] === "-";
@@ -278,7 +267,6 @@ function scan(text: string, segments: Segment[], result: DeniedCommands): boolea
 			}
 			while (text[i + 1] === "<" || text[i + 1] === ">" || text[i + 1] === "&" || text[i + 1] === "|") i++;
 			f.skipWord = true;
-			f.redirectOp = text.slice(opStart, i + 1);
 		} else if (ch === ")" && f.closer === ")" && f.parens === 0) close();
 		else if (ch === "(" || ch === ")") {
 			endSegment();
@@ -341,7 +329,6 @@ function segmentLines(
 		while (i < end) {
 			const word = words[i];
 			if (PREFIX_WORDS.has(word) || ASSIGNMENT.test(word)) {
-				result.assigns ||= !PREFIX_WORDS.has(word);
 				i++;
 				continue;
 			}
@@ -415,15 +402,13 @@ export function deniedCommandLines(command: string, budget = Number.POSITIVE_INF
 		wildcard: false,
 		queued: command.length,
 		left: budget - command.length,
-		redirects: [],
-		assigns: false,
 	};
 	const queue = [{ text: command, depth: 0 }];
 	for (const { text, depth } of queue) {
 		if (result.left < 0) result.uncheckable = true;
 		if (result.uncheckable) break;
 		const segments: Segment[] = [];
-		if (scan(text, segments, result)) result.uncheckable = true;
+		if (scan(text, segments)) result.uncheckable = true;
 		for (const segment of segments) segmentLines(segment, depth, result, queue);
 	}
 	if (result.left < 0) result.uncheckable = true;

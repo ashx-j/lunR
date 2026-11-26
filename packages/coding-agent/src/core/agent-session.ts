@@ -689,6 +689,8 @@ export class AgentSession {
 				!(await this._autoReviewSkips.allows(toolCall.name, args as Record<string, unknown>, this._cwd, {
 					id: toolCall.id,
 					shellCommandPrefix: this.settingsManager.getShellCommandPrefix(),
+					shellPath: this.settingsManager.getShellPath(),
+					backgroundJobs: this.bashJobs.running().length > 0,
 				})) &&
 				needsAutoReview(toolCall.name, args as Record<string, unknown>, this._cwd) &&
 				!rules.allowed(toolCall.name, args as Record<string, unknown>)

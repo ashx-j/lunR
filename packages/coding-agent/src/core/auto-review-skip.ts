@@ -1,66 +1,66 @@
 /**
- * lunR: auto mode's local rules. Bash commands that only create, copy, move, write or delete named
- * regular files inside the project, and `write` calls to ordinary project files, run without a
- * review request. Anything this module can't prove harmless goes to the reviewer as before. The
+ * lunR: auto mode's local rules. A bash line skips the review request only when this module
+ * understands all of it: literal words, a few commands with listed options, paths that stay inside
+ * the project without `..`, hidden names or symlinks, and changes only to files this session made
+ * or git proves unchanged. Anything else, and any error while deciding, goes to the reviewer. The
  * rules are the table under "Auto review" in docs/agents/permissions-and-memory.md.
  *
- * Commands are read with `deniedCommandLines`, the parser deny rules use, and lines that only read
- * are classified by read-only mode's `isMutatingBashCommand` and `sedScriptReads`. Only the path
- * rules and the option tables of the write commands live here.
- *
- * Paths are checked against the filesystem before the command runs. That holds for the whole line
- * because no allowed command creates a symlink: `cp` and `mv` take only regular-file sources and
- * no recursive option, so the only new entries a later part resolves through are real directories
- * made by `mkdir` inside the project.
+ * `lex` accepts a small grammar and refuses the rest instead of parsing bash: words of unquoted
+ * `[A-Za-z0-9_./,:=+%@^-]`, single-quoted text and double-quoted text without `$`, backtick, `\`
+ * or `!`; parts joined by `&&`, `;` or a newline; the redirects `>`, `>>`, `2>`, `2>>`, `2>&1`,
+ * `>&2`, `<` and a here-document with a quoted marker. No allowed part can create a symlink, and
+ * every path is read component by component with `lstat`, so the text and the disk can't disagree
+ * about where a path leads. Later parts of a line are checked against what earlier parts did
+ * (`Plan.overlay`).
  */
 
 import { execFile } from "node:child_process";
-import { lstatSync, realpathSync, type Stats, statSync } from "node:fs";
+import { lstatSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getAgentDir } from "../config.ts";
-import { type DeniedLine, deniedCommandLines } from "./permission-rule-commands.ts";
+import { getShellEnv } from "../utils/shell.ts";
 import { isMutatingBashCommand, sedScriptReads } from "./plan-mode.ts";
 import { protectedTargetWriteReason } from "./protected-targets.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 
-/** Options a write command may carry: clusterable single letters and exact long options. None takes a value. */
-const WRITE_COMMANDS = new Map<string, { short: string; long: readonly string[]; minOperands: number }>([
-	["mkdir", { short: "pv", long: ["--parents", "--verbose"], minOperands: 1 }],
-	["touch", { short: "acm", long: ["--no-create"], minOperands: 1 }],
-	// No -r, -R or -a: a copied tree can carry a symlink that a later part of the line writes through.
-	["cp", { short: "pfnvu", long: ["--force", "--no-clobber", "--verbose", "--update"], minOperands: 2 }],
-	["mv", { short: "fnvu", long: ["--force", "--no-clobber", "--verbose", "--update"], minOperands: 2 }],
-	["rm", { short: "fv", long: ["--force", "--verbose"], minOperands: 1 }],
-]);
-/** sed options this module reads; `-e` takes the next word as a script. */
-const SED_OPTIONS = new Set(["-i", "--in-place", "-E", "-r", "-n", "-e"]);
-/**
- * Commands that may feed a redirect into a project file: they read only the files they name, or
- * print only their literal arguments. `printenv`, `env` and the rest of read-only mode's list stay
- * reviewed there, since they can copy the environment or files outside the project into it.
- */
-const REDIRECT_SOURCES = new Map<string, "files" | "literal">([
-	...["cat", "tac", "head", "tail", "grep", "sort", "uniq", "wc", "cut", "tr", "nl", "diff", "ls", "sed"].map(
-		(name) => [name, "files"] as const,
-	),
-	...["echo", "printf", "true"].map((name) => [name, "literal"] as const),
-]);
-/** Bash expands these in an unquoted word, and the parser has already dropped the quotes. */
-const EXPANDING_WORD = /[*?[\]{}\u0001]|^~/;
-const FD_DUPLICATE = /^(?:\d+|-)$/;
+/** Longer lines go to the reviewer unread, so the synchronous checks stay well under a millisecond. */
+const MAX_COMMAND_LENGTH = 4096;
+const MAX_PATHS = 64;
 const GIT_TIMEOUT_MS = 2000;
 
-interface Project {
-	/** The canonical project directory. */
-	root: string;
-	/** The session directory commands start in. */
-	cwd: string;
-	/** The project overlaps lunR's profile directory, so paths are checked against `protected-targets.ts`. */
-	checkProtected: boolean;
+/** The only options each command may carry: single letters may be combined (`-pv`), long ones are exact. */
+const OPTIONS: Readonly<Record<string, { short: string; long: readonly string[] }>> = {
+	mkdir: { short: "pv", long: ["--parents", "--verbose"] },
+	touch: { short: "acm", long: ["--no-create"] },
+	cp: { short: "fnpv", long: ["--force", "--no-clobber", "--verbose"] },
+	mv: { short: "fnv", long: ["--force", "--no-clobber", "--verbose"] },
+	rm: { short: "fv", long: ["--force", "--verbose"] },
+	echo: { short: "neE", long: [] },
+	cat: { short: "nbsAETv", long: [] },
+	printf: { short: "", long: [] },
+};
+/** The only commands whose output may go into a project file without review. */
+const OUTPUT_COMMANDS = new Set(["echo", "printf", "cat"]);
+const UNQUOTED = /[A-Za-z0-9_./,:=+%@^-]/;
+const HEREDOC_MARKER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+type RedirectOp = ">" | ">>" | "2>" | "2>>" | "<" | "2>&1" | ">&2";
+
+type Token =
+	| { kind: "word"; text: string }
+	| { kind: "op"; text: "&&" | ";" }
+	| { kind: "redirect"; text: RedirectOp }
+	| { kind: "heredoc" };
+
+interface Part {
+	name: string;
+	args: string[];
+	redirects: Array<{ op: RedirectOp; target?: string }>;
+	heredoc: boolean;
 }
 
-/** What lets a file count as made by this session: it must still be the same file. */
+/** A file this session made: it counts as the session's only while it is still the same file. */
 interface FileIdentity {
 	dev: number;
 	ino: number;
@@ -68,96 +68,302 @@ interface FileIdentity {
 	mtimeMs: number;
 }
 
-/** What an allowed command does to the files this module tracks. */
-interface Effects {
-	/** Paths that don't exist yet and may be created. */
-	created: string[];
-	/** `mv` of a file this session created: the old path and the new one. */
-	moved: Array<[from: string, to: string]>;
-	/** Where `mv` puts files the session didn't create, so an `rm` later in the same command is reviewed. */
-	renamed: string[];
-	/**
-	 * Existing files the command deletes or replaces (`rm`, `>`, `cp`/`mv` onto them, `sed -i`) that this
-	 * session didn't create. Rollback covers only the file tools, so git must be able to restore these.
-	 */
-	replaced: string[];
-	/** Some redirect writes a project file, so every other part must read only project files. */
-	redirectsOutput: boolean;
+interface Project {
+	/** The session directory, which is the project. */
+	cwd: string;
+	/** The project overlaps lunR's profile directory, so paths are checked against `protected-targets.ts`. */
+	checkProtected: boolean;
+}
+
+/** What a path is after the parts of the line before it. `stat` is set when that comes from the disk. */
+interface Resolved {
+	path: string;
+	state: "missing" | "dir" | "file";
+	stat?: Stats;
+}
+
+/** What the line will do, as far as later parts and the session record need it. */
+interface Plan {
+	/** Earlier parts' results: a new directory, a file this line may change freely, or a removed path. */
+	overlay: Map<string, "dir" | "mine" | "gone">;
+	/** Existing files the line changes or removes that the session didn't make: git must prove them. */
+	needProof: string[];
+	/** Files to record as the session's once the call succeeded. */
+	record: string[];
+	/** Session files the line moves away or removes. */
+	forget: string[];
+	/** The line changes a file that already exists. */
+	changesExisting: boolean;
+}
+
+/** Facts about the call that change what a command line means or when it runs. */
+export interface SkipCall {
+	id: string;
+	/** The `shellCommandPrefix` setting: it runs before every command. */
+	shellCommandPrefix?: string;
+	/** The `shellPath` setting: another shell may read its own startup files. */
+	shellPath?: string;
+	/** A background bash job of this session is running and may change files at any moment. */
+	backgroundJobs?: boolean;
 }
 
 /**
  * Auto mode's local allow rules for one session. `allows` runs before the review step on every
- * auto-mode tool call, and `finished` after the call. Files an allowed call created are remembered
- * once it succeeded, with their identity, so a later `rm` or overwrite of the same file runs without
- * review too.
+ * auto-mode tool call, and `finished` after the call, so files an allowed call created count as the
+ * session's once it succeeded.
  */
 export class AutoReviewSkips {
 	private created = new Map<string, FileIdentity>();
-	/** What each allowed call will create, recorded by `finished` once the call succeeded. */
-	private pending = new Map<string, Pick<Effects, "created" | "moved">>();
-	private roots = new Map<string, Project | undefined>();
+	/** What each allowed call will record, applied by `finished` once the call succeeded. */
+	private pending = new Map<string, Pick<Plan, "record" | "forget">>();
+	private projects = new Map<string, Project | undefined>();
 
-	/**
-	 * True when the call can run without a review request. False means "review as before".
-	 * `shellCommandPrefix` is the bash prefix setting: it can change what every checked path means.
-	 */
-	async allows(
-		toolName: string,
-		input: Record<string, unknown>,
-		cwd: string,
-		call: { id: string; shellCommandPrefix?: string },
-	): Promise<boolean> {
-		if (toolName === "write" || toolName === "edit") return this.allowsFileTool(input.path, cwd, call.id);
-		if (toolName !== "bash" || typeof input.command !== "string" || call.shellCommandPrefix) return false;
-		const project = this.project(cwd);
-		if (!project) return false;
-		const effects = this.bashEffects(input.command, project);
-		if (!effects) return false;
-		if (effects.replaced.length > 0 && !(await gitCanRestore(effects.replaced, project.root))) return false;
-		this.expect(call.id, effects);
-		return true;
+	/** True when the call can run without a review request. False means "review as before", also on any error. */
+	async allows(toolName: string, input: Record<string, unknown>, cwd: string, call: SkipCall): Promise<boolean> {
+		try {
+			if (toolName === "write" || toolName === "edit") return this.allowsFileTool(input.path, cwd, call.id);
+			if (toolName !== "bash" || typeof input.command !== "string" || input.run_in_background === true) return false;
+			if (call.shellCommandPrefix || call.shellPath) return false;
+			const project = this.project(cwd);
+			if (!project) return false;
+			const plan = this.plan(input.command, project);
+			if (!plan) return false;
+			// A running job can change any existing file between this check and the command.
+			if (plan.changesExisting && call.backgroundJobs) return false;
+			if (plan.needProof.length > 0 && !(await gitUnchanged(plan.needProof, project.cwd))) return false;
+			this.expect(call.id, plan);
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
-	/** Records the files an allowed call created, when it succeeded and they are still regular files. */
+	/** Records what an allowed call created, once it succeeded and the files are still single regular files. */
 	finished(toolCallId: string, isError: boolean): void {
-		const effects = this.pending.get(toolCallId);
-		if (!effects) return;
+		const plan = this.pending.get(toolCallId);
+		if (!plan) return;
 		this.pending.delete(toolCallId);
 		if (isError) return;
-		for (const [from, to] of effects.moved) {
-			this.created.delete(from);
-			this.remember(to);
+		for (const path of plan.forget) this.created.delete(path);
+		for (const path of plan.record) {
+			const stat = lstatSync(path, { throwIfNoEntry: false });
+			if (stat?.isFile() && stat.nlink === 1) {
+				this.created.set(path, { dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs });
+			} else this.created.delete(path);
 		}
-		for (const path of effects.created) this.remember(path);
 	}
 
 	/**
-	 * Same rule as `needsAutoReview` for `write` and `edit`. A file the call creates, or a session file
-	 * it changes, counts as made by the session once the call succeeded.
+	 * Decides nothing for `write` and `edit` (`needsAutoReview` does), but a file the call creates, or a
+	 * session file it changes, counts as the session's once the call succeeded.
 	 */
 	private allowsFileTool(path: unknown, cwd: string, toolCallId: string): boolean {
 		const project = this.project(cwd);
 		if (typeof path !== "string" || !project) return false;
-		// Resolved the way the file tools resolve it (`~`, `@`, `file://`).
-		const target = ordinaryTarget(resolveToCwd(path, cwd), project);
-		if (!target) return false;
-		const stat = lstatSync(target, { throwIfNoEntry: false });
-		if (!stat || this.madeHere(target, stat)) this.expect(toolCallId, { created: [target], moved: [] });
+		// Resolved the way the file tools resolve it (`~`, `@`, `file://`), then held to the bash path rule.
+		const rel = relative(project.cwd, resolveToCwd(path, cwd));
+		if (rel.startsWith("..") || isAbsolute(rel)) return false;
+		const target = resolvePath(rel, project, new Map());
+		if (target?.state === "missing" || (target?.stat && this.madeHere(target.path, target.stat))) {
+			this.expect(toolCallId, { record: [target.path], forget: [] });
+		}
+		return false;
+	}
+
+	/** The project for `cwd`, or undefined when `cwd` is `/` or home, or the shell could run other commands there. */
+	project(cwd: string): Project | undefined {
+		const env = getShellEnv();
+		const agentDir = getAgentDir();
+		const key = `${cwd}\0${agentDir}\0${env.PATH ?? ""}`;
+		if (this.projects.has(key)) return this.projects.get(key);
+		const root = resolve(cwd);
+		// `BASH_ENV` and exported functions can redefine any command name for `bash -c`.
+		const redefined = env.BASH_ENV || Object.keys(env).some((name) => name.startsWith("BASH_FUNC_"));
+		// A relative or in-project `PATH` entry would let a project file stand in for `mkdir` or `cat`.
+		const pathInProject = (env.PATH ?? "")
+			.split(delimiter)
+			.some((entry) => !isAbsolute(entry) || isWithin(resolve(entry), root));
+		let project: Project | undefined;
+		if (dirname(root) !== root && root !== resolve(homedir()) && !redefined && !pathInProject) {
+			// Every protected target lives under the profile's parent (`~/.lunr`) or the project's `.lunr`,
+			// which the hidden-name rule already covers, so the costly check runs only when they overlap.
+			const profile = dirname(resolve(agentDir));
+			project = { cwd: root, checkProtected: isWithin(profile, root) || isWithin(root, profile) };
+		}
+		this.projects.set(key, project);
+		return project;
+	}
+
+	/** What `command` does, or undefined when any part of it is outside the rules and needs review. */
+	plan(command: string, project: Project): Plan | undefined {
+		if (command.length > MAX_COMMAND_LENGTH) return undefined;
+		const parts = splitParts(lex(command));
+		if (!parts) return undefined;
+		const plan: Plan = { overlay: new Map(), needProof: [], record: [], forget: [], changesExisting: false };
+		let paths = 0;
+		for (const part of parts) {
+			paths += part.args.length + part.redirects.length;
+			if (paths > MAX_PATHS || !this.applyPart(part, project, plan)) return undefined;
+		}
+		return plan;
+	}
+
+	/** Checks one part against the rules and adds its effects to `plan`. */
+	private applyPart(part: Part, project: Project, plan: Plan): boolean {
+		const spec = OPTIONS[part.name];
+		const operands = part.name === "sed" ? sedOperands(part.args) : spec ? options(part.args, spec) : undefined;
+		if (!operands) return false;
+		const at = (word: string) => resolvePath(word, project, plan.overlay);
+
+		// Redirects are opened before the command runs, so they come first, as in bash.
+		let stdin = part.heredoc;
+		for (const { op, target } of part.redirects) {
+			if (op === "2>&1" || op === ">&2") continue;
+			if (target === undefined) return false;
+			if (target === "/dev/null" && op !== "<") continue;
+			if (op === "2>" || op === "2>>") return false;
+			if (op === "<") {
+				if (stdin || part.name !== "cat") return false;
+				const input = at(target);
+				if (!input || !readable(input)) return false;
+				stdin = true;
+				continue;
+			}
+			// Only commands that print their arguments or project files may fill a project file.
+			const output = at(target);
+			if (!OUTPUT_COMMANDS.has(part.name) || !output || !this.writes(output, plan)) return false;
+		}
+
+		switch (part.name) {
+			case "echo":
+				return true;
+			case "printf":
+				// `printf -v name` sets a variable, so no operand may look like an option.
+				return operands.length > 0 && !operands.some((word) => word.startsWith("-"));
+			case "cat":
+				if (operands.length === 0) return stdin;
+				return (
+					!stdin &&
+					operands.every((word) => {
+						const input = at(word);
+						return input !== undefined && readable(input);
+					})
+				);
+			case "mkdir":
+				return operands.length > 0 && this.makesDirectories(part, operands, project, plan);
+			case "touch":
+				// An existing file only gets a new time, so it needs no proof, but it must be a single regular file.
+				return (
+					operands.length > 0 &&
+					operands.every((word) => {
+						const target = at(word);
+						if (!target) return false;
+						if (target.state === "missing") return this.creates(target.path, plan);
+						if (target.state === "dir" || !target.stat) return true;
+						if (!target.stat.isFile() || target.stat.nlink > 1) return false;
+						if (this.madeHere(target.path, target.stat)) plan.record.push(target.path);
+						return true;
+					})
+				);
+			case "rm":
+				return (
+					operands.length > 0 &&
+					operands.every((word) => {
+						const target = at(word);
+						if (!target || target.state === "dir") return false;
+						if (target.state === "file" && !this.changes(target, plan)) return false;
+						plan.overlay.set(target.path, "gone");
+						plan.forget.push(target.path);
+						return true;
+					})
+				);
+			case "cp":
+			case "mv":
+				return this.copiesOrMoves(part.name, operands, project, plan);
+			case "sed":
+				// Only `sed -i`: plain sed is a reader, and only echo, printf and cat may fill a file.
+				return (
+					part.args.includes("-i") &&
+					operands.length > 0 &&
+					operands.every((word) => {
+						const target = at(word);
+						return target?.state === "file" && this.changes(target, plan);
+					})
+				);
+			default:
+				return false;
+		}
+	}
+
+	private makesDirectories(part: Part, operands: string[], project: Project, plan: Plan): boolean {
+		const parents = part.args.some((arg) => arg === "--parents" || /^-[pv]*p[pv]*$/.test(arg));
+		for (const word of operands) {
+			const target = resolvePath(word, project, plan.overlay);
+			if (!target || target.state === "file") return false;
+			if (target.state === "dir") continue;
+			plan.overlay.set(target.path, "dir");
+			if (!parents) continue;
+			for (let dir = dirname(target.path); dir !== project.cwd; dir = dirname(dir)) {
+				if (!plan.overlay.has(dir) && !lstatSync(dir, { throwIfNoEntry: false })) plan.overlay.set(dir, "dir");
+			}
+		}
 		return true;
 	}
 
-	private expect(toolCallId: string, { created, moved }: Pick<Effects, "created" | "moved">): void {
-		if (created.length === 0 && moved.length === 0) return;
-		// A call a later gate blocked never finishes; drop the oldest so the map stays small.
-		if (this.pending.size >= 64) this.pending.delete(this.pending.keys().next().value ?? "");
-		this.pending.set(toolCallId, { created, moved });
+	private copiesOrMoves(name: "cp" | "mv", operands: string[], project: Project, plan: Plan): boolean {
+		if (operands.length < 2) return false;
+		const destination = resolvePath(operands[operands.length - 1], project, plan.overlay);
+		if (!destination || (operands.length > 2 && destination.state !== "dir")) return false;
+		for (const word of operands.slice(0, -1)) {
+			const source = resolvePath(word, project, plan.overlay);
+			// Only regular files: a directory could carry a symlink a later part writes through.
+			if (!source || source.state !== "file" || (source.stat && !source.stat.isFile())) return false;
+			const into =
+				destination.state === "dir"
+					? resolvePath(join(destination.path, basename(source.path)), project, plan.overlay)
+					: destination;
+			if (!into || into.state === "dir") return false;
+			if (name === "cp") {
+				if (!this.writes(into, plan)) return false;
+				continue;
+			}
+			// The source loses its name, so mv changes it as rm would.
+			const mine = source.stat ? this.madeHere(source.path, source.stat) : plan.overlay.get(source.path) === "mine";
+			if (!this.changes(source, plan)) return false;
+			if (into.state === "file" && !this.changes(into, plan)) return false;
+			plan.overlay.set(source.path, "gone");
+			plan.overlay.set(into.path, "mine");
+			plan.forget.push(source.path);
+			if (mine) plan.record.push(into.path);
+		}
+		return true;
 	}
 
-	private remember(path: string): void {
-		const stat = lstatSync(path, { throwIfNoEntry: false });
-		if (stat?.isFile() && stat.nlink === 1) {
-			this.created.set(path, { dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs });
-		} else this.created.delete(path);
+	/** A write that creates or replaces `target`; replacing needs `changes`. */
+	private writes(target: Resolved, plan: Plan): boolean {
+		if (target.state === "dir") return false;
+		if (target.state === "missing") return this.creates(target.path, plan);
+		return this.changes(target, plan);
+	}
+
+	private creates(path: string, plan: Plan): boolean {
+		plan.overlay.set(path, "mine");
+		plan.record.push(path);
+		return true;
+	}
+
+	/**
+	 * True when the line may change or remove the existing file `target`: a single regular file that
+	 * this session made and nobody changed since, or one git must prove unchanged (`needProof`).
+	 */
+	private changes(target: Resolved, plan: Plan): boolean {
+		if (!target.stat) return plan.overlay.get(target.path) === "mine";
+		if (!target.stat.isFile() || target.stat.nlink > 1) return false;
+		plan.changesExisting = true;
+		if (this.madeHere(target.path, target.stat)) plan.record.push(target.path);
+		else plan.needProof.push(target.path);
+		plan.overlay.set(target.path, "mine");
+		return true;
 	}
 
 	/** True when `path` is a file this session made and nothing changed it since. */
@@ -172,192 +378,202 @@ export class AutoReviewSkips {
 		);
 	}
 
-	/** The project for `cwd`, or undefined when `cwd` is the home or root directory. */
-	project(cwd: string): Project | undefined {
-		const agentDir = getAgentDir();
-		const key = `${cwd}\0${agentDir}`;
-		if (this.roots.has(key)) return this.roots.get(key);
-		const root = canonical(cwd);
-		let project: Project | undefined;
-		if (root && dirname(root) !== root && root !== canonical(homedir())) {
-			// Every protected target lives under the profile's parent (`~/.lunr`) or the project's `.lunr`,
-			// which the hidden-path rule already covers, so the costly check runs only when they overlap.
-			const profile = canonical(dirname(agentDir)) ?? dirname(agentDir);
-			project = { root, cwd, checkProtected: isWithin(profile, root) || isWithin(root, profile) };
-		}
-		this.roots.set(key, project);
-		return project;
+	private expect(toolCallId: string, { record, forget }: Pick<Plan, "record" | "forget">): void {
+		if (record.length === 0 && forget.length === 0) return;
+		// A call a later gate blocked never finishes; drop the oldest so the map stays small.
+		if (this.pending.size >= 64) this.pending.delete(this.pending.keys().next().value ?? "");
+		this.pending.set(toolCallId, { record, forget });
 	}
+}
 
-	/** What `command` does, or undefined when any part of it needs review. */
-	bashEffects(command: string, project: Project): Effects | undefined {
-		// Variables, command substitution and `$'…'` can produce any word, also inside a here-document.
-		if (command.includes("$") || command.includes("`")) return undefined;
-		const parsed = deniedCommandLines(command, 64 * command.length);
-		if (parsed.uncheckable || parsed.wildcard || parsed.assigns || parsed.lines.length === 0) return undefined;
-		const effects: Effects = { created: [], moved: [], renamed: [], replaced: [], redirectsOutput: false };
-		const inputs: string[] = [];
-		for (const { op, target } of parsed.redirects) {
-			if (op === "<<<") continue;
-			if ((op === ">&" || op === "<&") && FD_DUPLICATE.test(target)) continue;
-			if (op === "<") {
-				inputs.push(target);
-				continue;
-			}
-			if (!op.includes(">")) return undefined;
-			if (target === "/dev/null") continue;
-			const path = projectPath(target, project);
-			// `>>` only appends, so the old content stays.
-			if (!path || !this.writes(path, op.endsWith(">>") ? "append" : "write", effects)) return undefined;
-			effects.redirectsOutput = true;
-		}
-		// What goes into a project file must come from the project too.
-		if (effects.redirectsOutput && !inputs.every((target) => projectPath(target, project))) return undefined;
-		for (const line of parsed.lines) {
-			if (!this.lineEffects(line, project, effects)) return undefined;
-		}
-		return effects;
-	}
+/** A regular file `cat` may print. A FIFO would block the call. */
+function readable(target: Resolved): boolean {
+	return target.state === "file" && (target.stat === undefined || target.stat.isFile());
+}
 
-	private lineEffects(line: DeniedLine, project: Project, effects: Effects): boolean {
-		const { words, start, end, name } = line;
-		// `./touch` or `/tmp/x/touch` is another program with a familiar name.
-		if (words[start] !== name) return false;
-		const args = words.slice(start + 1, end);
-		if (args.some((word) => EXPANDING_WORD.test(word))) return false;
-		if (name === "sed") {
-			const sed = sedCall(args, project);
-			if (sed?.inPlace) return sed.files.every((path) => this.writes(path, "write", effects));
-			if (effects.redirectsOutput && !sed) return false;
-			return !isMutatingLine(name, args);
-		}
-		const spec = WRITE_COMMANDS.get(name);
-		if (!spec) {
-			// `cd` is read-only, but it moves every later path out of the checks below.
-			if (name === "cd" || name === "pushd" || isMutatingLine(name, args)) return false;
-			return !effects.redirectsOutput || readsOnlyProject(name, args, project);
-		}
-
-		const operands: string[] = [];
-		let optionsEnded = false;
-		for (const word of args) {
-			if (!optionsEnded && word === "--") optionsEnded = true;
-			else if (!optionsEnded && word.startsWith("--")) {
-				if (!spec.long.includes(word)) return false;
-			} else if (!optionsEnded && word.startsWith("-") && word.length > 1) {
-				for (const letter of word.slice(1)) if (!spec.short.includes(letter)) return false;
-			} else operands.push(word);
-		}
-		if (operands.length < spec.minOperands) return false;
-		const paths: string[] = [];
-		for (const word of operands) {
-			const path = projectPath(word, project);
-			if (!path) return false;
-			paths.push(path);
-		}
-
-		if (name === "mkdir" || name === "touch") {
-			for (const path of paths) {
-				const stat = lstatSync(path, { throwIfNoEntry: false });
-				// `touch` on a second hard link or a device changes something that may not be in the project.
-				if (stat && !stat.isDirectory() && (!stat.isFile() || stat.nlink > 1)) return false;
-				if (!stat || (stat.isFile() && this.madeHere(path, stat))) effects.created.push(path);
-			}
-		} else if (name === "cp" || name === "mv") {
-			const destination = paths[paths.length - 1];
-			const intoDirectory = isDirectory(destination);
-			if (paths.length > 2 && !intoDirectory) return false;
-			// Only regular files move or copy: a directory or symlink could bring a link out of the project.
-			for (const word of operands.slice(0, -1)) {
-				if (!lstatSync(resolve(project.cwd, word), { throwIfNoEntry: false })?.isFile()) return false;
-			}
-			for (const source of paths.slice(0, -1)) {
-				const to = intoDirectory ? join(destination, basename(source)) : destination;
-				// Onto an existing directory, cp merges and mv replaces it: more than the command names.
-				if (name === "cp" && !this.writes(to, "write", effects)) return false;
-				if (name === "mv") {
-					if (!this.writes(to, "move", effects)) return false;
-					const stat = lstatSync(source, { throwIfNoEntry: false });
-					if (stat && this.madeHere(source, stat)) effects.moved.push([source, to]);
-					else effects.renamed.push(to);
-				}
-			}
+/** The tokens of `command`, or undefined for anything outside the grammar in the module comment. */
+function lex(command: string): Token[] | undefined {
+	const tokens: Token[] = [];
+	let marker: string | undefined;
+	let i = 0;
+	while (i < command.length) {
+		const ch = command[i];
+		if (ch === " " || ch === "\t") {
+			i++;
+		} else if (ch === "\n") {
+			tokens.push({ kind: "op", text: ";" });
+			if (marker !== undefined) {
+				// The body is literal text that ends at the first line that is exactly the marker.
+				const end = command.indexOf(`\n${marker}\n`, i);
+				const at = end >= 0 ? end : command.endsWith(`\n${marker}`) ? command.length - marker.length - 1 : -1;
+				if (at < i) return undefined;
+				i = at + 1 + marker.length;
+				marker = undefined;
+			} else i++;
+		} else if (command.startsWith("&&", i)) {
+			tokens.push({ kind: "op", text: "&&" });
+			i += 2;
+		} else if (ch === ";") {
+			tokens.push({ kind: "op", text: ";" });
+			i++;
+		} else if (command.startsWith("<<", i)) {
+			// Only `<<'MARKER'`: a quoted marker keeps the body literal.
+			const match = /^<< ?'([^']*)'(?=[ \t\n;&>]|$)/.exec(command.slice(i, i + 80));
+			if (!match || !HEREDOC_MARKER.test(match[1]) || marker !== undefined) return undefined;
+			marker = match[1];
+			tokens.push({ kind: "heredoc" });
+			i += match[0].length;
+		} else if (ch === ">" || ch === "<" || (ch === "2" && command[i + 1] === ">")) {
+			const op = /^(?:2>&1|>&2|2>>|2>|>>|>|<)/.exec(command.slice(i, i + 4))?.[0] as RedirectOp | undefined;
+			// `>|`, `>&-`, `<>`, `&>` and other descriptors stay outside the grammar.
+			if (!op || /[|&<>(]/.test(command[i + op.length] ?? "")) return undefined;
+			tokens.push({ kind: "redirect", text: op });
+			i += op.length;
 		} else {
-			for (const [index, path] of paths.entries()) {
-				// rm deletes the link itself, while `path` is where it points.
-				const named = lstatSync(resolve(project.cwd, operands[index]), { throwIfNoEntry: false });
-				if (!named) {
-					if (effects.renamed.includes(path)) return false;
-					continue;
-				}
-				// A second hard link keeps the data, possibly outside the project; anything but a file isn't ours.
-				if (!named.isFile() || named.nlink > 1) return false;
-				if (!this.madeHere(path, named)) effects.replaced.push(path);
+			const start = i;
+			let word = "";
+			while (i < command.length && !/[ \t\n;&<>]/.test(command[i])) {
+				const c = command[i];
+				if (c === "'" || c === '"') {
+					const close = command.indexOf(c, i + 1);
+					if (close < 0) return undefined;
+					const text = command.slice(i + 1, close);
+					if (c === '"' && /[$`\\!]/.test(text)) return undefined;
+					word += text;
+					i = close + 1;
+				} else if (UNQUOTED.test(c)) {
+					word += c;
+					i++;
+				} else return undefined;
 			}
+			// A lone `&` (a background job) or `|` ends here with nothing read.
+			if (i === start) return undefined;
+			// `1>f` or `3<f`: bash reads the digits as a file descriptor, not a word.
+			if (/^\d+$/.test(word) && (command[i] === ">" || command[i] === "<")) return undefined;
+			tokens.push({ kind: "word", text: word });
 		}
-		return true;
 	}
+	return marker === undefined ? tokens : undefined;
+}
 
-	/**
-	 * Notes a write to `path` in `effects`. False unless `path` is new or a regular file with one link:
-	 * a FIFO blocks the write, and a second hard link may be a file outside the project. A new path
-	 * counts as created unless `mv` put an existing file there.
-	 */
-	private writes(path: string, mode: "write" | "append" | "move", effects: Effects): boolean {
-		const stat = lstatSync(path, { throwIfNoEntry: false });
-		if (!stat) {
-			if (mode !== "move") effects.created.push(path);
-			return true;
+/** The parts of a line, or undefined for an empty part, a dangling redirect or two here-documents. */
+function splitParts(tokens: Token[] | undefined): Part[] | undefined {
+	if (!tokens) return undefined;
+	const parts: Part[] = [];
+	let current: Part | undefined;
+	let lastOp: string | undefined;
+	for (let i = 0; i < tokens.length; i++) {
+		const token = tokens[i];
+		if (token.kind === "op") {
+			// `;` and newlines may repeat or trail; `&&` must join two commands.
+			if (token.text === "&&" && !current) return undefined;
+			if (current) parts.push(current);
+			current = undefined;
+			lastOp = token.text;
+		} else if (!current) {
+			// An assignment, a path or a redirect in command position is another program or a variable.
+			if (token.kind !== "word" || !/^[a-z]+$/.test(token.text)) return undefined;
+			current = { name: token.text, args: [], redirects: [], heredoc: false };
+		} else if (token.kind === "word") current.args.push(token.text);
+		else if (token.kind === "heredoc") {
+			if (current.heredoc) return undefined;
+			current.heredoc = true;
+		} else if (token.text === "2>&1" || token.text === ">&2") current.redirects.push({ op: token.text });
+		else {
+			const target = tokens[i + 1];
+			if (target?.kind !== "word") return undefined;
+			current.redirects.push({ op: token.text, target: target.text });
+			i++;
 		}
-		if (!stat.isFile() || stat.nlink > 1) return false;
-		const mine = this.madeHere(path, stat);
-		if (!mine && mode !== "append") effects.replaced.push(path);
-		// Still the session's file afterwards, with a new size and time; not so when `mv` moved another file here.
-		if (mine && mode !== "move") effects.created.push(path);
-		return true;
 	}
+	if (current) parts.push(current);
+	else if (lastOp === "&&") return undefined;
+	return parts.length > 0 ? parts : undefined;
+}
+
+/** The operands of `args` when every option is in `spec`, else undefined. `--` ends the options. */
+function options(args: readonly string[], spec: { short: string; long: readonly string[] }): string[] | undefined {
+	const operands: string[] = [];
+	let ended = false;
+	for (const arg of args) {
+		if (ended || arg === "-" || !arg.startsWith("-")) operands.push(arg);
+		else if (arg === "--") ended = true;
+		else if (arg.startsWith("--")) {
+			if (!spec.long.includes(arg)) return undefined;
+		} else if (![...arg.slice(1)].every((letter) => spec.short.includes(letter))) return undefined;
+	}
+	return operands;
 }
 
 /**
- * The canonical path `word` names when it is an ordinary file inside `root`: not hidden, not a
- * protected target, and not reached through a symlink that leaves the project.
+ * The files of `sed [-i|-E|-r|-n] [-e script]... [script] file...` when every script passes
+ * read-only mode's sed check and reads no file (`r`, `R`). Undefined otherwise.
  */
-function projectPath(word: string, project: Project): string | undefined {
-	// A backslash left after parsing was quoted: a literal on POSIX, a separator on Windows.
-	if (word === "" || word.includes("\\") || EXPANDING_WORD.test(word)) return undefined;
-	return ordinaryTarget(resolve(project.cwd, word), project);
-}
-
-/** The canonical form of the absolute `path` when it is an ordinary project file (see `projectPath`). */
-function ordinaryTarget(path: string, project: Project): string | undefined {
-	const target = canonical(path, project);
-	if (!target) return undefined;
-	const rel = relative(project.root, target);
-	if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return undefined;
-	if (rel.split(sep).some((segment) => segment.startsWith("."))) return undefined;
-	return project.checkProtected && protectedTargetWriteReason(target, project.cwd) ? undefined : target;
+function sedOperands(args: readonly string[]): string[] | undefined {
+	const scripts: string[] = [];
+	const operands: string[] = [];
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "-e") {
+			if (i + 1 >= args.length) return undefined;
+			scripts.push(args[++i]);
+		} else if (arg.startsWith("-")) {
+			if (!["-i", "-E", "-r", "-n"].includes(arg)) return undefined;
+		} else operands.push(arg);
+	}
+	if (scripts.length === 0) {
+		const script = operands.shift();
+		if (script === undefined) return undefined;
+		scripts.push(script);
+	}
+	for (const script of scripts) {
+		if (sedScriptReads(script)?.length !== 0) return undefined;
+		if (isMutatingBashCommand(`sed -n '${script.replaceAll("'", "'\\''")}'`)) return undefined;
+	}
+	return operands;
 }
 
 /**
- * `canonicalizeTargetPath` without its exceptions, which cost tens of microseconds for each missing
- * component: the real path of the deepest existing ancestor plus the rest. Undefined for a dangling
- * link or an unreadable path. The session directory resolves to the project root it was resolved to
- * at the session's first call, which saves a `realpath` for new files.
+ * Where `word` leads, when it is a project path this module trusts: relative (or under the project
+ * by absolute name), with no empty, `.`, `..` or hidden component after an optional leading `./`,
+ * and no existing component that is a symlink or, before the last, not a directory. Each existing
+ * prefix is read with `lstat` from the project down, so the kernel can't resolve it anywhere else.
+ * Earlier parts' results in `overlay` take the place of the disk. Undefined for anything else. An
+ * `lstat` error other than "missing" throws, which `allows` turns into review.
  */
-function canonical(path: string, project?: Project): string | undefined {
-	const suffix: string[] = [];
-	for (let ancestor = path; ; ancestor = dirname(ancestor)) {
-		if (ancestor === project?.cwd) return join(project.root, ...suffix);
-		if (lstatSync(ancestor, { throwIfNoEntry: false })) {
-			try {
-				return join(realpathSync.native(ancestor), ...suffix);
-			} catch {
-				return undefined;
-			}
+function resolvePath(word: string, project: Project, overlay: Plan["overlay"]): Resolved | undefined {
+	let rel = word.startsWith(`${project.cwd}/`) ? word.slice(project.cwd.length + 1) : word;
+	if (rel.startsWith("./")) rel = rel.slice(2);
+	rel = rel.replace(/\/+$/, "");
+	if (rel === "" || isAbsolute(rel) || rel.includes("\\")) return undefined;
+	const names = rel.split("/");
+	if (names.some((name) => name === "" || name.startsWith("."))) return undefined;
+	let path = project.cwd;
+	let onDisk = true;
+	let stat: Stats | undefined;
+	for (const [index, name] of names.entries()) {
+		path = join(path, name);
+		const last = index === names.length - 1;
+		const earlier = overlay.get(path);
+		if (earlier === "gone" || earlier === "mine") {
+			if (!last) return undefined;
+			return guarded({ path, state: earlier === "gone" ? "missing" : "file" }, project);
 		}
-		if (dirname(ancestor) === ancestor) return undefined;
-		suffix.unshift(basename(ancestor));
+		if (earlier === "dir") {
+			onDisk = false;
+			stat = undefined;
+			continue;
+		}
+		if (!onDisk) continue;
+		stat = lstatSync(path, { throwIfNoEntry: false });
+		if (!stat) onDisk = false;
+		else if (stat.isSymbolicLink() || (!last && !stat.isDirectory())) return undefined;
 	}
+	return guarded({ path, state: !stat ? "missing" : stat.isDirectory() ? "dir" : "file", stat }, project);
+}
+
+function guarded(target: Resolved, project: Project): Resolved | undefined {
+	return project.checkProtected && protectedTargetWriteReason(target.path, project.cwd) ? undefined : target;
 }
 
 function isWithin(path: string, root: string): boolean {
@@ -366,100 +582,38 @@ function isWithin(path: string, root: string): boolean {
 }
 
 /**
- * `sed [-i] [-E|-r|-n] [-e script]... [script] file...` when every script passes read-only mode's sed
- * check (no `w`, `e` or `-f`) with `-i` taken out, and every file, including those `r` and `R` read,
- * is an existing project file. Undefined for anything else.
+ * True when git proves every path tracked and unchanged: `git ls-files -s -v` lists it as a plain
+ * entry (`H`, mode 100644 or 100755, stage 0, so not skip-worktree, assume-unchanged, a submodule
+ * or a nested repository), and `git hash-object --no-filters` of the file gives the same blob. No
+ * index refresh, filter, hook or fsmonitor runs, and `GIT_*` variables are dropped so the check
+ * reads the project's own repository.
  */
-function sedCall(args: string[], project: Project): { inPlace: boolean; files: string[] } | undefined {
-	let inPlace = false;
-	const scripts: string[] = [];
-	const operands: string[] = [];
-	for (let i = 0; i < args.length; i++) {
-		const word = args[i];
-		if (word === "-i" || word === "--in-place") inPlace = true;
-		else if (word === "-e") {
-			if (i + 1 >= args.length) return undefined;
-			scripts.push(args[++i]);
-		} else if (word.startsWith("-")) {
-			if (!SED_OPTIONS.has(word)) return undefined;
-		} else operands.push(word);
-	}
-	if (scripts.length === 0) {
-		const script = operands.shift();
-		if (script === undefined) return undefined;
-		scripts.push(script);
-	}
-	if (operands.length === 0) return undefined;
-	const reads: string[] = [];
-	for (const script of scripts) {
-		const read = sedScriptReads(script);
-		if (!read) return undefined;
-		reads.push(...read);
-	}
-	if (!reads.every((word) => projectPath(word, project))) return undefined;
-	const files: string[] = [];
-	for (const word of operands) {
-		const path = projectPath(word, project);
-		if (!path || !exists(path)) return undefined;
-		files.push(path);
-	}
-	return { inPlace, files };
-}
-
-/**
- * True when a read-only line can feed a redirect into a project file: a command from
- * `REDIRECT_SOURCES` whose operands are all project paths and whose options name no path.
- */
-function readsOnlyProject(name: string, args: readonly string[], project: Project): boolean {
-	const kind = REDIRECT_SOURCES.get(name);
-	if (kind === "literal") return true;
-	if (!kind) return false;
-	return args.every((word) => (word.startsWith("-") ? !word.includes("/") : projectPath(word, project) !== undefined));
-}
-
-/** Read-only mode's verdict on one command whose words are literal (no expansions left). */
-function isMutatingLine(name: string, args: readonly string[]): boolean {
-	return isMutatingBashCommand([name, ...args].map((word) => `'${word.replaceAll("'", "'\\''")}'`).join(" "));
-}
-
-function exists(path: string): boolean {
-	return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
-}
-
-function isDirectory(path: string): boolean {
-	return statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
-}
-
-/**
- * True when git can restore every path: `git ls-files` lists it in this repository's index as a
- * regular blob at stage 0 with no skip-worktree or assume-unchanged flag (so not in a submodule or
- * a nested repository), and `git status` shows no change, staged or not. fsmonitor is off so the
- * check runs no configured program.
- */
-async function gitCanRestore(paths: readonly string[], root: string): Promise<boolean> {
-	const names = paths.map((path) => relative(root, path).split(sep).join("/"));
-	const [listed, status] = await Promise.all([
-		git(root, ["ls-files", "-s", "-v", "-z", "--", ...names]),
-		git(root, ["status", "--porcelain", "-z", "--ignored=matching", "--untracked-files=all", "--", ...names]),
+async function gitUnchanged(paths: readonly string[], cwd: string): Promise<boolean> {
+	const names = paths.map((path) => relative(cwd, path).split(sep).join("/"));
+	const [listed, hashes] = await Promise.all([
+		git(cwd, ["--literal-pathspecs", "ls-files", "-s", "-v", "-z", "--", ...names]),
+		git(cwd, ["hash-object", "--no-filters", "--", ...names]),
 	]);
-	if (listed === undefined || status !== "") return false;
-	const restorable = new Set<string>();
+	if (listed === undefined || hashes === undefined) return false;
+	const stored = new Map<string, string>();
 	for (const record of listed.split("\0")) {
 		if (!record) continue;
-		// `H` is a plain cached entry; `S`, `h` and other tags mark flags that hide changes from status.
-		const match = /^H (100644|100755) [0-9a-f]+ 0\t(.*)$/s.exec(record);
+		const match = /^H (?:100644|100755) ([0-9a-f]+) 0\t(.*)$/s.exec(record);
 		if (!match) return false;
-		restorable.add(match[2]);
+		stored.set(match[2], match[1]);
 	}
-	return names.every((name) => restorable.has(name));
+	const actual = hashes.trim().split("\n");
+	return actual.length === names.length && names.every((name, index) => stored.get(name) === actual[index]);
 }
 
-/** Runs git in `root` without optional locks, fsmonitor or pathspec magic; undefined on any failure. */
-function git(root: string, args: string[]): Promise<string | undefined> {
-	const options = ["-c", "core.fsmonitor=false", "--no-optional-locks", "--literal-pathspecs"];
+function git(cwd: string, args: string[]): Promise<string | undefined> {
+	const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
 	return new Promise((done) => {
-		execFile("git", [...options, ...args], { cwd: root, timeout: GIT_TIMEOUT_MS }, (error, stdout) =>
-			done(error ? undefined : stdout),
+		execFile(
+			"git",
+			["-c", "core.fsmonitor=false", "--no-optional-locks", ...args],
+			{ cwd, env, timeout: GIT_TIMEOUT_MS },
+			(error, stdout) => done(error ? undefined : stdout),
 		);
 	});
 }
