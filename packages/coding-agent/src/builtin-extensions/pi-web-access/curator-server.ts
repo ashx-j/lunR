@@ -1,4 +1,3 @@
-// @ts-nocheck
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { generateCuratorPage } from "./curator-page.ts";
 import type { SummaryMeta } from "./summary-review.ts";
@@ -467,7 +466,8 @@ export function startCuratorServer(
 
 				try {
 					const result = await callbacks.onSummarize(parsed.indices, controller.signal, model, feedback);
-					if (requestId !== summarizeRequestSeq || state === "COMPLETED") {
+					// Cast: state can change while onSummarize awaits, but TypeScript keeps the narrowing from before it.
+					if (requestId !== summarizeRequestSeq || (state as ServerState) === "COMPLETED") {
 						sendJson(res, 409, { ok: false, error: "Summarize request superseded" });
 						return;
 					}
