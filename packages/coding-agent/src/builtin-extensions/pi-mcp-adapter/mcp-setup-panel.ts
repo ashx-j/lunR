@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { createPanelKeys, type PanelKeybindings, type PanelKeys } from "./panel-keys.ts";
 import type { ImportKind } from "./types.ts";
@@ -96,13 +95,22 @@ export class McpSetupPanel {
   private inactivityTimeout: ReturnType<typeof setTimeout> | null = null;
   private static readonly INACTIVITY_MS = 60_000;
 
+  private discovery: McpDiscoverySummary;
+  private callbacks: SetupPanelCallbacks;
+  private options: SetupPanelOptions;
+  private done: () => void;
+
   constructor(
-    private discovery: McpDiscoverySummary,
-    private callbacks: SetupPanelCallbacks,
-    private options: SetupPanelOptions,
+    discovery: McpDiscoverySummary,
+    callbacks: SetupPanelCallbacks,
+    options: SetupPanelOptions,
     tui: { requestRender(): void },
-    private done: () => void,
+    done: () => void,
   ) {
+    this.discovery = discovery;
+    this.callbacks = callbacks;
+    this.options = options;
+    this.done = done;
     this.tui = tui;
     this.keys = createPanelKeys(options.keybindings);
     this.screen = options.mode;

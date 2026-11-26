@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { ConsentError } from "./errors.ts";
 import { logger } from "./logger.ts";
 
@@ -9,7 +8,10 @@ export class ConsentManager {
   private deniedServers = new Set<string>();
   private log = logger.child({ component: "ConsentManager" });
 
-  constructor(private mode: ToolConsentMode = "once-per-server") {
+  private mode: ToolConsentMode;
+
+  constructor(mode: ToolConsentMode = "once-per-server") {
+    this.mode = mode;
     this.log.debug("Initialized", { mode });
   }
 

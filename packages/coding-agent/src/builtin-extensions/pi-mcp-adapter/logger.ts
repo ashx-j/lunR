@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Centralized logging for MCP UI operations.
  * Provides structured, contextual logs with levels.
@@ -124,10 +123,16 @@ class Logger {
 }
 
 class ChildLogger {
+  private parent: Logger;
+  private context: LogContext;
+
   constructor(
-    private parent: Logger,
-    private context: LogContext
-  ) {}
+    parent: Logger,
+    context: LogContext
+  ) {
+    this.parent = parent;
+    this.context = context;
+  }
 
   debug(message: string, context?: LogContext): void {
     this.parent.debug(message, { ...this.context, ...context });

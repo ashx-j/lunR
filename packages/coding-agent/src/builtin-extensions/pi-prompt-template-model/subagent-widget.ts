@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import {
@@ -263,7 +262,7 @@ export function createDelegatedProgressWidget(
 	const isParallel = parallelTasks.length > 0;
 	const parallelModels = [...new Set(parallelTasks
 		.map((task) => task.tier)
-		.filter((entry): entry is string => !!entry))];
+		.filter((entry): entry is NonNullable<DelegatedSubagentTask["tier"]> => !!entry))];
 	const requestModel = isParallel
 		? (parallelModels.length === 1 ? parallelModels[0] : undefined)
 		: normalizeModelLabel(model);
