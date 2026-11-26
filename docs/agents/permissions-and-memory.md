@@ -26,6 +26,20 @@ Read before changing permission modes, the auto reviewer, protected files, globa
 
 - Auto review runs in `AgentSession` after `gateToolCall`, not in `permissions.ts`, because it needs the model runtime, messages and session usage. Keep `needsAutoReview` derived from `readOnlyModeBlock` so new tools default to reviewed. It also reviews `web_fetch`/`fetch_content`, browser `navigate`/`tabs`, env-prefixed bash and hidden or outside paths (resolved with `resolveToCwd` + `canonicalizeTargetPath`).
 - The reviewer never sees tool results. It clips long actions head-and-tail with a marker and lists `path`/`command`/`url` first. AGENTS.md and extension-sent user messages (tracked in a WeakSet by identity, lost after reload) are labelled as context that can't authorize anything. An aborted review returns early and never counts toward the ask-the-user limit. `autoReviewModel` is read from global settings only. The default reviewer is the newest model of the provider's `reviewerFamily` among the models the credential offers (a Claude subscription offers only its saved picker list), else the session model; never pin an exact reviewer id. A configured or parent reviewer the credential's model list doesn't include is `unavailable`, so the warning and picker fire; with no list (an env key, a subscription saved without models) any catalog model counts.
+- `core/auto-review-skip.ts` (`AutoReviewSkips`, one per session) runs before `needsAutoReview` and lets these run without a review request. Commands are parsed with `deniedCommandLines`, which also returns redirects, here-document bodies and assignments for this; lines that only read go through `isMutatingBashCommand`. Anything else goes to the reviewer as before.
+
+  | Action | Runs without review when |
+  | --- | --- |
+  | `mkdir [-p] [-v]`, `touch [-a -c -m]` | every operand is an ordinary project path |
+  | `cp [-rRapfnvu]`, `mv [-fnvu]` | every operand is an ordinary project path; 3+ operands need a directory destination |
+  | `rm [-f] [-v]` | each named file is a regular file this session created (allowed `touch`/`mkdir`/`cp`/`>`/`write`, or `mv` of one) or tracked and clean in `git status` |
+  | replacing an existing file (`>`, `cp`/`mv` onto it, `sed -i`) | the same as `rm`, since rollback covers only the file tools; `>>` appends and always passes. A destination that is an existing directory is reviewed |
+  | `sed -i [-E -r -n -e script]` | the script passes read-only mode's sed check with `-i` removed and every file exists in the project and passes the replace rule above |
+  | `>`, `>>`, `>|`, `&>`, `<>` | the target is `/dev/null` or an ordinary project path; `<`, `<<<` and `>&N` always pass |
+  | read-only lines (`ls`, `cat`, `echo`, `git status`) | `isMutatingBashCommand` passes them, except `cd`/`pushd` |
+  | `write` | same path rule as `needsAutoReview`; records a new file for `rm` |
+
+  An ordinary project path canonicalizes (symlinks resolved, no exceptions) inside the session cwd with no dot segment, and passes `protectedTargetWriteReason` when the project overlaps the profile's parent directory; the full check costs about 450 µs, so it runs only then. Always reviewed: any `$` or backtick in the text (also in here-document bodies), a glob, brace or `~` word, an assignment, a command word with a `/`, wrappers (`sudo`, `env`, `xargs`), any option not listed, `rm` of a directory or symlink, a session in `/` or the home directory. The `rm` git check spawns `git -c core.fsmonitor=false status` (a few ms); everything else measured about 140 µs for `mkdir -p a && touch a/x && echo hi > a/y` at load 3.6. A skipped action leaves no `auto-review` request in `/usage`, which is where a reviewed one shows. `git add`/`commit` stay reviewed because hooks and filters run project programs.
 - ACP workers call `setAutoReviewEnabled(false)` and tie autonomy to ACP's `auto` (Autonomous), because the ACP client approves every tool itself. `-p` and gateway cron sessions in auto also set autonomy, preserving what a saved auto default meant before.
 
 ## Global instructions and memory

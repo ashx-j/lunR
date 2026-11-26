@@ -71,6 +71,7 @@ import {
 	reviewerFailed,
 	SUBAGENT_CHILD_AUTO_REVIEW_ENV,
 } from "./auto-review.ts";
+import { AutoReviewSkips } from "./auto-review-skip.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionResult,
@@ -515,6 +516,7 @@ export class AgentSession {
 	// lunr: ACP clients approve tools themselves, so their sessions skip auto review.
 	private _autoReviewEnabled = true;
 	private _autoReviewTracker = new AutoReviewTracker();
+	private _autoReviewSkips = new AutoReviewSkips();
 	// lunr: a subagent reviews with the reviewer its auto-mode parent resolved.
 	private _parentAutoReviewRef: string | undefined;
 	private _unregisterAutoReviewSnapshot: (() => void) | undefined;
@@ -684,6 +686,7 @@ export class AgentSession {
 			if (
 				this.permissionMode === "auto" &&
 				this._autoReviewEnabled &&
+				!(await this._autoReviewSkips.allows(toolCall.name, args as Record<string, unknown>, this._cwd)) &&
 				needsAutoReview(toolCall.name, args as Record<string, unknown>, this._cwd) &&
 				!rules.allowed(toolCall.name, args as Record<string, unknown>)
 			) {
