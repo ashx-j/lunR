@@ -8,6 +8,7 @@ import { formatSearchDetail } from "../src/builtin-extensions/pi-web-access/rend
 import { getReadmePath } from "../src/config.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
+import { formatChangesForModel } from "../src/core/tools/bash-file-changes.ts";
 import { createEditToolDefinition } from "../src/core/tools/edit.ts";
 import { createFindToolDefinition } from "../src/core/tools/find.ts";
 import { createGrepToolDefinition } from "../src/core/tools/grep.ts";
@@ -708,6 +709,44 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain("Truncated:");
 		expect(rendered).toContain("line-4000");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
+	});
+
+	test("bash card sums changed files when collapsed and lists at most 20 with their diffs when expanded", () => {
+		const files = Array.from({ length: 30 }, (_, i) => ({
+			path: `f${i}.txt`,
+			kind: "modified" as const,
+			...(i < 20 ? { added: 1, removed: 1, diff: `-1 old ${i}\n+1 new ${i}` } : {}),
+		}));
+		const fileChanges = { files, more: 0 };
+		const modelLine = formatChangesForModel(fileChanges);
+		const card = (expanded: boolean) => {
+			const component = new ToolExecutionComponent(
+				"bash",
+				`tool-bash-changes-${expanded}`,
+				{ command: "sed -i s/old/new/ f*.txt" },
+				{},
+				createBashToolDefinition(process.cwd()),
+				createFakeTui(),
+				process.cwd(),
+			);
+			component.markExecutionStarted();
+			component.setExpanded(expanded);
+			const content = [
+				{ type: "text" as const, text: "(no output)" },
+				{ type: "text" as const, text: modelLine },
+			];
+			component.updateResult({ content, details: { fileChanges }, isError: false }, false);
+			return stripAnsi(component.render(120).join("\n"));
+		};
+
+		// 10 of the 30 files have no line counts, so the header gives only the file count.
+		expect(card(false)).toContain("— changed 30 files");
+		expect(card(false)).not.toContain("+20");
+		const expanded = card(true);
+		expect(expanded).toContain("+1 new 19");
+		expect(expanded).not.toContain("f20.txt");
+		expect(expanded).toContain("and 10 more files");
+		expect(expanded).not.toContain(modelLine);
 	});
 
 	test("does not duplicate built-in headers when passed the active built-in definition", () => {
