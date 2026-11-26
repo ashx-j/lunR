@@ -1,6 +1,16 @@
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { NothingToCompactError } from "../src/core/agent-session.ts";
+import { addMessageToChat } from "../src/modes/interactive/chat-history.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+
+// The rebuild and the synthetic summary go through chat-history.ts; record them instead of drawing.
+vi.mock("../src/modes/interactive/chat-history.ts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/modes/interactive/chat-history.ts")>()),
+	renderSessionEntries: vi.fn(),
+	addMessageToChat: vi.fn(),
+}));
+
+beforeEach(() => vi.mocked(addMessageToChat).mockClear());
 
 interface CompactionEndEvent {
 	type: "compaction_end";
@@ -17,7 +27,6 @@ function createFakeMode(isIdle: boolean) {
 		session: { isIdle },
 		sessionManager: { buildContextEntries: () => [] },
 		disposeChatToolComponents: vi.fn(),
-		renderSessionEntries: vi.fn(),
 		footer: { invalidate: vi.fn() },
 		autoCompactionEscapeHandler: undefined as (() => void) | undefined,
 		autoCompactionLoader: undefined,
@@ -25,7 +34,6 @@ function createFakeMode(isIdle: boolean) {
 		defaultEditor: {},
 		statusContainer: { clear: vi.fn() },
 		chatContainer: { clear: vi.fn() },
-		addMessageToChat: vi.fn(),
 		showError: vi.fn(),
 		showStatus: vi.fn(),
 		clearStatusIndicator: vi.fn(),
@@ -64,8 +72,8 @@ describe("InteractiveMode compaction events", () => {
 
 		expect(fakeThis.chatContainer.clear).toHaveBeenCalledTimes(1);
 		expect(fakeThis.rebuildChatFromMessages).toHaveBeenCalledTimes(1);
-		expect(fakeThis.addMessageToChat).toHaveBeenCalledTimes(1);
-		expect(fakeThis.addMessageToChat).toHaveBeenCalledWith(
+		expect(addMessageToChat).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(addMessageToChat).mock.calls.map((call) => call[1])).toContainEqual(
 			expect.objectContaining({
 				role: "compactionSummary",
 				tokensBefore: 123,
@@ -98,7 +106,7 @@ describe("InteractiveMode compaction events", () => {
 
 		expect(fakeThis.chatContainer.clear).toHaveBeenCalledTimes(1);
 		expect(fakeThis.rebuildChatFromMessages).toHaveBeenCalledTimes(1);
-		expect(fakeThis.addMessageToChat).toHaveBeenCalledWith(
+		expect(vi.mocked(addMessageToChat).mock.calls.map((call) => call[1])).toContainEqual(
 			expect.objectContaining({
 				role: "compactionSummary",
 				tokensBefore: 456,
