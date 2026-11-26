@@ -335,7 +335,8 @@ export interface SteeringStatus {
 
 export interface SteerActionTarget {
 	index: number;
-	state: SteeringTargetState;
+	// "pending" when the steer action returns before the child acknowledged it.
+	state: SteeringTargetState | "pending";
 	deliveredAt?: number;
 	lateDeliveredAt?: number;
 	reason?: string;
@@ -421,7 +422,8 @@ export interface SubagentResultIntercomChild {
 	children?: PublicNestedRunSummary[];
 }
 
-export interface SubagentResultIntercomPayload {
+// A type alias, not an interface, so it can be passed where Record<string, unknown> is expected.
+export type SubagentResultIntercomPayload = {
 	ownerNotificationSessionId?: string;
 	to: string;
 	message: string;
@@ -439,7 +441,7 @@ export interface SubagentResultIntercomPayload {
 	index?: number;
 	artifactPath?: string;
 	sessionPath?: string;
-}
+};
 
 // ============================================================================
 // Progress Tracking

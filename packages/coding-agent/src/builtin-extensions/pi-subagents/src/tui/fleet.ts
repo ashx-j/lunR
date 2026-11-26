@@ -1,9 +1,8 @@
-// @ts-nocheck
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
 import { formatDuration, formatModelSelection, formatTokens, shortenPath } from "../shared/formatters.ts";
-import { RESULTS_DIR, type AsyncJobState, type ForegroundResumeChild, type ForegroundResumeRun, type SubagentState } from "../shared/types.ts";
+import { RESULTS_DIR, type AsyncJobState, type AsyncJobStep, type ForegroundResumeChild, type ForegroundResumeRun, type SubagentState } from "../shared/types.ts";
 import { readStatus } from "../shared/utils.ts";
 import { formatAsyncRunTranscript } from "../runs/background/fleet-view.ts";
 import { listAsyncRuns, summarizeAsyncStatus, type AsyncRunSummary } from "../runs/background/async-status.ts";
@@ -45,7 +44,7 @@ function trackedJobSummary(job: AsyncJobState): AsyncRunSummary {
 		...(job.currentStep !== undefined ? { currentStep: job.currentStep } : {}),
 		...(job.chainStepCount !== undefined ? { chainStepCount: job.chainStepCount } : {}),
 		...(job.parallelGroups?.length ? { parallelGroups: job.parallelGroups } : {}),
-		steps: (job.steps ?? job.agents?.map((agent) => ({ agent, status: job.status === "queued" ? "pending" as const : job.status })) ?? []).map((step, index) => ({
+		steps: (job.steps ?? job.agents?.map((agent): AsyncJobStep => ({ agent, status: job.status === "queued" ? "pending" as const : job.status })) ?? []).map((step, index) => ({
 			...step,
 			index: step.index ?? index,
 		})),

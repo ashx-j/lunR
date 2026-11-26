@@ -1,10 +1,9 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
-import type { AsyncStatus, Details, SubagentState, ToolBudgetConfig, TurnBudgetConfig } from "../../shared/types.ts";
+import type { AsyncStatus, Details, SteerActionTarget, SubagentState, ToolBudgetConfig, TurnBudgetConfig } from "../../shared/types.ts";
 import { readStatus } from "../../shared/utils.ts";
 import { consumeSteerAcks, deliverInterruptRequest, requestAsyncSteer } from "../background/control-channel.ts";
 import { resolveAsyncResumeTarget } from "../background/async-resume.ts";
@@ -103,7 +102,7 @@ export async function steerAsyncRun(input: {
 	}
 	const tracked = input.state.asyncJobs.get(status.runId);
 	if (tracked) tracked.updatedAt = Date.now();
-	const targets = targetIndexes.map((index) => ({ index, state: status.steps?.[index]?.status === "pending" ? "scheduled" as const : "pending" as const }));
+	const targets: SteerActionTarget[] = targetIndexes.map((index) => ({ index, state: status.steps?.[index]?.status === "pending" ? "scheduled" as const : "pending" as const }));
 	if (targets.every((target) => target.state === "scheduled")) {
 		const scheduled = { requestId, state: "scheduled" as const, sourceRunId: status.runId, targets };
 		return { content: [{ type: "text", text: `Steering scheduled for async run ${status.runId} (request ${requestId}).` }], details: { mode: "management", results: [], steering: scheduled } };
@@ -118,7 +117,7 @@ export async function steerAsyncRun(input: {
 	if (finalResult?.state === "delivered") {
 		return { content: [{ type: "text", text: `Steering delivered for async run ${status.runId} (request ${requestId}).` }], details: { mode: "management", results: [], steering: finalResult } };
 	}
-	const running = (finalStatus?.steps ?? status.steps).filter((step) => step.status === "running");
+	const running = (finalStatus?.steps ?? steps).filter((step) => step.status === "running");
 	const recoveryAllowed = status.mode === "single" && status.isNested !== true && running.length === 1 && Boolean(finalStatus?.steering) && (input.index === undefined || input.index === 0);
 	if (recoveryAllowed && finalResult?.state !== "scheduled" && input.recover) {
 		const appendSteeringNotice = (state: "failed" | "recovered", message: string): void => {
@@ -186,7 +185,7 @@ export async function steerAsyncRun(input: {
 			const revived = await input.recover(limits);
 			if (revived.isError || !revived.details.asyncId) throw new Error(revived.content[0]?.type === "text" ? revived.content[0].text : "Replacement launch failed; source run remains paused.");
 			const sourceStatus = readStatus(asyncDir);
-			const targetIndex = input.index ?? status.steps.findIndex((step) => step.status === "running");
+			const targetIndex = input.index ?? steps.findIndex((step) => step.status === "running");
 			if (sourceStatus?.state === "paused" && sourceStatus.steering && targetIndex >= 0) {
 				updateSteeringTarget(sourceStatus.steering, requestId, targetIndex, "recovered", Date.now(), { replacementRunId: revived.details.asyncId });
 				const stepSteering = sourceStatus.steps?.[targetIndex]?.steering;
@@ -199,7 +198,7 @@ export async function steerAsyncRun(input: {
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 			const failedStatus = readStatus(asyncDir);
-			const targetIndex = input.index ?? status.steps.findIndex((step) => step.status === "running");
+			const targetIndex = input.index ?? steps.findIndex((step) => step.status === "running");
 			if (failedStatus && failedStatus.state !== "running" && failedStatus.state !== "queued" && failedStatus.steering && targetIndex >= 0) {
 				updateSteeringTarget(failedStatus.steering, requestId, targetIndex, "failed", Date.now(), { reason });
 				const stepSteering = failedStatus.steps?.[targetIndex]?.steering;

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "../../shared/utils.ts";
@@ -56,6 +55,6 @@ export function loadRunsForAgent(agent: string): RunEntry[] {
 
 	return lines
 		.map((line) => { try { return JSON.parse(line) as RunEntry; } catch { return undefined; } })
-		.filter((entry): entry is RunEntry => Boolean(entry) && entry.agent === agent)
+		.filter((entry): entry is RunEntry => !!entry && entry.agent === agent)
 		.reverse();
 }

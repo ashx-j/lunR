@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { resolveEffectiveThinking, splitKnownThinkingSuffix, THINKING_LEVELS, type ThinkingLevel } from "../shared/model-info.ts";
@@ -168,7 +167,7 @@ function parseThinkingCommand(raw: string): ThinkingLevel | false | null {
 	return parseWatchdogThinkingInput(value, "/subagents-watchdog thinking") ?? null;
 }
 
-function resolveModelCommandValue(ctx: ExtensionCommandContext, raw: string): { model: string | null; thinking: ThinkingLevel | false | null; description: string } {
+function resolveModelCommandValue(ctx: ExtensionCommandContext, raw: string): { model: string | null; thinking: ThinkingLevel | false | null | undefined; description: string } {
 	const value = raw.trim();
 	if (!value) throw new Error("Expected a model, 'recommended', or 'inherit'.");
 	if (value === "inherit") return { model: null, thinking: null, description: "current session model and thinking" };

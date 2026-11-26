@@ -1,4 +1,3 @@
-// @ts-nocheck
 import {
 	SUBAGENT_DELEGATION_PROTOCOL_VERSION,
 	type SubagentDelegationAcceptanceResult,
@@ -51,7 +50,7 @@ interface PromptTemplateDelegationTaskProgress {
 	recentOutput?: string;
 	recentOutputLines?: string[];
 	recentTools?: Array<{ tool: string; args: string }>;
-	tier: "light" | "standard" | "heavy";
+	model?: string;
 	toolCount?: number;
 	durationMs?: number;
 	tokens?: number;
@@ -124,6 +123,7 @@ export interface DelegatedSubagentExecutionParams {
 	tasks?: PromptTemplateDelegationTask[];
 	context: "fresh" | "fork";
 	model?: string;
+	tier?: "light" | "standard" | "heavy";
 	cwd: string;
 	worktree?: boolean;
 	timeoutMs?: number;
@@ -161,7 +161,8 @@ function parseDelegationTasks(tasks: unknown): PromptTemplateDelegationTask[] {
 
 export function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegationRequest | undefined {
 	if (!data || typeof data !== "object") return undefined;
-	const value = data as Partial<PromptTemplateDelegationRequest> & { tasks?: unknown };
+	// Readonly so the hasSingle check below narrows value.agent and value.task.
+	const value = data as Readonly<Partial<PromptTemplateDelegationRequest>> & { tasks?: unknown };
 	if (typeof value.requestId !== "string" || !value.requestId) return undefined;
 	if (value.tier !== "light" && value.tier !== "standard" && value.tier !== "heavy") return undefined;
 	if (typeof value.cwd !== "string" || !value.cwd) return undefined;

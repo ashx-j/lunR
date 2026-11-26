@@ -33,7 +33,7 @@ export function parseSessionRequests(sessionPath: string | undefined): Accounted
 	}
 }
 
-export function parseSessionUsage(sessionPath: string | undefined): Usage | null {
+export function parseSessionUsage(sessionPath: string | undefined): Required<Usage> | null {
 	const requests = parseSessionRequests(sessionPath);
 	if (requests.length === 0) return null;
 	const total = totalRequestUsage(requests);
@@ -50,7 +50,7 @@ export function parseSessionUsage(sessionPath: string | undefined): Usage | null
 	};
 }
 
-export function sessionUsageDelta(current: Usage, previous: Usage | null): Usage {
+export function sessionUsageDelta(current: Usage, previous: Usage | null): Required<Usage> {
 	return {
 		unknownRequests: Math.max(0, (current.unknownRequests ?? 0) - (previous?.unknownRequests ?? 0)),
 		partialRequests: Math.max(0, (current.partialRequests ?? 0) - (previous?.partialRequests ?? 0)),
