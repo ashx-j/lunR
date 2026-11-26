@@ -587,8 +587,14 @@ function isMutatingSegment(segment: string): boolean {
 		);
 	}
 	if (command === "rg") {
-		// --pre runs a program on every searched file.
-		return args.some((a) => a === "--pre" || a.startsWith("--pre="));
+		// --pre runs a program on every searched file, --hostname-bin runs one for hyperlinks.
+		return args.some((a) => ["--pre", "--hostname-bin"].includes(a.split("=")[0]));
+	}
+	if (command === "hostname") {
+		// An operand, -F/--file or -b/--boot sets the hostname.
+		return args.some(
+			(a) => !a.startsWith("-") || /^-[^-]*[Fb]/.test(a) || ["--file", "--boot"].includes(a.split("=")[0]),
+		);
 	}
 	if (command === "uniq") {
 		// uniq [options] [input [output]] writes the output operand; a glob can expand to two operands.
@@ -671,9 +677,16 @@ function isMutatingSegment(segment: string): boolean {
 		return args.some((a) => ["--rawfile", "--slurpfile"].includes(a.split("=")[0]));
 	}
 	if (command === "sort") {
+		// -o writes a file, -T puts temporary files in a directory, and --compress-program runs a
+		// program on them. GNU accepts any unambiguous prefix (`--com=sh`), so every prefix counts.
 		return args.some((arg) => {
 			const option = arg.split("=")[0];
-			return (option.startsWith("--") && option.length > 2 && "--output".startsWith(option)) || /^-[^-]*o/.test(arg);
+			return (
+				(option.startsWith("--") &&
+					option.length > 2 &&
+					["--output", "--compress-program", "--temporary-directory"].some((name) => name.startsWith(option))) ||
+				/^-[^-]*[oT]/.test(arg)
+			);
 		});
 	}
 
