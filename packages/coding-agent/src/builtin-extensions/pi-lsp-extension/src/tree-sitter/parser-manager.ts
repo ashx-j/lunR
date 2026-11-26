@@ -11,6 +11,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setFlagsFromString } from "node:v8";
 import Parser from "web-tree-sitter";
 
 const require = createRequire(import.meta.url);
@@ -54,6 +55,24 @@ export class ParseTimeoutError extends Error {
   }
 }
 
+/**
+ * V8 optimizes a wasm function after it has run for its tiering budget (13M by default), and
+ * optimizing a large grammar lexer takes 0.2 to 0.6 GB for a moment. A session that touches several
+ * grammars optimized them together: the 500-call probe peaked at 827 to 941 MB, 1 GB in the review.
+ * A 14x budget spreads those compiles out (330 MB on the same probe). Hot parses run at the same
+ * speed after tier-up, and a cold search over 600 TypeScript files took 4% longer, within noise.
+ * The flag is process-wide and must be set before web-tree-sitter compiles; a command-line
+ * --wasm-tiering-budget wins. Bun runs wasm on JavaScriptCore and needs none of this.
+ */
+function raiseWasmTieringBudget(): void {
+  if (process.versions.bun || process.execArgv.some((flag) => flag.startsWith("--wasm-tiering-budget"))) return;
+  try {
+    setFlagsFromString("--wasm-tiering-budget=180000000");
+  } catch {
+    // An embedder without V8 flags parses at the default budget.
+  }
+}
+
 const VENDORED_GRAMMARS = fileURLToPath(new URL("./vendored-grammars", import.meta.url));
 
 /** Where a grammar comes from in a source run: the vendored build, else tree-sitter-wasms. */
@@ -81,7 +100,8 @@ export class TreeSitterManager {
   private loadingLanguages: Map<string, Promise<Language | null>> = new Map();
   private parsers: Map<string, Parser> = new Map();
   private cachedTrees: Map<string, CachedTree> = new Map();
-  private timedOut: Set<string> = new Set();
+  /** Files whose last parse hit the bound, with that content's hash, so it is not parsed again. */
+  private timedOut: Map<string, string> = new Map();
   /** The folder the build copied the grammars into, or undefined in a source run. */
   private copiedGrammars: string | undefined;
 
@@ -104,6 +124,7 @@ export class TreeSitterManager {
       await this.initializing;
       return;
     }
+    raiseWasmTieringBudget();
     this.initializing = Parser.init({
       locateFile: (scriptName: string) => {
         // Use module resolution to find web-tree-sitter regardless of install layout
@@ -191,13 +212,15 @@ export class TreeSitterManager {
       return cached.tree;
     }
 
+    const stamp = `${languageId}:${length}:${head}:${tail}`;
+    if (this.timedOut.get(filePath) === stamp) return null;
     let tree: Tree | null;
     try {
       tree = await this.parseDetached(content, languageId);
       this.timedOut.delete(filePath);
     } catch (error) {
       if (!(error instanceof ParseTimeoutError)) throw error;
-      this.timedOut.add(filePath);
+      this.timedOut.set(filePath, stamp);
       return null;
     }
     if (!tree) return null;

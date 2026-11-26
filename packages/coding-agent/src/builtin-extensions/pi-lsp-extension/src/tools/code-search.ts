@@ -12,7 +12,7 @@ import { CREDENTIAL_SKIP_NOTE } from "../../../../core/credential-files.js";
 import { relative } from "node:path";
 import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
 import { compilePattern } from "../tree-sitter/pattern-compiler.js";
-import { searchFiles, slowParseNote } from "../tree-sitter/search-engine.js";
+import { searchFiles, skippedFilesNote } from "../tree-sitter/search-engine.js";
 
 const SearchParams = Type.Object({
   pattern: Type.String({ description: "Structural pattern with metavariables ($NAME for single node, $$$NAME for variadic)" }),
@@ -63,7 +63,7 @@ export function createCodeSearchTool(
         path,
         maxResults: max_results ?? 50,
         onSkippedCredentials: () => { skipNote = `\n\n${CREDENTIAL_SKIP_NOTE}`; },
-        onSlowFiles: (files) => { slowNote = slowParseNote(files, rootDir); },
+        onSkippedFiles: (skipped) => { slowNote = skippedFilesNote(skipped, rootDir); },
       });
 
       if (matches.length === 0) {

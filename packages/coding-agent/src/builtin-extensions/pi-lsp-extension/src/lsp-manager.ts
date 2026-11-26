@@ -250,6 +250,7 @@ export class LspManager {
   getUnavailableReason(filePath: string): string {
     const languageId = this.getLanguageId(filePath);
     if (!languageId) return `No LSP server configured for file type: ${filePath}`;
+    if (!this.serverConfigs.has(languageId)) return `No LSP server is configured for ${languageId}`;
     const command = this.serverConfigs.get(languageId)?.command;
     if (command && this.missingCommands.has(command)) {
       return `LSP server "${command}" for ${languageId} is not installed or not on PATH. Install it, then run /lsp-restart ${languageId}.`;

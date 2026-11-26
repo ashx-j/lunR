@@ -13,7 +13,7 @@ import { resolveToCwd } from "../../../../core/tools/path-utils.js";
 import { relative } from "node:path";
 import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
 import { compilePattern } from "../tree-sitter/pattern-compiler.js";
-import { searchFiles, slowParseNote } from "../tree-sitter/search-engine.js";
+import { searchFiles, skippedFilesNote } from "../tree-sitter/search-engine.js";
 import { computeRewrites, applyRewrites } from "../tree-sitter/rewrite-engine.js";
 
 /** Callback to notify when files are modified by rewrites */
@@ -92,7 +92,7 @@ export function createCodeRewriteTool(
         path: path ? resolveToCwd(path, rootDir) : undefined,
         maxResults: 500,
         onSkippedCredentials: () => { skipNote = `\n\n${CREDENTIAL_SKIP_NOTE}`; },
-        onSlowFiles: (files) => { slowNote = slowParseNote(files, rootDir); },
+        onSkippedFiles: (skipped) => { slowNote = skippedFilesNote(skipped, rootDir); },
       });
 
       if (matches.length === 0) {

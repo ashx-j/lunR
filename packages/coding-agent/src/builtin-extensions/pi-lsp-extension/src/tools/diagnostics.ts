@@ -105,7 +105,10 @@ export function createDiagnosticsTool(
       const published = formatDiagnostics(lastPublished, relPath);
       text += `\n\nThe server's last published diagnostics, which may not match the current content:\n${published.text}`;
     }
-    if (treeSitter && resolveProvider(filePath, manager, treeSitter).type === "tree-sitter") {
+    const languageId = treeSitter?.getLanguageId(filePath);
+    if (treeSitter && languageId && !treeSitter.hasGrammar(languageId)) {
+      text += `\n\nNo syntax check either: lunR has no tree-sitter grammar for ${languageId}.`;
+    } else if (treeSitter && resolveProvider(filePath, manager, treeSitter).type === "tree-sitter") {
       try {
         const absPath = manager.resolvePath(filePath);
         const tree = await treeSitter.parse(absPath, await readFile(absPath, "utf-8"));
