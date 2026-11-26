@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { cycleModel, type ModelSelectionHost } from "../src/core/model-selection.ts";
+import {
+	cycleModel,
+	getAvailableThinkingLevels,
+	type ModelSelectionHost,
+	setThinkingLevel,
+} from "../src/core/model-selection.ts";
 
 describe("cycleModel with scoped models", () => {
 	it("skips scoped models without auth and applies the next model's scoped thinking level", async () => {
@@ -35,5 +40,30 @@ describe("cycleModel with scoped models", () => {
 			previousModel: a,
 			source: "cycle",
 		});
+	});
+});
+
+describe("setThinkingLevel after a catalog refresh", () => {
+	it("clamps to the levels the refreshed catalog offers, not the stale session model's", () => {
+		// The session still holds the old model object; the catalog now marks xhigh unsupported.
+		const stale = { provider: "p", id: "m", reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } };
+		const refreshed = { ...stale, thinkingLevelMap: { xhigh: null } };
+		const state = { model: stale, thinkingLevel: "medium" };
+		const host: Record<string, unknown> = {
+			agent: { state },
+			get model() {
+				return state.model;
+			},
+			modelRuntime: { getModel: () => refreshed },
+			sessionManager: { appendThinkingLevelChange: vi.fn() },
+			settingsManager: { setDefaultThinkingLevel: vi.fn() },
+			extensionRunner: { emit: vi.fn(async () => {}) },
+			emit: vi.fn(),
+			supportsThinking: () => true,
+		};
+		host.getAvailableThinkingLevels = () => getAvailableThinkingLevels(host as unknown as ModelSelectionHost);
+		expect(getAvailableThinkingLevels(host as unknown as ModelSelectionHost)).not.toContain("xhigh");
+		setThinkingLevel(host as unknown as ModelSelectionHost, "xhigh");
+		expect(state.thinkingLevel).toBe("high");
 	});
 });

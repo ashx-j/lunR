@@ -174,7 +174,7 @@ async function cycleAvailableModel(
  */
 export function setThinkingLevel(host: ModelSelectionHost, level: ThinkingLevel): void {
 	const availableLevels = host.getAvailableThinkingLevels();
-	const effectiveLevel = availableLevels.includes(level) ? level : clampLevelToModel(host, level, availableLevels);
+	const effectiveLevel = availableLevels.includes(level) ? level : clampLevelToModel(host, level);
 
 	// Only persist if actually changing
 	const previousLevel = host.agent.state.thinkingLevel;
@@ -249,10 +249,9 @@ function thinkingLevelForModelSwitch(host: ModelSelectionHost, explicitLevel?: T
 	return host.thinkingLevel;
 }
 
-function clampLevelToModel(
-	host: ModelSelectionHost,
-	level: ThinkingLevel,
-	_availableLevels: ThinkingLevel[],
-): ThinkingLevel {
-	return host.model ? (clampThinkingLevel(host.model, level) as ThinkingLevel) : "off";
+// Clamps against the registry copy, the same model getAvailableThinkingLevels reads, so a level the
+// refreshed catalog dropped is not kept from a stale session model object.
+function clampLevelToModel(host: ModelSelectionHost, level: ThinkingLevel): ThinkingLevel {
+	const model = resolvedCatalogModel(host);
+	return model ? (clampThinkingLevel(model, level) as ThinkingLevel) : "off";
 }
