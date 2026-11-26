@@ -180,6 +180,8 @@ export default function (pi: ExtensionAPI) {
 
 Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript works without compilation.
 
+In the interactive TUI, anything an extension writes with `console.log` or `console.error` goes to `lunr-debug.log` in the agent folder (`~/.lunr/agent/`), not the screen; use `ctx.ui.notify` to show the user a message. Print, json, rpc and ACP modes still write it to stdout and stderr.
+
 If the factory returns a `Promise`, lunR awaits it before continuing startup. That means async initialization completes before `session_start`, before `resources_discover`, and before provider registrations queued via `pi.registerProvider()` are flushed.
 
 ### Async factory functions
@@ -678,7 +680,7 @@ This hook can rewrite provider-level system instructions or remove them entirely
 
 ```typescript
 pi.on("before_provider_request", (event, ctx) => {
-  console.log(JSON.stringify(event.payload, null, 2));
+  console.log(JSON.stringify(event.payload, null, 2)); // lunr-debug.log in the TUI
 
   // Optional: replace payload
   // return { ...event.payload, temperature: 0 };
@@ -696,7 +698,7 @@ pi.on("after_provider_response", (event, ctx) => {
   // event.status - HTTP status code
   // event.headers - normalized response headers
   if (event.status === 429) {
-    console.log("rate limited", event.headers["retry-after"]);
+    ctx.ui.notify(`Rate limited, retry after ${event.headers["retry-after"]}s`, "warning");
   }
 });
 ```
@@ -779,7 +781,7 @@ pi.on("tool_call", async (event, ctx) => {
 
   if (isToolCallEventType("read", event)) {
     // event.input is { path: string; offset?: number; limit?: number }
-    console.log(`Reading: ${event.input.path}`);
+    ctx.ui.notify(`Reading: ${event.input.path}`, "info");
   }
 });
 ```
@@ -1077,7 +1079,7 @@ Returns lunR's current system prompt string.
 ```typescript
 pi.on("before_agent_start", (event, ctx) => {
   const prompt = ctx.getSystemPrompt();
-  console.log(`System prompt length: ${prompt.length}`);
+  ctx.ui.notify(`System prompt length: ${prompt.length}`, "info");
 });
 ```
 
@@ -1440,7 +1442,7 @@ Get the current session name, if set.
 ```typescript
 const name = pi.getSessionName();
 if (name) {
-  console.log(`Session: ${name}`);
+  console.log(`Session: ${name}`); // lunr-debug.log in the TUI
 }
 ```
 
@@ -1617,6 +1619,8 @@ pi.setActiveTools(["read", "bash"]); // Limit to read and bash
 ```
 
 `pi.getAllTools()` returns `name`, `description`, `parameters`, `promptGuidelines`, and `sourceInfo`.
+
+`pi.setDeferredTools(names)` starts registered tools unloaded. They leave the active set, and models with native deferred loading keep seeing them as deferred definitions. Load one later by adding it back with `pi.setActiveTools()` from a tool's `execute`. It returns the accepted names, and accepts none when the session has an explicit tool allowlist (`--tools`, `--no-tools`) or the user turned off "Load tools on demand" in `/settings`. See [Dynamic Tool Loading](#dynamic-tool-loading).
 
 Typical `sourceInfo.source` values:
 - `builtin` for built-in tools
@@ -1803,7 +1807,7 @@ lunR sends each tool's `name`, `description` and `parameters` to the model. Put 
 
 Note: Some models include the @ prefix in tool path arguments. Built-in tools strip a leading @ before resolving paths. If your custom tool accepts a path, normalize a leading @ as well.
 
-Permission modes apply to extension tools. `yolo` runs them. In `auto`, a review model checks each call first. `read-only` blocks them with the message `Read-only mode cannot verify that my_tool is safe`, and a custom tool has no way to declare itself read-only. See [features.md](features.md) for the modes.
+Permission modes apply to extension tools. `yolo` runs them. In `auto`, a review model checks each call first. `ask` asks the user before each call. `read-only` blocks them with the message `Read-only mode cannot verify that my_tool is safe`, and a custom tool has no way to declare itself read-only. See [features.md](features.md) for the modes.
 
 If your custom tool mutates files, use `withFileMutationQueue()` so it participates in the same per-file queue as built-in `edit` and `write`. This matters because tool calls run in parallel by default. Without the queue, two tools can read the same old file contents, compute different updates, and then whichever write lands last overwrites the other.
 
@@ -1890,7 +1894,7 @@ pi.registerTool({
 });
 ```
 
-**Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
+**Signaling errors:** To mark a tool execution as failed, so the LLM receives it as a failed call, either throw an error from `execute` or return a result with `isError: true`. A thrown error becomes a plain text result. A returned `isError: true` keeps your `content` and `details`, so your `renderResult` still draws them, with `context.isError` set.
 
 **Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
 
@@ -2261,6 +2265,14 @@ For all other models and providers, dynamic activation still works: lunR sends t
 lunR also uses this safe fallback when the active set is not purely additive, such as replacing one group of tools with another. Tool removals therefore work, but they do not use deferred loading.
 
 For the best cache behavior, keep the loader tool active for the whole session and add tools instead of replacing the active set.
+
+#### Declaring the deferred set
+
+Call `pi.setDeferredTools(names)` instead of removing tools with `pi.setActiveTools()` when the tools should start unloaded. On Anthropic models with native loading, lunR then sends every declared tool with `defer_loading` from the first request in a fixed order, loaded or not. The `tools` array stays byte-identical when a tool result loads one, so the cached tools and system prompt survive the load. Tools that are removed with `pi.setActiveTools()` instead are absent until they load, and the first load rewrites the cached prefix.
+
+Call it at the first `before_agent_start`, after the tools are registered. Each call adds its names after the ones declared earlier in the session, so several extensions can declare their own tools; a name declared earlier keeps its place and its loaded state. A direct call to a declared tool that is not loaded yet returns an error telling the model to load it first; the error names no loader, so the loader's description must say which tools it loads. A loader with `executionMode: "sequential"` lets a call that follows it in the same message use the tool it just loaded. Other providers ignore the declaration and send a loaded declared tool as a normal tool.
+
+lunR's builtin `lunr-tool-loader` uses this for its own rarely used tools (subagents, web, LSP, browser, `code_rewrite`, cron, PR watch) and registers `load_tools` as their loader on Anthropic models with native loading.
 
 #### Search tool example
 
@@ -2787,7 +2799,7 @@ const text = rustLines.join("\n");
 
 - Extension errors are logged, agent continues
 - `tool_call` errors block the tool (fail-safe)
-- Tool `execute` errors must be signaled by throwing; the thrown error is caught, reported to the LLM with `isError: true`, and execution continues
+- Tool `execute` errors are signaled by throwing or by returning `isError: true`; either way the LLM sees a failed call and execution continues
 
 ## Mode Behavior
 

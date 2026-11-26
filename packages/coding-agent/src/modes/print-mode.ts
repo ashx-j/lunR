@@ -7,7 +7,7 @@
  */
 
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
-import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
+import { type AgentSessionRuntime, SIGNAL_DISPOSE_LIMIT_MS } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.ts";
 import { describeProviderError } from "../core/provider-error-display.ts";
 import { encodeChildEventLines } from "../core/subagent-event-transport.ts";
@@ -47,16 +47,21 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		// Tool shells run detached, so the terminal's Ctrl+C reaches only lunR. Kill them here.
+		const signals: Array<[NodeJS.Signals, number]> = [
+			["SIGINT", 130],
+			["SIGTERM", 143],
+		];
 		if (process.platform !== "win32") {
-			signals.push("SIGHUP");
+			signals.push(["SIGHUP", 129]);
 		}
 
-		for (const signal of signals) {
+		for (const [signal, exitCode] of signals) {
 			const handler = () => {
 				killTrackedDetachedChildren();
+				setTimeout(() => process.exit(exitCode), SIGNAL_DISPOSE_LIMIT_MS);
 				void disposeRuntime().finally(() => {
-					process.exit(signal === "SIGHUP" ? 129 : 143);
+					process.exit(exitCode);
 				});
 			};
 			process.on(signal, handler);
@@ -112,7 +117,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			if (reviewer.kind !== "ready" && !warnedAboutReviewer) {
 				warnedAboutReviewer = true;
 				console.error(
-					`Auto mode has no ${reviewer.kind === "missing" ? `review model for ${reviewer.provider}` : `reachable review model (${reviewer.ref})`}, so risky actions will be blocked. Set one in /settings, Auto review model.`,
+					`Auto mode has no ${reviewer.kind === "missing" ? `review model${reviewer.provider ? ` for ${reviewer.provider}` : ""}` : `reachable review model (${reviewer.ref})`}, so risky actions will be blocked. Set one in /settings, Auto review model.`,
 				);
 			}
 		}

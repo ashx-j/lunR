@@ -392,6 +392,7 @@ ${chalk.bold("Environment Variables:")}
 ${chalk.bold("Built-in Tool Names:")}
   read   - Read file contents
   bash   - Execute bash commands
+  bash_job - Read or stop background bash jobs (on whenever bash is)
   edit   - Edit files with find/replace
   write  - Write files (creates/overwrites)
   grep   - Search file contents (read-only, off by default)

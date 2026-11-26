@@ -9,8 +9,11 @@ not implemented. See [Known limitations](#known-limitations).
 ## Setup and permissions
 
 Run `/computer setup` in the local lunR terminal. Setup verifies and installs the
-bundled runtime without downloading code, capturing the screen, or operating an
-application. It is unavailable in headless and gateway sessions.
+runtime without capturing the screen or operating an application. An npm install
+downloads the runtime for this machine once (28 MB on Windows x64, 27 MB on
+Windows arm64, 70 MB on macOS), starting at `computer_load`, `/computer setup`
+or the first computer tool call. The footer and the tool card show progress. It is unavailable in headless and gateway
+sessions.
 
 Windows needs an active, unlocked desktop. On Apple Silicon macOS, setup prints
 the exact installed `CuaDriver.app` path. Add that app to Accessibility and
@@ -26,7 +29,8 @@ require an image-capable model. There is no text-only accessibility fallback.
 Gateway sessions operate the gateway host, not the chat client's device.
 
 `computer_end` releases without approval. Read-only allows relevant observation
-and release, but blocks mutation. Yolo and Auto permit input. Auto allows
+and release, but blocks mutation. Yolo and Auto permit input. Ask asks you
+before each input action. Auto allows
 requested, implied, or necessary GUI work without lunR per-call prompts. In
 Yolo, ask before introducing GUI work into an otherwise non-GUI task. These
 intent rules are agent guidance, not a natural-language authorization classifier.
@@ -215,12 +219,27 @@ TUI cron continues to use its live permission context.
 lunR bundles [CuaDriver 0.28.1](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.28.1)
 as its native runtime. The upstream MIT license is under `native/computer-use`.
 
-The runtime resolves the host's optional payload package or matching archive
-beside a standalone executable. It verifies the archive, extracts a fresh
+The runtime uses the archive beside a standalone executable or an installed
+payload package. An npm install carries neither, because npm would install every
+platform's payload from lunR's shrinkwrap. On first use lunR downloads the host's
+`@ashx-j/lunr-computer-<platform>-<arch>` package at the lunR version and keeps
+its archive under `~/.lunr/desktop/payload` only if it matches the pinned size
+and SHA-256. It asks the registry npm uses: `npm_config_registry` when set,
+otherwise `npm config get @ashx-j:registry` or `registry`, otherwise
+registry.npmjs.org. A mirror is safe because of the pinned hash; a registry that
+needs a login token is not supported. Proxy variables such as `HTTPS_PROXY` apply.
+
+The download runs in the background, outside any single tool call. A tool call
+waits up to 60 seconds, then tells the model how much has arrived and to call
+again. A download that stops (no data for 60 seconds, a dropped connection, a
+closed lunR) resumes from where it stopped with an HTTP range request. Only one
+lunR process downloads at a time; others wait for it. A cached archive is hashed
+again the first time each process uses it, and a mismatching one is deleted and
+fetched again. It verifies the archive, extracts a fresh
 reference tree, and checks cached files/helpers against it. Redirected paths and
 escaping symlinks are refused. Installers do not overwrite an existing runtime.
 After confirming all owned processes stopped, an inactive cache can be removed
-for reinstallation. Runtime code is never downloaded at first use.
+for reinstallation.
 
 Windows uses system `tar.exe` and an isolated `mcp --direct --embedded
 --no-overlay` process. A hidden system PowerShell metadata probe refuses session

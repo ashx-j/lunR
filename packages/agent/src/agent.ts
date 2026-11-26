@@ -76,6 +76,7 @@ function createMutableAgentState(
 		systemPrompt: initialState?.systemPrompt ?? "",
 		model: initialState?.model ?? DEFAULT_MODEL,
 		thinkingLevel: initialState?.thinkingLevel ?? "off",
+		deferredTools: initialState?.deferredTools?.slice(),
 		get tools() {
 			return tools;
 		},
@@ -126,6 +127,7 @@ export interface AgentOptions {
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
+	toolCallMutates?: AgentLoopConfig["toolCallMutates"];
 }
 
 class PendingMessageQueue {
@@ -228,6 +230,8 @@ export class Agent {
 	public maxRetryDelayMs?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	public toolExecution: ToolExecutionMode;
+	/** Flags tool calls that can change state so parallel execution runs them in order. */
+	public toolCallMutates?: AgentLoopConfig["toolCallMutates"];
 
 	constructor(options: AgentOptions = {}) {
 		this._state = createMutableAgentState(options.initialState);
@@ -249,6 +253,7 @@ export class Agent {
 		this.transport = options.transport ?? "auto";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
+		this.toolCallMutates = options.toolCallMutates;
 	}
 
 	/**
@@ -480,6 +485,7 @@ export class Agent {
 			systemPrompt: this._state.systemPrompt,
 			messages: this._state.messages.slice(),
 			tools: this._state.tools.slice(),
+			deferredTools: this._state.deferredTools,
 		};
 	}
 
@@ -497,6 +503,7 @@ export class Agent {
 			thinkingBudgets: this.thinkingBudgets,
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			toolExecution: this.toolExecution,
+			toolCallMutates: this.toolCallMutates,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			prepareNextTurn:

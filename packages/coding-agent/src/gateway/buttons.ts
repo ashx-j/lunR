@@ -317,7 +317,9 @@ export async function handleCallback(
 		picker.onCancel?.();
 		try {
 			await picker.adapter.editMessage(picker.chatId, picker.messageId, "Cancelled.", []);
-		} catch {}
+		} catch {
+			// The picker message may be deleted or too old to edit; the callback is still answered.
+		}
 		await adapter.answerCallback(cb.id).catch(() => {});
 		return;
 	}
@@ -334,7 +336,9 @@ export async function handleCallback(
 		const { text, buttons } = renderPage(picker);
 		try {
 			await picker.adapter.editMessage(picker.chatId, picker.messageId, text, buttons);
-		} catch {}
+		} catch {
+			// The picker message may be deleted or too old to edit; the callback is still answered.
+		}
 		await adapter.answerCallback(cb.id).catch(() => {});
 		return;
 	}
@@ -366,7 +370,9 @@ export async function handleCallback(
 			const { text, buttons } = renderPage(picker);
 			try {
 				await picker.adapter.editMessage(picker.chatId, picker.messageId, text, buttons);
-			} catch {}
+			} catch {
+				// The picker message may be deleted or too old to edit.
+			}
 			return;
 		}
 		picker.completed = result.text;

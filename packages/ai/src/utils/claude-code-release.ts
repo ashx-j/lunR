@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { arch, homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -52,6 +52,59 @@ function binaryName(platform: ClaudeCodePlatform): string {
 export function managedClaudeCodePath(platform: ClaudeCodePlatform): string {
 	const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".lunr", "agent");
 	return join(agentDir, "claude-code", CLAUDE_CODE_VERSION, binaryName(platform));
+}
+
+/** True when version `a` (`x.y.z`) is older than `b`. */
+function olderVersion(a: string, b: string): boolean {
+	const [x, y] = [a, b].map((version) => version.split(".").map(Number));
+	const index = x.findIndex((part, i) => part !== y[i]);
+	return index >= 0 && x[index] < y[index];
+}
+
+/** True while another process's download (`claude.<pid>.<uuid>.download`) is still writing into `folder`. */
+async function downloadInProgress(folder: string): Promise<boolean> {
+	for (const name of await readdir(folder)) {
+		const pid = Number(/\.(\d+)\.[^.]+\.download$/.exec(name)?.[1]);
+		if (!pid) continue;
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch (error) {
+			// EPERM: the pid is alive under another user.
+			if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Removes Claude Code versions older than the pinned one from the profile's `claude-code/` folder, once
+ * `command` (the saved connection's binary) is the pinned managed copy. Each version is about 280 MB and a
+ * pin bump leaves the previous one behind. Newer versions belong to a newer lunR on the same profile and
+ * stay, and so does a folder another process is downloading into. A running lunR whose binary this removes
+ * re-reads the saved login (see the bridge). Only folders named like a version are removed, and nothing when
+ * `claude-code/` is a symlink. Returns the versions removed; a folder that cannot be removed (a running
+ * binary on Windows) stays for the next run.
+ */
+export async function removeOldClaudeCodeVersions(command: string): Promise<string[]> {
+	const platform = claudeCodePlatform();
+	if (!platform || command !== managedClaudeCodePath(platform)) return [];
+	const root = dirname(dirname(command));
+	if ((await lstat(root)).isSymbolicLink()) return [];
+	const removed: string[] = [];
+	for (const entry of await readdir(root, { withFileTypes: true })) {
+		if (!entry.isDirectory() || !/^\d+\.\d+\.\d+$/.test(entry.name)) continue;
+		if (!olderVersion(entry.name, CLAUDE_CODE_VERSION)) continue;
+		const folder = join(root, entry.name);
+		try {
+			if (await downloadInProgress(folder)) continue;
+			await rm(folder, { recursive: true });
+			removed.push(entry.name);
+		} catch {
+			/* Kept for the next run. */
+		}
+	}
+	return removed;
 }
 
 /** Copies one regular file out of a tar stream into `target`; every other entry is read and discarded. Exported for tests. */

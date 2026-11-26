@@ -36,6 +36,7 @@ export class SessionOwnershipError extends Error {
 	}
 }
 
+/** The real path of a session file, in its on-disk case. Compare paths with sessionPathKey. */
 export function canonicalSessionPath(file: string): string {
 	const absolute = resolve(file);
 	let canonical: string;
@@ -44,6 +45,15 @@ export function canonicalSessionPath(file: string): string {
 		const parent = dirname(absolute);
 		canonical = parent === absolute ? absolute : join(canonicalSessionPath(parent), basename(absolute));
 	}
+	return canonical;
+}
+
+/**
+ * The comparison key for a session path: the canonical path, lowercased on Windows where paths are
+ * case-insensitive. Only a key: files are created and renamed through canonicalSessionPath, so they keep their case.
+ */
+export function sessionPathKey(file: string): string {
+	const canonical = canonicalSessionPath(file);
 	return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
@@ -58,7 +68,8 @@ export function readSessionOwner(file: string): SessionOwner | undefined {
 		const value = JSON.parse(readFileSync(join(directory, "owner.json"), "utf8"));
 		if (
 			value.version === 1 &&
-			value.file === canonicalSessionPath(file) &&
+			typeof value.file === "string" &&
+			sessionPathKey(value.file) === sessionPathKey(file) &&
 			typeof value.generation === "string" &&
 			Number.isSafeInteger(value.pid) &&
 			value.pid > 0 &&
@@ -66,7 +77,9 @@ export function readSessionOwner(file: string): SessionOwner | undefined {
 			typeof value.instance === "string"
 		)
 			return value;
-	} catch {}
+	} catch {
+		// Unreadable owner file: treated as unknown and refused below.
+	}
 	throw new SessionOwnershipError(file, "Session owner is incomplete or unknown; automatic takeover is unsafe.");
 }
 

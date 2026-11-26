@@ -1,13 +1,14 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	CLAUDE_CODE_EXIT_GRACE_MS,
 	CLAUDE_CODE_UPDATE_REQUIRED,
 	streamClaudeCode,
 } from "../src/api/anthropic-claude-code-bridge.ts";
+import { claudeCodeHistoryReplayed } from "../src/auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../src/auth/types.ts";
 import { ANTHROPIC_MODELS } from "../src/providers/anthropic.models.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
@@ -45,7 +46,7 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", async () => {
 	const extra = JSON.parse(JSON.parse(readFileSync(flag("--settings"), "utf8")).env.CLAUDE_CODE_EXTRA_BODY);
 	writeFileSync(join(__dirname, "pid"), String(process.pid));
-	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL, cwd: process.cwd(), cwdEntries: readdirSync(process.cwd()), env: process.env }));
+	writeFileSync(join(__dirname, "record.json"), JSON.stringify({ argv, frames, extra, system: readFileSync(flag("--system-prompt-file"), "utf8"), mcp: readFileSync(flag("--mcp-config"), "utf8"), baseUrl: process.env.ANTHROPIC_BASE_URL, autoMemoryOff: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, cwd: process.cwd(), cwdEntries: readdirSync(process.cwd()), env: process.env }));
 	if (__dirname.endsWith("signed-out") || !process.env.ANTHROPIC_BASE_URL) {
 		result({ is_error: true, result: "Not logged in. Please run /login and include this private detail" });
 		process.exit(1);
@@ -72,7 +73,7 @@ process.stdin.on("end", async () => {
 		line({ type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: "API Error" }] }, error: "unknown" });
 	}
 	if (response.status === 200) result({ is_error: false, num_turns: 1 });
-	else result({ is_error: true, num_turns: 1, terminal_reason: "api_error", api_error_status: response.status, result: "API Error: " + response.status + " " + JSON.parse(text).error.type });
+	else result({ is_error: true, num_turns: 1, terminal_reason: "api_error", api_error_status: response.status, result: "API Error: " + response.status + " " + (JSON.parse(text).error.message ?? JSON.parse(text).error.type) });
 	if (__dirname.endsWith("lingers")) {
 		await new Promise((resolve) => setTimeout(resolve, 400));
 		writeFileSync(join(__dirname, "exited-cleanly"), "");
@@ -205,6 +206,40 @@ const context: Context = {
 };
 const model = ANTHROPIC_MODELS["claude-opus-4-8"];
 
+/** A history whose last turn loaded `cron` through `load_tools`, with `cron` and `web_search` declared deferred. */
+function loadedContext(firstPrompt: string): Context {
+	const tool = (name: string) => ({ name, description: name, parameters: { type: "object", properties: {} } });
+	// Too long for Claude Code's MCP names, so the bridge leaves out the tool and its reference.
+	const longName = "x".repeat(60);
+	return {
+		systemPrompt: "You are lunR.",
+		messages: [
+			{ role: "user", content: firstPrompt, timestamp: 1 },
+			{
+				role: "assistant",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-opus-4-8",
+				content: [{ type: "toolCall", id: "toolu_1", name: "load_tools", arguments: { names: ["cron"] } }],
+				usage,
+				stopReason: "toolUse",
+				timestamp: 2,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "toolu_1",
+				toolName: "load_tools",
+				content: [{ type: "text", text: "Loaded tools: cron." }],
+				addedToolNames: ["cron", longName],
+				isError: false,
+				timestamp: 3,
+			},
+		],
+		tools: [tool("read"), tool("load_tools"), tool("cron"), tool(longName)],
+		deferredTools: [tool("cron"), tool("web_search")],
+	};
+}
+
 describe.skipIf(process.platform === "win32")("Claude Code subscription bridge", () => {
 	it("sends lunR's history in the request body and returns the upstream turn with lunR tool names", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
@@ -218,6 +253,7 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 
 		expect(result.errorMessage).toBeUndefined();
 		expect(result.stopReason).toBe("toolUse");
+		expect(claudeCodeHistoryReplayed(result)).toBe(false);
 		expect(result.content).toEqual([
 			{ type: "thinking", thinking: "Next file.", thinkingSignature: "sig-new" },
 			{ type: "toolCall", id: "toolu_2", name: "read", arguments: { path: "b.txt" } },
@@ -230,6 +266,8 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(record.argv[record.argv.indexOf("--tools") + 1]).toBe("");
 		// Claude Code reaches the upstream itself; lunR is not in between.
 		expect(record.baseUrl).toBe(upstream);
+		// Otherwise Claude Code adds the user's own auto-memory MEMORY.md to every request.
+		expect(record.autoMemoryOff).toBe("1");
 		// The MCP config is a file, and its secret path does not appear on the command line.
 		const mcpUrl = new URL(JSON.parse(record.mcp).mcpServers.lunr.url);
 		const mcpSecret = mcpUrl.pathname.split("/")[1];
@@ -266,6 +304,100 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		expect(record.extra.output_config).toEqual({ effort: "high" });
 	});
 
+	it("sends a catalog Claude model the saved login does not list, and explains a refusal", async () => {
+		const unlisted = ANTHROPIC_MODELS["claude-sonnet-5-5"];
+		const sent = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const answered = await streamClaudeCode(
+			unlisted,
+			context,
+			{ externalClaudeCode: sent.connection },
+			true,
+			sent.upstream,
+		).result();
+		expect(answered.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(sent.directory, "record.json"), "utf8"));
+		expect(record.argv[record.argv.indexOf("--model") + 1]).toBe("claude-sonnet-5-5");
+
+		const refused = await setup({
+			status: 404,
+			body: JSON.stringify({ type: "error", error: { type: "not_found_error", message: "Run --model" } }),
+		});
+		const failed = await streamClaudeCode(
+			unlisted,
+			context,
+			{ externalClaudeCode: refused.connection },
+			true,
+			refused.upstream,
+		).result();
+		expect(failed.errorMessage).toBe(
+			"Claude claude-sonnet-5-5 is not available on this subscription, or the saved login predates it. Run /login anthropic to refresh the models it offers.",
+		);
+		expect(isRetryableAssistantError(failed)).toBe(false);
+
+		// A 403 is about the model only when Anthropic's message names it; otherwise its reason is kept.
+		for (const [message, hint] of [
+			["model: claude-sonnet-5-5", true],
+			["Your organization has been disabled.", false],
+		] as const) {
+			const denied = await setup({
+				status: 403,
+				body: JSON.stringify({ type: "error", error: { type: "permission_error", message } }),
+			});
+			const result = await streamClaudeCode(
+				unlisted,
+				context,
+				{ externalClaudeCode: denied.connection },
+				true,
+				denied.upstream,
+			).result();
+			expect(result.errorMessage?.includes("not available on this subscription")).toBe(hint);
+			expect(result.errorMessage?.includes(message)).toBe(!hint);
+		}
+	});
+
+	it("lists an offered model the catalog lacks in picker order and streams it with its family's settings", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		const offered: ExternalClaudeCodeCredential = {
+			...connection,
+			models: [
+				{
+					id: "claude-opus-9",
+					route: "claude-opus-9[1m]",
+					contextWindow: 1_000_000,
+					description: "Opus 9 · Newest",
+				},
+				{ id: "claude-opus-4-8", route: "claude-opus-4-8" },
+				{ id: "claude-mythos-1", route: "claude-mythos-1" },
+			],
+		};
+		const listed = anthropicProvider().filterModels?.(Object.values(ANTHROPIC_MODELS), offered) ?? [];
+		expect(listed.map((row) => row.id)).toEqual(["claude-opus-9", "claude-opus-4-8", "claude-mythos-1"]);
+		const [unknown, , newFamily] = listed;
+		expect(unknown).toMatchObject({
+			name: "Opus 9",
+			contextWindow: 1_000_000,
+			reasoning: true,
+			// A family's models differ in price, so the row borrows none.
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			catalog: { pricing: "unknown" },
+		});
+		// No family row to borrow from: lunR sends no thinking setting.
+		expect(newFamily).toMatchObject({ name: "claude-mythos-1", reasoning: false, contextWindow: 128_000 });
+
+		const result = await streamClaudeCode(
+			unknown,
+			context,
+			{ reasoning: "high", externalClaudeCode: offered },
+			true,
+			upstream,
+		).result();
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(record.argv[record.argv.indexOf("--model") + 1]).toBe("claude-opus-9[1m]");
+		expect(record.extra.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(record.extra.output_config).toEqual({ effort: "high" });
+	});
+
 	it("starts Claude Code without the per-start project and memory work lunR's history replaces", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
 		const result = await streamClaudeCode(
@@ -288,6 +420,16 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		});
 	});
 
+	it("re-reads the saved login when another lunR removed the version this one started with", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
+		// The profile's auth.json names the binary that exists; this process still holds the removed version.
+		writeFileSync(join(dirname(directory), "auth.json"), JSON.stringify({ anthropic: connection }));
+		const stale = { ...connection, command: join(directory, "2.1.263", "claude") };
+		const result = await streamClaudeCode(model, context, { externalClaudeCode: stale }, true, upstream).result();
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.stopReason).toBe("toolUse");
+	});
+
 	it("replays a history too large for Claude Code's settings file through stdin", async () => {
 		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__read") });
 		const large: Context = {
@@ -297,6 +439,8 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		const result = await streamClaudeCode(model, large, { externalClaudeCode: connection }, true, upstream).result();
 
 		expect(result.errorMessage).toBeUndefined();
+		// The reply records the uncached replay so lunR can tell the user to compact.
+		expect(claudeCodeHistoryReplayed(result)).toBe(true);
 		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
 		expect(record.extra.messages).toBeUndefined();
 		// Claude Code's replayed environment note names its working directory, so it must be lunR's.
@@ -310,6 +454,66 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		]);
 		// Claude Code keeps signed thinking only when the replayed turn names its model.
 		expect(record.frames[1].message.model).toBe("claude-opus-4-8");
+	});
+
+	it("passes deferred tools and their tool_reference loads through with Claude Code's tool names", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__cron") });
+		const result = await streamClaudeCode(
+			model,
+			loadedContext("Load cron"),
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(
+			record.extra.tools.map((entry: { name: string; defer_loading?: boolean }) => [
+				entry.name,
+				entry.defer_loading,
+			]),
+		).toEqual([
+			["mcp__lunr__read", undefined],
+			["mcp__lunr__load_tools", undefined],
+			["mcp__lunr__cron", true],
+			["mcp__lunr__web_search", true],
+		]);
+		expect(record.extra.messages.at(-1).content[0]).toMatchObject({
+			type: "tool_result",
+			content: [{ type: "tool_reference", tool_name: "mcp__lunr__cron" }],
+		});
+	});
+
+	it("sends loaded deferred tools undeferred, leaves unused ones out and drops tool_reference on a replay", async () => {
+		const { connection, upstream, directory } = await setup({ status: 200, body: toolCallAnswer("mcp__lunr__cron") });
+		const result = await streamClaudeCode(
+			model,
+			loadedContext("x".repeat(2_200_000)),
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		const record = JSON.parse(readFileSync(join(directory, "record.json"), "utf8"));
+		expect(record.extra.messages).toBeUndefined();
+		// Claude Code strips references from a replayed transcript, so a loaded tool must not depend on one.
+		expect(
+			record.extra.tools.map((entry: { name: string; defer_loading?: boolean }) => [
+				entry.name,
+				entry.defer_loading,
+			]),
+		).toEqual([
+			["mcp__lunr__read", undefined],
+			["mcp__lunr__load_tools", undefined],
+			["mcp__lunr__cron", undefined],
+		]);
+		expect(JSON.stringify(record.frames)).not.toContain("tool_reference");
+		expect(record.frames.at(-1).message.content).toEqual([
+			{ type: "tool_result", tool_use_id: "toolu_1", is_error: false },
+			{ type: "text", text: "Loaded tools: cron." },
+		]);
 	});
 
 	it("accepts an explicit automatic tool choice", async () => {
@@ -333,7 +537,7 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 			upstream,
 		).result();
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toMatch(/^429 .*rate_limit_error/);
+		expect(result.errorMessage).toMatch(/^429 .*Slow down/);
 		expect(isRetryableAssistantError(result)).toBe(true);
 	});
 
@@ -465,6 +669,19 @@ describe.skipIf(process.platform === "win32")("Claude Code subscription bridge",
 		).result();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("outside lunR's tool list");
+	});
+
+	it("passes a call by lunR's bare tool name through for the agent loop to answer", async () => {
+		const { connection, upstream } = await setup({ status: 200, body: toolCallAnswer("read") });
+		const result = await streamClaudeCode(
+			model,
+			context,
+			{ externalClaudeCode: connection },
+			true,
+			upstream,
+		).result();
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: "read" }));
 	});
 
 	it("asks connections without saved routes and windows to set up again", async () => {

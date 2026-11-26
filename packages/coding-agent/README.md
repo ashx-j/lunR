@@ -56,7 +56,7 @@ cd /path/to/project
 lunr
 ```
 
-If no provider is set up, lunR opens an onboarding screen at launch that walks you through `/login`.
+If no provider is set up, lunR opens an onboarding screen at launch that walks you through `/login`, then asks once which [permission mode](#permission-modes) new sessions start in. Escape keeps `yolo`.
 
 Authenticate with an API key:
 
@@ -89,7 +89,7 @@ lunr uninstall npm:@foo/bar   # remove an extension package (alias for lunr remo
 
 Config lives in `~/.lunr/agent` (global) and project `.lunr/`. Override the agent dir with `PI_CODING_AGENT_DIR`.
 
-Then just talk to lunR. By default it gives the model four tools: `read`, `write`, `edit`, and `bash`. `grep`, `find`, and `ls` exist but start off. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, read-only planning, cron, and the gateway.
+Then just talk to lunR. The core tools on by default are `read`, `write`, `edit`, `bash` and `bash_job`, which reads or stops a command `bash` started in the background. `grep`, `find`, and `ls` exist but start off. The built-in features add their own tools, such as `todo`, `subagent`, `web_search`, `browser`, the `lsp_*` tools and `mcp`. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, read-only planning, cron, and the gateway.
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -131,7 +131,7 @@ The interface from top to bottom:
 - **Startup header** - Shows shortcuts (`/hotkeys` for all), loaded AGENTS.md files, prompt templates, skills, and extensions
 - **Messages** - Your messages, assistant responses, tool calls and results, notifications, errors, and extension UI
 - **Editor** - Where you type; border color indicates thinking level
-- **Footer** - Permission mode with plan and goal status, TPS, MCP and LSP status, git branch with changed lines, subscription plan usage, context usage, token totals, and cache hit rate. Customize its segments under `/settings` → Customize. The current model and thinking level are on the editor's border.
+- **Footer** - Permission mode with plan and goal status, TPS, MCP and LSP status, git branch with changed lines, subscription plan usage, context usage, token totals, and cache hit rate (`cache 99.7%`, the share of the last request's prompt read from the prompt cache). Customize its segments under `/settings` → Customize. The current model and thinking level are on the editor's border.
 
 The editor can be temporarily replaced by other UI, like built-in `/settings` or custom UI from extensions. [Extensions](#extensions) can also replace the editor, add widgets above/below it, a status line, custom footer, or overlays.
 
@@ -175,7 +175,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Theme, thinking, agent memory, message delivery; Advanced holds transport, prompt cache and terminal layout |
 | `/thinking [level]` | Set thinking level, for example `/thinking high` (`xhigh`/`max` are opt-in when the model supports them) |
-| `/mode` | Set permission mode: `yolo`, `auto` (a review model checks risky actions), or `read-only` (Shift+Tab cycles) |
+| `/mode` | Set permission mode: `yolo`, `auto` (a review model checks risky actions), `ask` (you approve each change), or `read-only` (Shift+Tab cycles) |
 | `/plan` | Switch to read-only mode for planning, or `/plan <task>` to plan a task |
 | `/cron` | Scheduled prompts (`~/.lunr/agent/cron/`) |
 | `/goal` | Session goal (works without asking questions, in your current mode) |
@@ -187,6 +187,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/new` | Start a new session |
 | `/name` | Set session display name |
 | `/session` | Show session info |
+| `/handoff [cancel]`, `/reclaim` | Mark this session for continuing on your phone through the gateway, or take it back. See [features.md](docs/features.md#continue-between-desktop-and-phone) |
 | `/tree` | Jump to any point in the session (`ctrl+o` cycles filters) |
 | `/undo`, `/edit`, `/redo` | Same-session rewind; `/edit` pastes the last prompt |
 | `/rollback` | Undo the last turn's file changes (forks). Off by default; turn it on in `/settings` → Rollback |
@@ -204,7 +205,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/init` | Generate a starter AGENTS.md |
 | `/quit` | Quit lunR |
 
-Some commands still work when typed but stay out of the `/` list: the aliases `/auth`, `/deauth`, `/effort`, `/reasoning`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, and `/debug`, which writes the rendered screen to the debug log.
+Some commands still work when typed but stay out of the `/` list: the aliases `/auth`, `/deauth`, `/effort`, `/reasoning`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo`, `/auto` and `/ask`, and `/debug`, which writes the rendered screen to the debug log.
 
 ### Permission modes
 
@@ -212,9 +213,13 @@ Some commands still work when typed but stay out of the `/` list: the aliases `/
 
 `auto` works like `yolo`, but a reviewer model checks risky calls before they run, such as shell commands that change things, writes outside the project or to hidden files, and web fetches. Pick the reviewer in `/settings` under Auto review model.
 
+`ask` asks you before each change: shell commands that change things, edits, writes, MCP calls and full-access subagents. Reads run without asking.
+
 `read-only` blocks writes and other changes. The footer shows it as `read`. `/plan` switches to it while you plan a task.
 
-Shift+Tab cycles `yolo`, `auto` and `read-only`. `/mode yolo`, `/mode auto` and `/mode read` switch directly.
+Shift+Tab cycles `yolo`, `auto`, `ask` and `read-only`. `/mode yolo`, `/mode auto`, `/mode ask` and `/mode read` switch directly.
+
+`permissions.allow` and `permissions.deny` in settings.json take rules such as `bash(npm test)` or `edit(src/**)`. Deny rules block in every mode. Allow rules skip the question in `ask` and the review in `auto`. See [Allow and deny rules](docs/features.md#allow-and-deny-rules).
 
 ### Keyboard Shortcuts
 
@@ -231,7 +236,7 @@ See `/hotkeys` for the full list. Customize via `~/.lunr/agent/keybindings.json`
 | Escape twice within 500ms | Stop this session's active async subagents; otherwise open `/tree` when idle |
 | Ctrl+L | Open model selector |
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
-| Shift+Tab | Cycle permission mode (`yolo` → `auto` → `read-only`) |
+| Shift+Tab | Cycle permission mode (`yolo` → `auto` → `ask` → `read-only`) |
 | Ctrl+O | Cycle `/tree` filters (not tool expand) |
 | Ctrl+T | Cycle thinking level for the selected model |
 | Ctrl+X | Copy the last assistant message |
@@ -341,7 +346,7 @@ lunR loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
 - Parent directories (walking up from cwd)
 - Current directory
 
-Use `~/.lunr/agent/agents/AGENTS.md` for optional global behavior and instructions; the model cannot change this user-managed file. `/settings` can enable model-specific instructions and choose whether they append to or replace global instructions. Model folders use a provider-independent, filesystem-safe name derived from the active model. Use project files for project conventions and commands; they remain independent of that mode. Run `/reload` after adding or editing a context file while lunR is open.
+Use `~/.lunr/agent/agents/AGENTS.md` for optional global behavior and instructions; the model's edit and write tools cannot change this user-managed file, though a shell command still can. `/settings` can enable model-specific instructions and choose whether they append to or replace global instructions. Model folders use a provider-independent, filesystem-safe name derived from the active model. Use project files for project conventions and commands; they remain independent of that mode. Run `/reload` after adding or editing a context file while lunR is open.
 
 Disable context file loading with `--no-context-files` (or `-nc`).
 
@@ -496,7 +501,7 @@ lunR keeps a small core and still lets you shape the product with [extensions](#
 
 - **MCP** — `/mcp`, `/mcp-auth`
 - **Subagents** use fresh children and a configured tier by default, or an explicit model when the user names one. Confirmation for 3+ children in yolo is optional and off by default. Default parallel concurrency is unlimited.
-- **Permission modes** — `yolo | auto | read-only`; Shift+Tab cycles that order (see [Permission modes](#permission-modes))
+- **Permission modes** — `yolo | auto | ask | read-only`; Shift+Tab cycles that order (see [Permission modes](#permission-modes))
 - **Read-only mode** — `/mode read` blocks changes; `/plan` and `present_plan` handle plan approval
 - **Todos** — lunr-todos is a full-replace list and can be disabled in `/settings`
 - **Background processes** — `/processes`
@@ -520,7 +525,7 @@ lunr [options] [@files...] [messages...]
 lunr setup                         # Install Chromium and configure optional features
 lunr browser install               # Repair missing Chromium after a skipped/failed install
 lunr features [list|enable|disable]
-lunr doctor                        # Check logins, default model, catalog, browser, Claude Code and gateway
+lunr doctor                        # Check version, logins, default model, catalog, browser, Claude Code and gateway
 lunr doctor keys                   # Test whether Shift+Enter, Alt+Enter and image paste reach lunR
 lunr gateway […]                   # Chat gateway daemon (requires chat-platforms feature)
 lunr uninstall [--purge]           # Print the npm removal command; --purge also deletes ~/.lunr/agent
@@ -548,7 +553,7 @@ lunr update --self                 # Same as lunr update
 | `--mode acp` | Agent Client Protocol for T3 Code and other ACP clients (see [docs/acp.md](docs/acp.md)) |
 | `--export <in> [out]` | Export session to HTML |
 
-In print mode, lunR also reads piped stdin and merges it into the initial prompt:
+In print mode, lunR also reads piped stdin and puts it before the initial prompt, separated by a blank line. `-p` needs a prompt argument, an `@file` or piped stdin. [docs/usage.md](docs/usage.md#modes) has the rules for how long lunR waits for stdin:
 
 ```bash
 cat README.md | lunr -p "Summarize this text"
@@ -587,7 +592,7 @@ cat README.md | lunr -p "Summarize this text"
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools by default but keep extension/custom tools enabled |
 | `--no-tools`, `-nt` | Disable all tools by default |
 
-Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
+Available built-in tools: `read`, `bash`, `bash_job`, `edit`, `write`, `grep`, `find`, `ls`. `bash_job` is on whenever `bash` is.
 
 ### Resource Options
 

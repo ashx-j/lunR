@@ -76,6 +76,8 @@ export class LspManager {
   private shutdownPromise: Promise<void> | null = null;
   private _restartAttempts: Map<string, number> = new Map();
   private _restartBackoff: Map<string, number> = new Map();
+  /** Server commands that were not found on PATH. Edits skip them for the rest of the session. */
+  private readonly missingCommands = new Set<string>();
 
   private static readonly MAX_RESTART_ATTEMPTS = 3;
   private static readonly INITIAL_BACKOFF_MS = 1000;
@@ -232,12 +234,26 @@ export class LspManager {
     return this.getClientForLanguage(languageId);
   }
 
+  /** Like getClientForFile, but waits for a starting server instead of returning null. */
+  async waitForClientForFile(filePath: string): Promise<LspClient | null> {
+    const languageId = this.getLanguageId(filePath);
+    if (!languageId) return null;
+    const client = await this.getClientForLanguage(languageId);
+    if (client) return client;
+    const started = await this.startingServers.get(languageId)?.catch(() => null);
+    return started?.initialized ? started : null;
+  }
+
   /**
    * Get a user-friendly message about why no client is available for a file.
    */
   getUnavailableReason(filePath: string): string {
     const languageId = this.getLanguageId(filePath);
     if (!languageId) return `No LSP server configured for file type: ${filePath}`;
+    const command = this.serverConfigs.get(languageId)?.command;
+    if (command && this.missingCommands.has(command)) {
+      return `LSP server "${command}" for ${languageId} is not installed or not on PATH. Install it, then run /lsp-restart ${languageId}.`;
+    }
     const waitHint = this.getExpectedStartTime(languageId);
     if (this.startingServers.has(languageId)) {
       return `LSP server for ${languageId} is starting. ${waitHint} Retry shortly.`;
@@ -288,7 +304,7 @@ export class LspManager {
     if (starting) return null;
 
     const config = this.serverConfigs.get(languageId);
-    if (!config) return null;
+    if (!config || this.missingCommands.has(config.command)) return null;
 
     // Kick off server start in the background — don't await
     const startPromise = this.trackStart(languageId, config);
@@ -324,7 +340,7 @@ export class LspManager {
       if (this.startingServers.has(languageId)) continue;
 
       const config = this.serverConfigs.get(languageId);
-      if (!config) continue;
+      if (!config || this.missingCommands.has(config.command)) continue;
 
       const startPromise = this.trackStart(languageId, config);
 
@@ -474,7 +490,14 @@ export class LspManager {
         this._callbacks.onServerError?.(languageId, `Daemon mode failed, falling back to direct: ${message}`);
       }
     }
-    return connectClient();
+    try {
+      return await connectClient();
+    } catch (error) {
+      if (error instanceof Error && (error.cause as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        this.missingCommands.add(config.command);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -685,6 +708,8 @@ export class LspManager {
     const config = this.serverConfigs.get(languageId);
     if (!config) throw new Error(`No server configured for ${languageId}`);
 
+    // An explicit restart tries a missing server again, for example after the user installed it.
+    this.missingCommands.delete(config.command);
     await this.trackStart(languageId, config);
   }
 

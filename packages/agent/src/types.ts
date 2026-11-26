@@ -250,13 +250,22 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	/**
 	 * Tool execution mode.
 	 * - "sequential": execute tool calls one by one
-	 * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently;
+	 * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently
+	 *   (calls flagged by `toolCallMutates` run in source order);
 	 *   emit `tool_execution_end` in tool completion order after each tool is finalized,
 	 *   then emit tool-result message artifacts later in assistant source order
 	 *
 	 * Default: "parallel"
 	 */
 	toolExecution?: ToolExecutionMode;
+
+	/**
+	 * Says whether a tool call can change state, given its validated arguments.
+	 * In parallel mode such a call waits for every earlier call in the message to finish,
+	 * and no later call starts until it is done. Other calls still run concurrently.
+	 * Without this hook every call is concurrent, as before.
+	 */
+	toolCallMutates?: (toolCall: AgentToolCall, args: unknown) => boolean;
 
 	/**
 	 * Called before a tool is executed, after arguments have been validated.
@@ -329,6 +338,8 @@ export interface AgentState {
 	/** Available tools. Assigning a new array copies the top-level array. */
 	set tools(tools: AgentTool<any>[]);
 	get tools(): AgentTool<any>[];
+	/** Tools the session started unloaded, in a fixed order, loaded or not. Passed to `Context.deferredTools`. */
+	deferredTools?: AgentTool<any>[];
 	/** Conversation transcript. Assigning a new array copies the top-level array. */
 	set messages(messages: AgentMessage[]);
 	get messages(): AgentMessage[];
@@ -354,6 +365,8 @@ export interface AgentToolResult<T> {
 	details: T;
 	/** Names of tools introduced by this result and available from this transcript point onward. */
 	addedToolNames?: string[];
+	/** Marks the call as failed without throwing, so `details` still reach renderers and hooks. */
+	isError?: boolean;
 	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
@@ -403,6 +416,8 @@ export interface AgentContext {
 	messages: AgentMessage[];
 	/** Tools available for this run. */
 	tools?: AgentTool<any>[];
+	/** Tools the session started unloaded. A call to one that is not in `tools` gets a load hint. */
+	deferredTools?: AgentTool<any>[];
 }
 
 /**

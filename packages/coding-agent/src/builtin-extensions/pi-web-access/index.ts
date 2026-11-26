@@ -49,7 +49,7 @@ import {
 	formatSearchChrome,
 	formatSearchDetail,
 } from "./render-search-chrome.ts";
-import { GroupedCallText, toolGroupTree, toolStatusDotFromContext } from "../../core/tools/render-utils.ts";
+import { GroupedCallText, toolGroupTree, toolStatusDotFromContext } from "../../modes/interactive/tool-renderers/render-utils.ts";
 import { loadEnabledModelPatterns, modelMatchesEnabledPatterns } from "./summary-model-scope.ts";
 
 const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();

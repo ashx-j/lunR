@@ -90,6 +90,22 @@ describe("isMutatingBashCommand", () => {
 		}
 	});
 
+	// These also run in parallel when one message holds several of them.
+	it("allows commands that only read and print, but not their file-reading options", () => {
+		for (const command of [
+			"sleep 0.5",
+			"jq -r .name package.json",
+			"ps aux | cut -c1-40",
+			"du -sh *",
+			"sha256sum a",
+		]) {
+			expect(isMutatingBashCommand(command), command).toBe(false);
+		}
+		for (const command of ["du --files0-from=list", "du --f=list", "jq --rawfile a secret .", "sleep 1 > x"]) {
+			expect(isMutatingBashCommand(command), command).toBe(true);
+		}
+	});
+
 	it("blocks non-allowlist read-only-looking commands", () => {
 		for (const command of ["vim file.ts", "nano file.ts", "make", "ninja", "cmake --version", "rustc file.rs"]) {
 			expect(isMutatingBashCommand(command), command).toBe(true);
@@ -116,11 +132,161 @@ describe("isMutatingBashCommand", () => {
 		}
 	});
 
+	it.each([
+		"sed 's/a/b/w x' f",
+		"sed -n 'w y' f",
+		"sed '1e touch x' f",
+		"sed -e p -e 'W out' f",
+		"sed 's/a/touch x/e' f",
+		"sed --expression='$w out' f",
+		"sed 's/[/]/x/;w out' f",
+		"sed '/a/{p;w out\n}' f",
+		"sed f -i",
+		"sed -ni p f",
+		"sed -f script.sed f",
+		"sed --file=script.sed f",
+		"sed --exp='s/a/b/' f",
+		"sed -n 'p;k' f",
+		"sed 's/a/b' f",
+		"sed -n x* f",
+		"date -s 2020-01-01",
+		"date --set=2020-01-01",
+		"date 010100002020",
+		"sed -l 's/a/b/w x' f",
+		"sed -l5x p f",
+		"sed --line-length=p f",
+		"sed --line-length 'w x' f",
+		"date -us 2020-01-01",
+		"date -v-1d +%F",
+		"date -j -f %s 0 +%F",
+	])("blocks %s, which writes, runs code, hides its script or can't be parsed", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	it.each([
+		"sed -n '10,20p' src/a.ts",
+		"sed -n 10,20p src/a.ts",
+		"sed 's/foo/bar/g' a.ts",
+		"sed -E 's#(a|b)/w#x#2g' a.ts",
+		"sed -n -e '/^[a-z]*w/p' -e '$=' a.ts",
+		"sed -n '/start/,/end/{/skip/!p}' a.ts",
+		"sed '1i\\\nheader' a.ts",
+		"sed -n '1~2p;$!N;r other.txt' a.ts",
+		"sed 'y/abc/xyz/;q 3' a.ts",
+		"sed -es/i/x/ a.ts",
+		"date",
+		"date +%Y-%m-%d",
+		"date -u -d 'last sunday' +%s",
+		"date -Iseconds",
+		"date -ud @0",
+		"date -uR",
+		"date -uIseconds",
+		"date -ud @0 +%F",
+		"sed -l 80 -n l a.ts",
+		"sed -l80 -n l a.ts",
+		"sed --line-length=80 -n l a.ts",
+	])("allows %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
+	});
+
 	it("blocks output redirects outside quotes", () => {
 		expect(isMutatingBashCommand("echo hello > file.txt")).toBe(true);
 		expect(isMutatingBashCommand("cat a >> b")).toBe(true);
 		expect(isMutatingBashCommand("ls > /tmp/list.txt")).toBe(true);
 		expect(isMutatingBashCommand("ls &> /tmp/list.txt")).toBe(true);
+	});
+
+	it.each([
+		"rg foo src 2>/dev/null",
+		"rg foo src > /dev/null",
+		"ls -la 2>&1",
+		"ls 1>&2",
+		"ls >&2",
+		"ls >/dev/null 2>&1",
+		"ls &>/dev/null",
+		"ls 2>/dev/null | head",
+		"cd src && ls",
+		"cd /abs/path; rg foo",
+		"cd 'dir with space' && ls 2>/dev/null",
+		"ls # list files",
+		"grep h <<< hi",
+		"ls\\\n -la",
+		"cat f |\\\n head",
+		"ls 2>&\\\n1",
+		"cat <<<'a b' | wc -w",
+		'echo "a # b"; ls',
+	])("allows %s, which only discards output, duplicates a descriptor or changes directory", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
+	});
+
+	it.each([
+		"ls >/dev/null/../x",
+		"ls >/dev/nullx",
+		'ls >"/dev/null"',
+		"ls >'/dev/null'",
+		"ls >\\/dev/null",
+		"ls >|/dev/null",
+		"ls >>/dev/null",
+		"ls >>x",
+		"ls &>x",
+		"ls <>x",
+		"ls <>/dev/null",
+		"ls >&-",
+		"ls >&x",
+		"ls >&/dev/null",
+		"ls 2>&1x",
+		"ls >/dev/null>x",
+		"ls 2>/dev/null; touch x",
+		"cd src && touch x",
+		"cd src; rm x",
+		"cd",
+		"cd -",
+		"cd -P src",
+		"cd a b",
+		"cd sr* && ls",
+		"FOO=1 cd src && ls",
+		"cd src && git status",
+		"cd src && gh pr view 1",
+		"cd src && npm ls",
+		"cd /tmp/x; /usr/bin/git log",
+		"ls; cd src; FOO=1 git status",
+		// `{name}>` and `{name}<` put a new fd number in PATH or HOME
+		"true {PATH}>/dev/null; ls",
+		"echo {HOME}>&2; git status",
+		"true {PATH}<f; ls",
+		"true {PATH}<<<x; ls",
+		// a quote inside a comment must not hide the next line
+		"ls #'\nrm x\n'",
+		"ls 2>/dev/null #'\nrm x\n'",
+		"true # note\ntouch x",
+		// only bash's own word breaks start a comment or end a redirect
+		"ls\r#; touch x",
+		"ls\u00a0#; touch x",
+		"true\u3000#; touch x",
+		"cat f\u00a0#|| touch x",
+		"echo hi >&1\u00a0x",
+		// bash splits words only on space, tab and newline: these assign "1<NBSP>ls" and expand a brace list
+		"A=1\u00a0ls touch x",
+		"A=1\rls touch x",
+		"sort {-o,x\u00a0} f",
+		"find . {-fprint,x\r}",
+		// a quote in a here-document body must not hide the lines after its delimiter
+		"cat <<EOF\nls '\nEOF\ntouch x\n#'",
+		"cat <<'EOF'\nls '\nEOF\ntouch x\n#'",
+		'cat <<-EOF\nls "\nEOF\ntouch x\n#"',
+		// bash deletes backslash-newline before it tokenizes, so these are `<<`, `$(`, `&&`, `>>` and `touch`
+		"cat <\\\n<EOF\nls '\nEOF\ntouch x\n#'",
+		"cat <\\\n<-EOF\nls '\nEOF\ntouch x\n#'",
+		"cat <\\\n<'EOF'\nls '\nEOF\ntouch x\n#'",
+		"echo $\\\n(touch x)",
+		'echo "$\\\n(touch x)"',
+		"true &\\\n& touch x",
+		"ls >\\\n>x",
+		"to\\\nuch x",
+		// a comment ends at the newline even after a backslash
+		"ls #\\\ntouch x",
+	])("still blocks %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
 	});
 
 	it("blocks command substitution and process substitution", () => {

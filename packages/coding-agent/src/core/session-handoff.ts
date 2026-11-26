@@ -9,6 +9,7 @@ import {
 	isSessionOwnerDead,
 	readSessionOwner,
 	SessionOwnership,
+	sessionPathKey,
 	writeSessionJson,
 } from "./session-ownership.ts";
 
@@ -27,7 +28,7 @@ function registry(agentDir = getAgentDir()): string {
 	return join(agentDir, "session-handoffs");
 }
 function recordPath(file: string, agentDir?: string): string {
-	return join(registry(agentDir), `${createHash("sha256").update(canonicalSessionPath(file)).digest("hex")}.json`);
+	return join(registry(agentDir), `${createHash("sha256").update(sessionPathKey(file)).digest("hex")}.json`);
 }
 function readRecord(file: string, agentDir?: string): HandoffCandidate | undefined {
 	try {
@@ -86,7 +87,9 @@ export function listRegisteredSessions(agentDir?: string): HandoffCandidate[] {
 			const snapshot = SessionManager.openReadOnly(record.sessionFile);
 			if (snapshot.getSessionId() !== record.sessionId) continue;
 			records.push(record);
-		} catch {}
+		} catch {
+			// Unreadable record or session file: not a handoff this process can resume.
+		}
 	}
 	return records;
 }
@@ -177,10 +180,14 @@ export async function requestSessionTransfer(
 			} finally {
 				cleanup.release();
 			}
-		} catch {}
+		} catch {
+			// Best-effort removal of our own request; this finally must not replace the transfer error.
+		}
 		try {
 			unlinkSync(responsePath);
-		} catch {}
+		} catch {
+			// Already removed by the other side.
+		}
 	}
 }
 

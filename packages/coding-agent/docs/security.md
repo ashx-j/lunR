@@ -35,11 +35,29 @@ Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trus
 
 ## No Built-in Sandbox
 
-lunR does not include a built-in sandbox. Built-in tools can read files, write files, edit files, and run shell commands with the permissions of the lunR process. Extensions are TypeScript modules that run with the same permissions. Package installs, shell commands, language servers, test commands, and other developer tools behave as ordinary local processes.
+lunR does not include a built-in sandbox. Built-in tools can read files, write files, edit files, and run shell commands with the permissions of the lunR process. The edit and write tools refuse lunR's own settings, credentials, memory and instruction files, but a shell command can still change them. Extensions are TypeScript modules that run with the same permissions. Package installs, shell commands, language servers, test commands, and other developer tools behave as ordinary local processes.
 
 This is intentional. lunR is designed to operate on local source trees, invoke project toolchains, and integrate with the user's existing development environment. A partial in-process sandbox would be easy to misunderstand as a security boundary while still depending on the host shell, filesystem, package managers, credentials, and extension code. Real isolation needs to come from the operating system or a virtualization/container boundary.
 
 Project trust is only an input-loading guard. It prevents a repository from silently changing lunR's settings or extensions before you approve it. It does not make untrusted code, untrusted prompts, or untrusted model output safe. Prompt injection from repository files, comments, documentation, context files, or build output is expected local-agent risk and cannot be reliably prevented by lunR.
+
+## Saved Logins
+
+Tool calls never get lunR's own saved logins in the active profile: `auth.json`, `subscriptions.json` and the `mcp-oauth/` tree. Before any tool runs, lunR checks the call's string arguments, including strings inside arrays and objects. If one resolves to these locations, the call is refused. This applies to built-in, extension and MCP tools alike, in every permission mode, and covers relative paths, `..`, `~`, `@`, `file://` and symlinked directories. The `read` tool also refuses a symlink to one of them under another name. The refusal tells the model to ask you for a specific value.
+
+A directory that contains them, such as the profile directory or your home directory, stays usable. lunR's own `grep`, `find`, `ast_search`, `code_rewrite` and `code_overview` skip the 3 locations while they walk it and say so in the result. `ls` and `find` list the profile directory. lunR can't know what an extension or MCP tool reads inside a directory you give it, so such a tool given the profile directory or a parent of it may still read these files.
+
+The `bash` tool refuses a command that names one of the locations as a word, such as `cat ~/.lunr/agent/auth.json`, `jq . <auth.json` or `cd ~/.lunr/agent && cat auth.json`. `ls` of the profile directory works, but a command that names `mcp-oauth` itself is refused, as it is for the `ls` tool.
+
+This stops an accidental read, or a web page telling the model to read the files. It is not a sandbox. Bash still reads them through:
+
+- a variable (`cat "$HOME/.lunr/agent/auth.json"`), a glob (`cat ~/.lunr/agent/a*.json`) or a script
+- a symlink or hard link under another name (`cat notes.json` where `notes.json -> auth.json`)
+- a command that reads the whole profile directory, such as `grep -r`, `find -exec cat`, `tar` or `cp -r`
+- a relative name after a directory change bash can't be read from the command text, such as `cd "$D"`, `pushd` or `cd -`
+- a symlink to a directory inside `mcp-oauth/`, used by a path that doesn't name `mcp-oauth`
+
+The guard covers tool calls the model makes. Text you add yourself, such as `@~/.lunr/agent/auth.json` in a prompt, goes to the model as you wrote it. With `MCP_OAUTH_DIR` set, the MCP tokens live outside the profile and are not covered. Other secrets on the machine, such as `~/.ssh`, `.env` files and cloud credentials, are not covered either. lunR itself (login, `lunr doctor`) reads the files directly and is not affected.
 
 ## Running Untrusted or Unmonitored Work
 

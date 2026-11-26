@@ -15,7 +15,7 @@ import type { CreateAgentSessionResult } from "./sdk.ts";
 import { assertSessionCwdExists } from "./session-cwd.ts";
 import { SessionTransferError } from "./session-handoff.ts";
 import { SessionManager } from "./session-manager.ts";
-import { canonicalSessionPath, SessionOwnership } from "./session-ownership.ts";
+import { SessionOwnership, sessionPathKey } from "./session-ownership.ts";
 import { getSubagentCancellation } from "./subagent-cancellation.ts";
 
 /**
@@ -78,6 +78,9 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
  * and apply the next runtime. If creation fails, the error is propagated to the
  * caller. The caller is responsible for user-facing error handling.
  */
+/** How long a signal handler waits for dispose() before it exits anyway. dispose() waits for the running tool, and a tool that ignores its abort never settles. */
+export const SIGNAL_DISPOSE_LIMIT_MS = 2000;
+
 export class AgentSessionRuntime {
 	private rebindSession?: (session: AgentSession) => Promise<void>;
 	private beforeSessionInvalidate?: (reason: SessionShutdownEvent["reason"]) => void;
@@ -132,6 +135,7 @@ export class AgentSessionRuntime {
 		this.transferring = true;
 		this.session.setTransferring(true);
 		const hasAttachedWork = () =>
+			this.session.bashJobs.running().length > 0 ||
 			getSubagentCancellation(this.session.sessionId)?.hasActiveRuns() ||
 			getSubagentCancellation(this.session.sessionFile ?? "")?.hasActiveRuns() ||
 			processRegistry
@@ -346,7 +350,7 @@ export class AgentSessionRuntime {
 		if (
 			!this.detached &&
 			this.session.sessionFile &&
-			canonicalSessionPath(sessionPath) === canonicalSessionPath(this.session.sessionFile)
+			sessionPathKey(sessionPath) === sessionPathKey(this.session.sessionFile)
 		)
 			return { cancelled: false };
 		const beforeResult = this.detached ? { cancelled: false } : await this.emitBeforeSwitch("resume", sessionPath);
@@ -549,7 +553,7 @@ export class AgentSessionRuntime {
 		}
 
 		const previousSessionFile = this.session.sessionFile;
-		if (canonicalSessionPath(destinationPath) !== canonicalSessionPath(resolvedPath)) {
+		if (sessionPathKey(destinationPath) !== sessionPathKey(resolvedPath)) {
 			const ownership = new SessionOwnership(destinationPath);
 			try {
 				copyFileSync(resolvedPath, destinationPath);

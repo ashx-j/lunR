@@ -40,10 +40,11 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	},
 	{
 		name: "mode",
-		description: "Set permission mode: yolo, auto, or read",
-		argumentHint: "[yolo|auto|read]",
+		description: "Set permission mode: yolo, auto, ask, or read",
+		argumentHint: "[yolo|auto|ask|read]",
 	},
 	{ name: "read", description: "Activate read-only permission mode", hidden: true },
+	{ name: "ask", description: "Activate ask permission mode (approve each change)", hidden: true },
 	{ name: "yolo", description: "Activate YOLO permission mode (auto-approve tools)", hidden: true },
 	{ name: "auto", description: "Activate auto permission mode (a review model checks risky actions)", hidden: true },
 	{ name: "processes", description: "View and manage background processes started this session" },

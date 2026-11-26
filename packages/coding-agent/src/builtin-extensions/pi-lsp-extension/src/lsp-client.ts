@@ -11,6 +11,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { connect as netConnect, type Socket } from "node:net";
+import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   createMessageConnection,
@@ -27,6 +28,72 @@ import type {
   Diagnostic,
   PublishDiagnosticsParams,
 } from "vscode-languageserver-protocol";
+import { debug } from "./shared/debug.js";
+import { DiagnosticSeverity } from "vscode-languageserver-protocol";
+
+/** typescript-language-server's command that forwards a raw request to tsserver. */
+const TSSERVER_REQUEST = "typescript.tsserverRequest";
+
+/**
+ * Diagnostics for the version of a file that lunR last sent. `superseded`: a newer version, a close or
+ * a shutdown came first. `unavailable`: the server gave no diagnostics tied to that version; `lasting`
+ * when it never will for this client.
+ */
+export type SentDiagnostics =
+  | { kind: "ready"; diagnostics: Diagnostic[] }
+  | { kind: "superseded" }
+  | { kind: "unavailable"; reason: string; lasting: boolean };
+
+const SUPERSEDED: SentDiagnostics = { kind: "superseded" };
+const UNVERSIONED: SentDiagnostics = {
+  kind: "unavailable",
+  lasting: true,
+  reason: "the server publishes diagnostics without a version, so lunR cannot tie them to an edit (typescript-language-server needs 4.4.0 or newer)",
+};
+
+interface SentVersion {
+  version: number;
+  /** Set once the server publishes diagnostics for this version. */
+  diagnostics?: Diagnostic[];
+  waiters: Set<(result: SentDiagnostics) => void>;
+}
+
+/** A tsserver response as typescript-language-server forwards it. A dead tsserver gives `{ type: "noServer" }`. */
+interface TsserverResponse {
+  type?: string;
+  success?: boolean;
+  body?: TsserverDiagnostic[];
+}
+
+/** The fields of a tsserver diagnostic that lunR reads. Lines and offsets are 1-based. */
+interface TsserverDiagnostic {
+  start: { line: number; offset: number };
+  end: { line: number; offset: number };
+  text: string;
+  code?: number;
+  category: string;
+  source?: string;
+}
+
+const TSSERVER_SEVERITY: Record<string, DiagnosticSeverity> = {
+  error: DiagnosticSeverity.Error,
+  warning: DiagnosticSeverity.Warning,
+  suggestion: DiagnosticSeverity.Hint,
+};
+
+/** Converts a tsserver diagnostic to the LSP shape typescript-language-server publishes. */
+function fromTsserver(d: TsserverDiagnostic): Diagnostic {
+  return {
+    range: {
+      start: { line: d.start.line - 1, character: d.start.offset - 1 },
+      end: { line: d.end.line - 1, character: d.end.offset - 1 },
+    },
+    message: d.text,
+    code: d.code,
+    severity: TSSERVER_SEVERITY[d.category] ?? DiagnosticSeverity.Information,
+    source: d.source ?? "typescript",
+  };
+}
 
 export interface LspClientOptions {
   /** Command to start the LSP server */
@@ -57,6 +124,14 @@ export class LspClient {
   private connection: MessageConnection | null = null;
   private _serverCapabilities: ServerCapabilities | null = null;
   private _diagnostics: Map<string, Diagnostic[]> = new Map();
+  /** The version lunR last sent for each open URI, with the callers waiting for that version's diagnostics. */
+  private readonly sent = new Map<string, SentVersion>();
+  /** Whether `typescript.tsserverRequest` works, once a request has answered or been rejected. */
+  private pull: "unknown" | "yes" | "no" = "unknown";
+  /** Set once tsserver stops answering; lunR then stops asking. */
+  private pullBroken?: SentDiagnostics;
+  /** False once the server publishes without a version. */
+  private publishesVersions?: boolean;
   private _initialized = false;
   private _disposed = false;
   /** True if connected to a daemon socket (server init handled by daemon) */
@@ -94,6 +169,68 @@ export class LspClient {
   /** Get cached diagnostics for a URI */
   getDiagnostics(uri: string): Diagnostic[] {
     return this._diagnostics.get(uri) ?? [];
+  }
+
+  /**
+   * True while lunR asks tsserver directly through `typescript.tsserverRequest` (typescript-language-server
+   * 4.4.0 and newer). A daemon client gets no capabilities, so it guesses from the command and learns from
+   * the first rejection.
+   */
+  get pullsDiagnostics(): boolean {
+    if (this.pull !== "unknown") return this.pull === "yes";
+    const capabilities = this._serverCapabilities;
+    if (!capabilities) return basename(this.options.command).startsWith("typescript-language-server");
+    return capabilities.executeCommandProvider?.commands.includes(TSSERVER_REQUEST) ?? false;
+  }
+
+  /**
+   * Diagnostics for the version of `uri` that lunR last sent. typescript-language-server publishes without
+   * a version, so for it this asks tsserver directly: its request queue never moves a request ahead of an
+   * earlier change, so the answer is for the sent version. Other servers count only a publish that carries
+   * the sent version; a server found to publish without one gives `unavailable` from then on.
+   */
+  diagnosticsForSentVersion(uri: string): Promise<SentDiagnostics> {
+    const sent = this.sent.get(uri);
+    if (!sent) return Promise.resolve(SUPERSEDED);
+    if (sent.diagnostics) return Promise.resolve({ kind: "ready", diagnostics: sent.diagnostics });
+    if (this.pullBroken) return Promise.resolve(this.pullBroken);
+    if (!this.pullsDiagnostics) {
+      if (this.publishesVersions === false) return Promise.resolve(UNVERSIONED);
+      return new Promise((resolve) => sent.waiters.add(resolve));
+    }
+    const ask = (command: string) =>
+      this.sendRequest<TsserverResponse | undefined>("workspace/executeCommand", {
+        command: TSSERVER_REQUEST,
+        arguments: [command, { file: uri }],
+      });
+    return Promise.all([ask("syntacticDiagnosticsSync"), ask("semanticDiagnosticsSync")]).then(
+      ([syntactic, semantic]): SentDiagnostics | Promise<SentDiagnostics> => {
+        this.pull = "yes";
+        if (this.sent.get(uri) !== sent) return SUPERSEDED;
+        if (syntactic?.success === true && semantic?.success === true && Array.isArray(syntactic.body) && Array.isArray(semantic.body)) {
+          return { kind: "ready", diagnostics: [...syntactic.body, ...semantic.body].map(fromTsserver) };
+        }
+        // typescript-language-server cancels requests when tsserver exits or restarts.
+        if (syntactic?.type === "cancelled" || semantic?.type === "cancelled") {
+          return { kind: "unavailable", reason: "tsserver cancelled the request", lasting: false };
+        }
+        // tsserver is gone; stop asking, as for a server that is not installed.
+        this.pullBroken = { kind: "unavailable", reason: "tsserver is not running", lasting: true };
+        return this.pullBroken;
+      },
+      (): Promise<SentDiagnostics> => {
+        // A server without the command rejects it: fall back to versioned publishes.
+        this.pull = "no";
+        return this.diagnosticsForSentVersion(uri);
+      },
+    );
+  }
+
+  /** Records `version` as the latest sent for `uri` and supersedes the waiters for the version it replaces. */
+  private markSent(uri: string, version: number | undefined): void {
+    for (const resolve of this.sent.get(uri)?.waiters ?? []) resolve(SUPERSEDED);
+    if (version === undefined) this.sent.delete(uri);
+    else this.sent.set(uri, { version, waiters: new Set() });
   }
 
   /** Get all cached diagnostics */
@@ -134,6 +271,18 @@ export class LspClient {
       "textDocument/publishDiagnostics",
       (params: PublishDiagnosticsParams) => {
         this._diagnostics.set(params.uri, params.diagnostics);
+        const sent = this.sent.get(params.uri);
+        if (params.version === undefined || params.version === null) {
+          // Such a publish cannot be tied to a version, so waiting for one would never end.
+          this.publishesVersions = false;
+          for (const resolve of sent?.waiters ?? []) resolve(UNVERSIONED);
+          sent?.waiters.clear();
+          return;
+        }
+        if (!sent || params.version !== sent.version) return;
+        sent.diagnostics = params.diagnostics;
+        for (const resolve of sent.waiters) resolve({ kind: "ready", diagnostics: params.diagnostics });
+        sent.waiters.clear();
       }
     );
 
@@ -155,7 +304,7 @@ export class LspClient {
 
     // Handle connection-level errors to prevent unhandled exceptions
     this.connection.onError(([err]) => {
-      console.error(`[LSP ${this.languageId}] Connection error: ${err.message}`);
+      debug(`LSP ${this.languageId}`, "Connection error", err);
     });
 
     this.connection.onClose(() => {
@@ -237,11 +386,13 @@ export class LspClient {
     // Error listeners belong to this child and its streams, never the host process.
     for (const stream of [child.stdin, child.stdout, child.stderr]) {
       stream?.on("error", (err: Error) => {
-        if (!this._disposed) console.error(`[LSP ${this.languageId}] Transport error: ${err.message}`);
+        if (!this._disposed) debug(`LSP ${this.languageId}`, "Transport error", err);
       });
     }
     child.on("error", (err) => {
-      if (!this._disposed) console.error(`[LSP ${this.languageId}] Process error: ${err.message}`);
+      // lunr: never write to the terminal here. A missing server (spawn ENOENT) used to print
+      // while the TUI owned the screen, which shifted the cursor and left stale tool-card rows.
+      if (!this._disposed) debug(`LSP ${this.languageId}`, "Process error", err);
       this._initialized = false;
       this.disposeConnection();
     });
@@ -262,7 +413,7 @@ export class LspClient {
       const onSpawn = () => { cleanup(); resolve(); };
       const onError = (err: Error) => {
         cleanup();
-        reject(new Error(`Failed to spawn LSP server "${this.options.command}": ${err.message}`));
+        reject(new Error(`Failed to spawn LSP server "${this.options.command}": ${err.message}`, { cause: err }));
       };
       const cleanup = () => {
         child.removeListener("spawn", onSpawn);
@@ -373,7 +524,7 @@ export class LspClient {
     if (!this.connection || !this._initialized) return;
     const report = (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      if (!this._disposed) console.error(`[LSP ${this.languageId}] Notification failed: ${message}`);
+      if (!this._disposed) debug(`LSP ${this.languageId}`, "Notification failed", message);
     };
     try {
       void this.connection.sendNotification(method, params).catch(report);
@@ -384,6 +535,7 @@ export class LspClient {
 
   /** Notify server of a newly opened document */
   didOpen(uri: string, languageId: string, version: number, text: string): void {
+    this.markSent(uri, version);
     this.sendNotification("textDocument/didOpen", {
       textDocument: { uri, languageId, version, text },
     });
@@ -391,6 +543,7 @@ export class LspClient {
 
   /** Notify server of a document change (full content sync) */
   didChange(uri: string, version: number, text: string): void {
+    this.markSent(uri, version);
     this.sendNotification("textDocument/didChange", {
       textDocument: { uri, version },
       contentChanges: [{ text }],
@@ -399,6 +552,7 @@ export class LspClient {
 
   /** Notify server of a closed document */
   didClose(uri: string): void {
+    this.markSent(uri, undefined);
     this.sendNotification("textDocument/didClose", {
       textDocument: { uri },
     });
@@ -411,6 +565,7 @@ export class LspClient {
     this._disposed = true;
     this._initialized = false;
     this.stop.abort(new Error("LSP client shut down"));
+    for (const uri of [...this.sent.keys()]) this.markSent(uri, undefined);
     this.shutdownPromise = this.shutdownOwnedTransport(initialized);
     return this.shutdownPromise;
   }

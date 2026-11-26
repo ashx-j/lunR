@@ -292,6 +292,16 @@ export async function spawnBrokerIfNeeded(brokerCommand: string, brokerArgs: str
           resolve();
         }, (error) => {
           cleanup();
+          // A broker that never listened can be stuck in Node's own startup, for example when a
+          // pids cgroup limit refuses its threads. It runs no code that could exit, so kill it.
+          // The detached child leads its own process group, which also holds a launcher's broker.
+          if (launch.kind === "direct" && process.platform !== "win32" && child.pid && child.exitCode === null && child.signalCode === null) {
+            try {
+              process.kill(-child.pid, "SIGKILL");
+            } catch {
+              // The group already exited.
+            }
+          }
           reject(toError(error));
         });
       });

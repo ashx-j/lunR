@@ -81,9 +81,11 @@ async function runCli(args: string[], dirs: CliDirs): Promise<CliResult> {
 	});
 
 	return new Promise((resolvePromise, reject) => {
+		// Starting the CLI from source takes 7 to 8 s on a loaded Linux machine and longer on Windows runners.
+		// Stay under vitest's 30 s test timeout so a real hang still reports this kill.
 		const timeout = setTimeout(() => {
 			child.kill("SIGKILL");
-		}, 10_000);
+		}, 25_000);
 		child.on("error", (error) => {
 			clearTimeout(timeout);
 			reject(error);

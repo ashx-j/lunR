@@ -50,7 +50,13 @@ describe("regression #5109: exclude tools", () => {
 			expect(allToolNames).not.toContain("ask_question");
 			expect(allToolNames).toContain("bash");
 			expect(allToolNames).toContain("dynamic_tool");
-			expect(harness.session.getActiveToolNames().sort()).toEqual(["bash", "dynamic_tool", "edit", "write"]);
+			expect(harness.session.getActiveToolNames().sort()).toEqual([
+				"bash",
+				"bash_job",
+				"dynamic_tool",
+				"edit",
+				"write",
+			]);
 			expect(harness.session.systemPrompt).not.toContain("Available tools:");
 		} finally {
 			harness.cleanup();
@@ -67,8 +73,8 @@ describe("regression #5109: exclude tools", () => {
 		try {
 			await harness.session.bindExtensions({});
 
-			expect(toolNames(harness.session.getAllTools())).toEqual(["bash"]);
-			expect(harness.session.getActiveToolNames()).toEqual(["bash"]);
+			expect(toolNames(harness.session.getAllTools())).toEqual(["bash", "bash_job"]);
+			expect(harness.session.getActiveToolNames()).toEqual(["bash", "bash_job"]);
 			expect(harness.session.systemPrompt).not.toContain("Available tools:");
 		} finally {
 			harness.cleanup();

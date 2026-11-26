@@ -18,6 +18,7 @@ import {
 import { getCustomizeBridge } from "../../../core/customize.ts";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import { MEMORY_CHAR_CAP_DEFAULT, MEMORY_CHAR_CAP_MAX, MEMORY_CHAR_CAP_MIN } from "../../../core/memory-cap.ts";
+import { PERMISSION_MODES, permissionModeLabel } from "../../../core/permissions.ts";
 import { PR_WATCH_DEFAULT_DURATION_MS, validPrWatchDuration } from "../../../core/pr-watch/types.ts";
 import type { SearchCuratorSetting } from "../../../core/search-curator.ts";
 import {
@@ -70,12 +71,50 @@ const DEFAULT_PROJECT_TRUST_LABELS: Record<DefaultProjectTrust, string> = {
 	never: "Never trust",
 };
 
+/** Above the floor lunR raises a ceiling to (about 105k with its own tools), so each choice takes effect. */
+const COMPACTION_CEILING_CHOICES = [150_000, 200_000, 300_000, 500_000];
+
+/** Whole thousands read as "300k"; a hand-edited value shows exactly, so it saves back unchanged. */
+function formatCompactionCeiling(tokens: number | undefined): string {
+	if (!tokens) return "off";
+	return tokens % 1000 === 0 ? `${tokens / 1000}k` : String(tokens);
+}
+
+function parseCompactionCeiling(value: string): number | undefined {
+	if (value === "off") return undefined;
+	return Math.round(Number.parseFloat(value) * (value.endsWith("k") ? 1000 : 1));
+}
+
+function compactionCeilingDescription(
+	ceiling: number | undefined,
+	floor: number | undefined,
+	keptTokens: number | undefined,
+): string {
+	if (!ceiling || !floor || floor <= ceiling) return "Compact at this many tokens even when the model allows more";
+	const raised = `Raised to ${Math.round(floor / 1000)}k`;
+	return keptTokens
+		? `${raised} for now: the last compaction kept ${Math.round(keptTokens / 1000)}k. Back to ${formatCompactionCeiling(ceiling)} after one that keeps less`
+		: `${raised} here, twice the size of a compacted context`;
+}
+
+/** Keeps a hand-edited ceiling in the cycle so the row can show it. */
+function compactionCeilingValues(current: number | undefined): string[] {
+	const choices = new Set([...COMPACTION_CEILING_CHOICES, ...(current ? [current] : [])]);
+	return ["off", ...[...choices].sort((a, b) => a - b).map(formatCompactionCeiling)];
+}
+
 const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 	Object.entries(DEFAULT_PROJECT_TRUST_LABELS).map(([value, label]) => [label, value as DefaultProjectTrust]),
 );
 
 export interface SettingsConfig {
 	autoCompact: boolean;
+	/** Unset means no ceiling. */
+	compactionCeilingTokens?: number;
+	/** The lowest ceiling this session uses (`compactionCeilingFloor`); a lower setting is raised to it. */
+	compactionCeilingFloorTokens?: number;
+	/** Set when what the last compaction kept, not the estimate, sets the floor. */
+	compactionCeilingKeptTokens?: number;
 	showImages: boolean;
 	imageWidthCells: number;
 	autoResizeImages: boolean;
@@ -126,6 +165,7 @@ export interface SettingsConfig {
 	memoryEnabled: boolean;
 	memoryCharCap: number;
 	todosEnabled: boolean;
+	deferredToolsEnabled: boolean;
 	/** undefined when pi-web-access is not loaded (curator bridge absent). */
 	searchCurator: SearchCuratorSetting | undefined;
 	// lunr: TUI customize settings
@@ -156,6 +196,7 @@ export interface SettingsConfig {
 
 export interface SettingsCallbacks {
 	onAutoCompactChange: (enabled: boolean) => void;
+	onCompactionCeilingChange: (ceilingTokens: number | undefined) => void;
 	onShowImagesChange: (enabled: boolean) => void;
 	onImageWidthCellsChange: (width: number) => void;
 	onAutoResizeImagesChange: (enabled: boolean) => void;
@@ -205,6 +246,7 @@ export interface SettingsCallbacks {
 	onMemoryEnabledChange: (enabled: boolean) => void;
 	onMemoryCharCapChange: (cap: number) => void;
 	onTodosEnabledChange: (enabled: boolean) => void;
+	onDeferredToolsEnabledChange: (enabled: boolean) => void;
 	onSearchCuratorChange: (setting: SearchCuratorSetting) => void;
 	// lunr: TUI customize callbacks
 	onFooterMcpChange: (enabled: boolean) => void;
@@ -1509,6 +1551,14 @@ export class SettingsSelectorComponent extends Container {
 				values: ["on", "off"],
 			},
 			{
+				id: "deferred-tools",
+				label: "Load tools on demand",
+				description:
+					"Start sessions with rarely used tools unloaded. The model loads them when a task needs them. Applies to new sessions.",
+				currentValue: config.deferredToolsEnabled ? "on" : "off",
+				values: ["on", "off"],
+			},
+			{
 				id: "show-hardware-cursor",
 				label: "Show hardware cursor",
 				description: "Terminal cursor for input method editors",
@@ -1545,6 +1595,18 @@ export class SettingsSelectorComponent extends Container {
 			},
 		];
 
+		// The description follows the chosen value, so the change handler rewrites it.
+		const compactionCeilingRow: SettingItem = {
+			id: "compaction-ceiling",
+			label: "Compaction ceiling",
+			description: compactionCeilingDescription(
+				config.compactionCeilingTokens,
+				config.compactionCeilingFloorTokens,
+				config.compactionCeilingKeptTokens,
+			),
+			currentValue: formatCompactionCeiling(config.compactionCeilingTokens),
+			values: compactionCeilingValues(config.compactionCeilingTokens),
+		};
 		const subscriptionCallbacks = callbacks.subscriptions;
 		const items: (SettingItem | SettingSection)[] = [
 			{ kind: "section", label: "Model" },
@@ -1553,7 +1615,7 @@ export class SettingsSelectorComponent extends Container {
 				label: "Default permission mode",
 				description: "Starting permission mode for new sessions",
 				currentValue: config.defaultPermissionMode === "read-only" ? "read" : config.defaultPermissionMode,
-				values: ["yolo", "auto", "read"],
+				values: PERMISSION_MODES.map(permissionModeLabel),
 			},
 			{
 				id: "thinking",
@@ -1605,7 +1667,7 @@ export class SettingsSelectorComponent extends Container {
 								value: "default",
 								label: "Provider default",
 								description:
-									"Sonnet 5 for Anthropic; the session model for OpenAI, xAI and Qwen. Other providers need a chosen model.",
+									"The newest Claude Sonnet the login offers for Anthropic, else the session model; the session model for OpenAI, xAI and Qwen. Other providers need a chosen model.",
 							},
 							{ value: "choose", label: "Choose a model", description: "Opens the model list" },
 						],
@@ -1667,6 +1729,7 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.autoCompact ? "on" : "off",
 				values: ["on", "off"],
 			},
+			compactionCeilingRow,
 			{
 				id: "steering-mode",
 				label: "Steering mode",
@@ -1965,6 +2028,16 @@ export class SettingsSelectorComponent extends Container {
 				case "autocompact":
 					callbacks.onAutoCompactChange(newValue === "on");
 					break;
+				case "compaction-ceiling": {
+					const ceiling = parseCompactionCeiling(newValue);
+					compactionCeilingRow.description = compactionCeilingDescription(
+						ceiling,
+						config.compactionCeilingFloorTokens,
+						config.compactionCeilingKeptTokens,
+					);
+					callbacks.onCompactionCeilingChange(ceiling);
+					break;
+				}
 				case "show-images":
 					callbacks.onShowImagesChange(newValue === "on");
 					break;
@@ -2051,6 +2124,9 @@ export class SettingsSelectorComponent extends Container {
 					break;
 				case "todos":
 					callbacks.onTodosEnabledChange(newValue === "on");
+					break;
+				case "deferred-tools":
+					callbacks.onDeferredToolsEnabledChange(newValue === "on");
 					break;
 				case "search-curator":
 					callbacks.onSearchCuratorChange(newValue as SearchCuratorSetting);

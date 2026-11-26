@@ -48,6 +48,10 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 - [Keybindings](keybindings.md) - default shortcuts and custom keybindings.
 - [Sessions](sessions.md) - session management, branching, and tree navigation.
 - [Compaction](compaction.md) - context compaction and branch summarization.
+- [Headless browser](browser.md) - the `browser` tool, Chromium install and private-network access.
+- [Computer use](computer-use.md) - desktop control on Windows and Apple Silicon macOS.
+- [PR watching](pr-watch.md) - follow a GitHub PR's checks and reviews from a session.
+- [ACP](acp.md) - use lunR from T3 Code and other ACP clients.
 
 ## Customization
 

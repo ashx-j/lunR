@@ -1,12 +1,21 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { completeProviderAuthentication, type LoginFlowHost } from "../src/modes/interactive/login-flow.ts";
+import {
+	completeProviderAuthentication,
+	type LoginFlowHost,
+	showCustomProviderWizard,
+} from "../src/modes/interactive/login-flow.ts";
 
 const unknownModel = { provider: "unknown", id: "unknown", api: "unknown" } as Model<Api>;
 const claude = (id: string) =>
 	({ provider: "anthropic", id, api: "anthropic-messages" }) as Model<"anthropic-messages">;
 
-async function logIn(available: Model<"anthropic-messages">[], providerId = "anthropic", providerName = "Anthropic") {
+async function logIn(
+	available: Model<"anthropic-messages">[],
+	providerId = "anthropic",
+	providerName = "Anthropic",
+	previousModel: Model<Api> = unknownModel,
+) {
 	const host = {
 		session: { modelRuntime: { getAvailable: async () => available }, setModel: vi.fn(async () => {}) },
 		updateAvailableProviderCount: vi.fn(async () => {}),
@@ -15,6 +24,7 @@ async function logIn(available: Model<"anthropic-messages">[], providerId = "ant
 		showStatus: vi.fn(),
 		showError: vi.fn(),
 		maybeWarnAboutAnthropicSubscriptionAuth: vi.fn(async () => {}),
+		onLoginSucceeded: vi.fn(async () => {}),
 		openModelSelectorIfUnset: vi.fn(async () => {}),
 	};
 	await completeProviderAuthentication(
@@ -22,7 +32,7 @@ async function logIn(available: Model<"anthropic-messages">[], providerId = "ant
 		providerId,
 		providerName,
 		"oauth",
-		unknownModel,
+		previousModel,
 		{
 			savedNote: "Saved.",
 		},
@@ -49,8 +59,76 @@ describe("model selection after /login", () => {
 		expect(context.showError).not.toHaveBeenCalled();
 	});
 
+	it("shows the Claude subscription notice for an Anthropic login while another provider's model is selected", async () => {
+		const gpt = { provider: "openai", id: "gpt-5.5", api: "openai-responses" } as Model<Api>;
+		const context = await logIn([claude("claude-sonnet-5")], "anthropic", "Anthropic", gpt);
+		expect(context.session.setModel).not.toHaveBeenCalled();
+		expect(context.maybeWarnAboutAnthropicSubscriptionAuth).toHaveBeenCalledWith("anthropic");
+	});
+
 	it("still prefers the provider default when it is offered", async () => {
 		const context = await logIn([claude("claude-sonnet-5"), claude("claude-opus-4-8")]);
 		expect(context.session.setModel).toHaveBeenCalledWith(claude("claude-opus-4-8"));
+	});
+});
+
+describe("the post-login hook", () => {
+	it("runs before /model after an account or API key login", async () => {
+		const calls: string[] = [];
+		const host = await logIn([claude("claude-sonnet-5")]);
+		expect(host.onLoginSucceeded).toHaveBeenCalledTimes(1);
+		host.onLoginSucceeded.mockImplementation(async () => {
+			calls.push("hook");
+		});
+		host.openModelSelectorIfUnset.mockImplementation(async () => {
+			calls.push("model");
+		});
+		await completeProviderAuthentication(
+			host as unknown as LoginFlowHost,
+			"anthropic",
+			"Anthropic",
+			"api_key",
+			unknownModel,
+		);
+		expect(calls).toEqual(["hook", "model"]);
+	});
+
+	// Display name, base URL, model ids and API key, then the protocol and the one-model choice.
+	async function addCustomProvider(modelIds: string, choice?: "Select model" | "Skip") {
+		const inputs = ["Local", "http://127.0.0.1:1/v1", modelIds, ""];
+		const selections = ["openai-completions", ...(choice ? [choice] : [])];
+		const model = { provider: "local", id: "m1", api: "openai-completions" } as Model<Api>;
+		const host = {
+			session: {
+				modelRuntime: {
+					getProviders: () => [],
+					reloadConfig: vi.fn(async () => {}),
+					getModel: () => model,
+					login: vi.fn(async () => {}),
+				},
+				setModel: vi.fn(async () => {}),
+			},
+			showExtensionInput: vi.fn(async () => inputs.shift()),
+			showExtensionSelector: vi.fn(async () => selections.shift()),
+			showStatus: vi.fn(),
+			showError: vi.fn(),
+			updateAvailableProviderCount: vi.fn(async () => {}),
+			invalidateFooter: vi.fn(),
+			updateEditorBorderColor: vi.fn(),
+			onLoginSucceeded: vi.fn(async () => {}),
+			openModelSelectorIfUnset: vi.fn(async () => {}),
+		};
+		await showCustomProviderWizard(host as unknown as LoginFlowHost);
+		return host;
+	}
+
+	it.each([
+		["one model, selected", "m1", "Select model"],
+		["one model, skipped", "m1", "Skip"],
+		["two models", "m1, m2", undefined],
+	] as const)("runs after a custom endpoint with %s", async (_label, modelIds, choice) => {
+		const host = await addCustomProvider(modelIds, choice);
+		expect(host.showError).not.toHaveBeenCalled();
+		expect(host.onLoginSucceeded).toHaveBeenCalledTimes(1);
 	});
 });

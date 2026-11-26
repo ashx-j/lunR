@@ -2,10 +2,11 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { streamClaudeCode } from "../src/api/anthropic-claude-code-bridge.ts";
+import { CLAUDE_CODE_HISTORY_REPLAYED } from "../src/auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../src/auth/types.ts";
 import { ANTHROPIC_MODELS } from "../src/providers/anthropic.models.ts";
 import { cleanupConversationResources, cleanupSessionResources } from "../src/session-resources.ts";
@@ -319,8 +320,64 @@ describe.skipIf(process.platform === "win32")("Claude Code spare processes", () 
 		expect(fixture.bodies).toHaveLength(2);
 	});
 
+	it("runs cold on the saved login's binary when another lunR removed the spare's", async () => {
+		const fixture = await setup(2);
+		// The saved-login layout: <agent>/claude-code/<version>/claude, with the login in <agent>/auth.json.
+		const agent = mkdtempSync(join(tmpdir(), "lunr-claude-agent-"));
+		directories.push(agent);
+		const binary = (version: string) => {
+			const command = join(agent, "claude-code", version, "claude");
+			mkdirSync(dirname(command), { recursive: true });
+			writeFileSync(command, FAKE_CLAUDE_CODE);
+			chmodSync(command, 0o755);
+			return command;
+		};
+		const [removed, saved] = [binary("1"), binary("2")];
+		writeFileSync(join(agent, "auth.json"), JSON.stringify({ anthropic: { ...fixture.connection, command: saved } }));
+		const stale = { ...fixture, connection: { ...fixture.connection, command: removed } };
+		const started = () =>
+			readFileSync(join(dirname(removed), "started"), "utf8")
+				.trim()
+				.split("\n")
+				.map(Number);
+		const { messages } = await run(stale, 1);
+		expect(await settled(() => started().length === 2)).toBe(true);
+		const spare = started()[1] ?? 0;
+		rmSync(dirname(removed), { recursive: true, force: true });
+		await run(stale, 1, { messages });
+		const spawns = readFileSync(join(dirname(saved), "spawns"), "utf8")
+			.trim()
+			.split("\n");
+		expect(spawns.map((row) => JSON.parse(row).fileBody)).toEqual([true]);
+		expect(JSON.stringify(fixture.bodies[1]?.messages)).toContain("contents of file-1");
+		expect(
+			await settled(() => {
+				try {
+					process.kill(spare, 0);
+					return false;
+				} catch {
+					return true;
+				}
+			}),
+		).toBe(true);
+	});
+
+	it("marks a cold stdin replay as uncached history, and a large body a spare carries not", async () => {
+		const fixture = await setup(2);
+		// Over the 2 MiB settings limit, so a cold request replays it through stdin.
+		const large: Message = { role: "user", content: "x".repeat(3 * 1024 * 1024), timestamp: 0 };
+		const replayed = (message: AssistantMessage) =>
+			(message.diagnostics ?? []).some(({ type }) => type === CLAUDE_CODE_HISTORY_REPLAYED);
+		const first = await run(fixture, 1, { messages: [large] });
+		expect(replayed(first.last)).toBe(true);
+		expect(await settled(() => fixture.started().length === 2)).toBe(true);
+		const second = await run(fixture, 1, { messages: first.messages });
+		expect(fixture.spawns().map(({ appliedBody }) => appliedBody)).toEqual([false, true]);
+		expect(replayed(second.last)).toBe(false);
+	});
+
 	it.each(["exit", "kill"])(
-		"leaves no process directory behind after lunR's %s",
+		"removes its process directories at lunR's exit and names them by owner for a %s",
 		async (how) => {
 			// Every answer is a tool call, so each lunR keeps a spare.
 			const fixture = await setup(100);
@@ -351,21 +408,17 @@ describe.skipIf(process.platform === "win32")("Claude Code spare processes", () 
 				new Promise<number | null>((resolve) => child.once("close", resolve));
 			if (how === "exit") {
 				expect(await closed(start("process.exit(0);"))).toBe(0);
+				expect(lunrDirectories()).toEqual([]);
 			} else {
 				const child = start("console.log('ready'); setInterval(() => {}, 1000);");
 				await new Promise<void>((resolve) => child.stdout.once("data", () => resolve()));
 				expect(lunrDirectories()).toHaveLength(1);
 				child.kill("SIGKILL");
 				await closed(child);
-				// The next lunR's first Claude Code start sweeps what the killed one left, in the background.
-				const swept = `const { readdirSync } = await import("node:fs");
-					const others = () => readdirSync(process.env.TMPDIR).filter((name) => name.startsWith("lunr-claude-code-") && !name.startsWith("lunr-claude-code-" + process.pid + "-"));
-					for (let i = 0; i < 250 && others().length; i++) await new Promise((r) => setTimeout(r, 20));
-					process.exit(0);`;
-				// Its own cold process and spare are the third and fourth.
-				expect(await closed(start(swept, 4))).toBe(0);
+				// The killed lunR's pid names what it left, so the interactive startup sweep (core/temp-files.ts)
+				// can remove it once that pid is gone.
+				expect(lunrDirectories()).toEqual([expect.stringMatching(new RegExp(`^lunr-claude-code-${child.pid}-`))]);
 			}
-			expect(lunrDirectories()).toEqual([]);
 		},
 		60_000,
 	);

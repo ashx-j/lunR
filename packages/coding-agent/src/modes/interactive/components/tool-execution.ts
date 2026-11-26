@@ -1,15 +1,17 @@
 import { Box, type Component, Container, getCapabilities, Image, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
-import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
+import { convertToPng } from "../../../utils/image-convert.ts";
+import { theme } from "../theme/theme.ts";
+import { getBuiltinToolRenderer } from "../tool-renderers/index.ts";
 import {
+	appendToFirstLine,
 	formatGroupedCall,
+	GroupedCallText,
 	getTextOutput as getRenderedTextOutput,
 	toolGroupRole,
 	toolGroupTree,
 	toolStatusDot,
-} from "../../../core/tools/render-utils.ts";
-import { convertToPng } from "../../../utils/image-convert.ts";
-import { theme } from "../theme/theme.ts";
+} from "../tool-renderers/render-utils.ts";
 
 export interface ToolExecutionOptions {
 	showImages?: boolean;
@@ -36,10 +38,12 @@ export class ToolExecutionComponent extends Container {
 	private imageWidthCells: number;
 	private isPartial = true;
 	private toolDefinition?: ToolDefinition<any, any>;
-	private builtInToolDefinition?: ToolDefinition<any, any>;
+	private builtInRenderer?: ReturnType<typeof getBuiltinToolRenderer>;
 	private ui: TUI;
 	private cwd: string;
 	private executionStarted = false;
+	// Set when the user rejected this call in ask mode's approval dialog.
+	private rejected = false;
 	private argsComplete = false;
 	private result?: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
@@ -51,6 +55,9 @@ export class ToolExecutionComponent extends Container {
 	private groupContinuation = false;
 	private groupFollowed = false;
 	private groupNext?: ToolExecutionComponent;
+	// Same-tool run across adjacent turns (applyToolRunSpacing): padding only, no tree.
+	private runContinuation = false;
+	private runFollowed = false;
 
 	constructor(
 		toolName: string,
@@ -66,7 +73,7 @@ export class ToolExecutionComponent extends Container {
 		this.toolCallId = toolCallId;
 		this.args = args;
 		this.toolDefinition = toolDefinition;
-		this.builtInToolDefinition = createAllToolDefinitions(cwd)[toolName as ToolName];
+		this.builtInRenderer = getBuiltinToolRenderer(toolName);
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
 		this.ui = ui;
@@ -94,37 +101,37 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private getCallRenderer(): ToolDefinition<any, any>["renderCall"] | undefined {
-		if (!this.builtInToolDefinition) {
+		if (!this.builtInRenderer) {
 			return this.toolDefinition?.renderCall;
 		}
 		if (!this.toolDefinition) {
-			return this.builtInToolDefinition.renderCall;
+			return this.builtInRenderer.renderCall;
 		}
-		return this.toolDefinition.renderCall ?? this.builtInToolDefinition.renderCall;
+		return this.toolDefinition.renderCall ?? this.builtInRenderer.renderCall;
 	}
 
 	private getResultRenderer(): ToolDefinition<any, any>["renderResult"] | undefined {
-		if (!this.builtInToolDefinition) {
+		if (!this.builtInRenderer) {
 			return this.toolDefinition?.renderResult;
 		}
 		if (!this.toolDefinition) {
-			return this.builtInToolDefinition.renderResult;
+			return this.builtInRenderer.renderResult;
 		}
-		return this.toolDefinition.renderResult ?? this.builtInToolDefinition.renderResult;
+		return this.toolDefinition.renderResult ?? this.builtInRenderer.renderResult;
 	}
 
 	private hasRendererDefinition(): boolean {
-		return this.builtInToolDefinition !== undefined || this.toolDefinition !== undefined;
+		return this.builtInRenderer !== undefined || this.toolDefinition !== undefined;
 	}
 
 	private getRenderShell(): "default" | "self" {
-		if (!this.builtInToolDefinition) {
+		if (!this.builtInRenderer) {
 			return this.toolDefinition?.renderShell ?? "default";
 		}
 		if (!this.toolDefinition) {
-			return this.builtInToolDefinition.renderShell ?? "default";
+			return this.builtInRenderer.renderShell ?? "default";
 		}
-		return this.toolDefinition.renderShell ?? this.builtInToolDefinition.renderShell ?? "default";
+		return this.toolDefinition.renderShell ?? this.builtInRenderer.renderShell ?? "default";
 	}
 
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
@@ -174,11 +181,15 @@ export class ToolExecutionComponent extends Container {
 				tree: toolGroupTree({ expanded: this.expanded, isError: this.result?.isError }),
 				dot: this.getStatusDot(),
 				title: theme.fg("toolTitle", theme.bold(this.toolName)),
-				detail: waitDuration && theme.fg("toolOutput", waitDuration),
+				detail: this.rejectedNote() ?? (waitDuration && theme.fg("toolOutput", waitDuration)),
 			}),
 			0,
 			0,
 		);
+	}
+
+	private rejectedNote(): string | undefined {
+		return this.rejected ? theme.fg("error", "— rejected") : undefined;
 	}
 
 	private createResultFallback(): Component | undefined {
@@ -192,6 +203,27 @@ export class ToolExecutionComponent extends Container {
 	updateArgs(args: unknown): void {
 		this.args = args;
 		this.updateDisplay();
+	}
+
+	/**
+	 * Ask mode's approval dialog for this call opened. Until it closes the call is not running, so the
+	 * renderer state from tool_execution_start (bash's start time) is dropped and restamped on approval.
+	 */
+	beginApproval(): void {
+		this.executionStarted = false;
+		this.rendererState = {};
+		this.updateDisplay();
+	}
+
+	/** The approval dialog closed: an approved call starts its clock now, a rejected one says so. */
+	endApproval(approved: boolean): void {
+		if (approved) {
+			this.markExecutionStarted();
+			return;
+		}
+		this.rejected = true;
+		this.updateDisplay();
+		this.ui.requestRender();
 	}
 
 	markExecutionStarted(): void {
@@ -265,6 +297,7 @@ export class ToolExecutionComponent extends Container {
 		this.result = undefined;
 		this.isPartial = true;
 		this.executionStarted = false;
+		this.rejected = false;
 		this.argsComplete = false;
 		this.expanded = false;
 		this.disposeComponent(this.resultRendererComponent);
@@ -309,14 +342,37 @@ export class ToolExecutionComponent extends Container {
 		this.invalidate();
 	}
 
+	/** True for a finished, collapsed default-shell card, which renders as its header alone. */
+	isHeaderOnly(): boolean {
+		return this.getRenderShell() === "default" && this.shouldSkipCompactResult();
+	}
+
+	isDefaultShell(): boolean {
+		return this.getRenderShell() === "default";
+	}
+
+	setRunContinuation(): void {
+		this.runContinuation = true;
+		this.topSpacer.setLines(0);
+		this.applyGroupPadding();
+		this.invalidate();
+	}
+
+	setRunFollowed(): void {
+		this.runFollowed = true;
+		this.applyGroupPadding();
+		this.invalidate();
+	}
+
 	// lunr: same-name run link keeps the final card refreshed as earlier calls settle.
 	linkGroupNext(next: ToolExecutionComponent): void {
 		this.groupNext = next;
 	}
 
 	private applyGroupPadding(): void {
-		const top = this.groupContinuation ? 0 : 1;
-		const bottom = this.groupFollowed ? 0 : 1;
+		const top = this.groupContinuation || this.runContinuation ? 0 : 1;
+		// An expanded card in a run keeps its bottom pad so its body does not touch the next header.
+		const bottom = this.groupFollowed || (this.runFollowed && !this.expanded) ? 0 : 1;
 		this.contentBox.setPaddingTop(top);
 		this.contentBox.setPaddingBottom(bottom);
 		this.contentText.setPaddingTop(top);
@@ -475,9 +531,19 @@ export class ToolExecutionComponent extends Container {
 					}
 				}
 			}
+
+			// Last, because a renderer may rebuild its header while rendering the result (edit does).
+			const note = this.rejectedNote();
+			const header = this.callRendererComponent ? findCallHeader(this.callRendererComponent) : undefined;
+			header?.setNote(note);
+			// A custom renderer without a built-in header gets the note as its own line.
+			if (note && this.callRendererComponent && !header) renderContainer.addChild(new Text(note, 0, 0));
 		} else {
 			this.contentText.setCustomBgFn(bgFn);
-			this.contentText.setText(this.formatToolExecution());
+			const note = this.rejectedNote();
+			this.contentText.setText(
+				note ? appendToFirstLine(this.formatToolExecution(), note) : this.formatToolExecution(),
+			);
 			hasContent = true;
 		}
 
@@ -550,6 +616,29 @@ export class ToolExecutionComponent extends Container {
 		}
 		return text;
 	}
+}
+
+/**
+ * Collapses the spacer and facing pads when `next` follows a header-only card for the same tool from
+ * an earlier turn, so a run of one-line calls reads as a list. Unlike applySameToolGrouping it changes
+ * spacing only: each card keeps its own dot and header.
+ */
+export function applyToolRunSpacing(previous: ToolExecutionComponent, next: ToolExecutionComponent): void {
+	if (previous.getToolName() !== next.getToolName() || !previous.isHeaderOnly() || !next.isDefaultShell()) return;
+	previous.setRunFollowed();
+	next.setRunContinuation();
+}
+
+/** The first GroupedCallText in a call renderer's component tree; every built-in header is one. */
+function findCallHeader(component: Component): GroupedCallText | undefined {
+	if (component instanceof GroupedCallText) return component;
+	if (component instanceof Container || component instanceof Box) {
+		for (const child of component.children) {
+			const header = findCallHeader(child);
+			if (header) return header;
+		}
+	}
+	return undefined;
 }
 
 /** Collapse facing pad when `next` is appended after a same-name tool card. */

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { SessionOwnership, writeSessionJson } from "../session-ownership.ts";
 import { parsePrWatchFile } from "./persistence-schema.ts";
@@ -33,9 +33,11 @@ export class PrWatchStore {
 		return parsePrWatchFile(value, this.sessionId, this.project);
 	}
 
+	/** Keeps a file only while it holds a watch, so sessions that never watch a PR leave nothing behind. */
 	save(value: PrWatchFile): void {
 		this.ownership.assert();
-		writeSessionJson(this.file, value);
+		if (value.watches.length === 0) rmSync(this.file, { force: true });
+		else writeSessionJson(this.file, value);
 	}
 
 	close(): void {

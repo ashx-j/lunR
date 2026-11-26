@@ -1,5 +1,6 @@
 import { fuzzyMatch } from "@earendil-works/pi-tui";
 import type { SessionInfo } from "../../../core/session-manager.ts";
+import { searchTexts } from "../../../utils/regex-worker.ts";
 
 export type SortMode = "threaded" | "recent" | "relevance";
 
@@ -23,7 +24,7 @@ function normalizeWhitespaceLower(text: string): string {
 	return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function getSessionSearchText(session: SessionInfo): string {
+export function getSessionSearchText(session: SessionInfo): string {
 	return `${session.id} ${session.name ?? ""} ${session.allMessagesText} ${session.cwd}`;
 }
 
@@ -113,14 +114,37 @@ export function parseSearchQuery(query: string): ParsedSearchQuery {
 	return { mode: "tokens", tokens, regex: null };
 }
 
-export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): MatchResult {
-	const text = getSessionSearchText(session);
+/** Limit for one regex search over every session. 100 MB of history takes about 30 ms. */
+export const SESSION_REGEX_SEARCH_TIMEOUT_MS = 1000;
 
+/**
+ * Each session's first match of `regex`, found in the regex worker so the user's own pattern cannot
+ * freeze the TUI. `texts` must hold `getSessionSearchText` for each session; pass the same array
+ * object again to reuse the copy the worker keeps.
+ */
+export async function findRegexMatches(
+	sessions: readonly SessionInfo[],
+	regex: RegExp,
+	texts: string[],
+): Promise<ReadonlyMap<SessionInfo, number> | "stopped" | "unavailable"> {
+	const result = await searchTexts(regex.source, regex.flags, texts, SESSION_REGEX_SEARCH_TIMEOUT_MS, {
+		cacheTexts: true,
+	});
+	if (result.kind === "timeout") return "stopped";
+	if (result.kind === "unavailable") return "unavailable";
+	return new Map(sessions.map((session, index) => [session, result.indexes[index] ?? -1]));
+}
+
+export function matchSession(
+	session: SessionInfo,
+	parsed: ParsedSearchQuery,
+	regexMatches?: ReadonlyMap<SessionInfo, number>,
+): MatchResult {
 	if (parsed.mode === "regex") {
 		if (!parsed.regex) {
 			return { matches: false, score: 0 };
 		}
-		const idx = text.search(parsed.regex);
+		const idx = regexMatches?.get(session) ?? getSessionSearchText(session).search(parsed.regex);
 		if (idx < 0) return { matches: false, score: 0 };
 		return { matches: true, score: idx * 0.1 };
 	}
@@ -128,6 +152,8 @@ export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): M
 	if (parsed.tokens.length === 0) {
 		return { matches: true, score: 0 };
 	}
+
+	const text = getSessionSearchText(session);
 
 	let totalScore = 0;
 	let normalizedText: string | null = null;
@@ -158,6 +184,8 @@ export function filterAndSortSessions(
 	query: string,
 	sortMode: SortMode,
 	nameFilter: NameFilter = "all",
+	/** Regex match indexes from `findRegexMatches`. Without them a `re:` query runs on this thread. */
+	regexMatches?: ReadonlyMap<SessionInfo, number>,
 ): SessionInfo[] {
 	const nameFiltered =
 		nameFilter === "all" ? sessions : sessions.filter((session) => matchesNameFilter(session, nameFilter));
@@ -171,7 +199,7 @@ export function filterAndSortSessions(
 	if (sortMode === "recent") {
 		const filtered: SessionInfo[] = [];
 		for (const s of nameFiltered) {
-			const res = matchSession(s, parsed);
+			const res = matchSession(s, parsed, regexMatches);
 			if (res.matches) filtered.push(s);
 		}
 		return filtered;
@@ -180,7 +208,7 @@ export function filterAndSortSessions(
 	// Relevance mode: sort by score, tie-break by modified desc.
 	const scored: { session: SessionInfo; score: number }[] = [];
 	for (const s of nameFiltered) {
-		const res = matchSession(s, parsed);
+		const res = matchSession(s, parsed, regexMatches);
 		if (!res.matches) continue;
 		scored.push({ session: s, score: res.score });
 	}

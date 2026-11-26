@@ -485,7 +485,10 @@ function buildRequestBody(
 	context: Context,
 	options?: OpenAICodexResponsesOptions,
 ): RequestBody {
-	const toolPlacement = splitDeferredTools(context, model.compat?.supportsToolSearch ?? false);
+	const toolPlacement = splitDeferredTools(context, model.compat?.supportsToolSearch ?? false, {
+		// lunr: Codex's undeclared tool-search pair is unproven, so a declared tool loads as a plain one.
+		declared: "immediate",
+	});
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
 		deferredTools: toolPlacement.deferred,

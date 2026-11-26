@@ -60,16 +60,23 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `reasoningDisplay` | string | `"auto"` | Streaming reasoning layout. `"auto"` uses one line for OpenAI Codex and four lines for other providers. `"one-line"` and `"four-lines"` override it. One line has a blank row above and below and a soft moving highlight. Interactive TUI only |
 | `cacheRetention` | string | unset → `PI_CACHE_RETENTION` → `"short"` | `"none"`, `"short"`, or `"long"` prompt-cache retention |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
-| `defaultPermissionMode` | string | `"yolo"` | Startup permission mode: `"yolo"`, `"auto"`, or `"read-only"` (shown as `read` in the TUI). |
-| `autoReviewModel` | string | unset | `"provider/model"` that reviews risky actions in auto mode. Unset uses the provider's own reviewer (Claude Sonnet 5 for Anthropic, the session model for OpenAI, xAI and Qwen); other providers need one set |
+| `permissions` | object | - | `{ "allow": [...], "deny": [...] }` rules such as `bash(npm test)` or `edit(src/**)`. Project deny rules always apply; project allow rules count only in a trusted project. See [Allow and deny rules](features.md#allow-and-deny-rules) |
+| `defaultPermissionMode` | string | `"yolo"` | Startup permission mode: `"yolo"`, `"auto"`, `"ask"`, or `"read-only"` (shown as `read` in the TUI). |
+| `autoReviewModel` | string | unset | `"provider/model"` that reviews risky actions in auto mode. Unset uses the provider's own reviewer (the newest Claude Sonnet the login offers for Anthropic, the session model for OpenAI, xAI and Qwen); other providers need one set |
 | `openaiFastMode` | boolean | `false` | Persist OpenAI Codex subscription Fast mode. Ignored by other providers |
 | `memoryEnabled` | boolean | `true` | Enable durable-fact injection and the model-facing memory tools. Global-only; disabling preserves the file |
 | `memoryCharCap` | number | `5000` | Durable-facts memory character cap (1–30000) |
 | `todosEnabled` | boolean | `true` | Enable todo guidance, the `todo` tool, and its editor widget. Global-only |
+| `deferredToolsEnabled` | boolean | `true` | Start new sessions with rarely used tools unloaded; the model loads them with `load_tools` when a task needs them. Applies to Claude Sonnet, Opus and Fable 4.5 or newer on the `anthropic` provider (API key or Claude subscription). A running session keeps its tool list. Global-only |
 | `sessionRetentionDays` | number | `30` | Delete session files older than N days at launch; `0` keeps forever |
 | `modelTiers` | object | - | Enable model tiers and per-tier thinking |
 | `modelInstructions` | object | `{ enabled: false, mode: "both" }` | Model-specific instructions and whether they append to or replace global instructions |
 | `confirmLargeSubagentLaunches` | boolean | `false` | Ask once before aggregate launches of three or more children outside Auto mode |
+| `automaticSubagentDelegation` | boolean | `true` | Let the agent launch subagents on its own. Off, it launches them only when you ask |
+| `subagentCommunicationEnabled` | boolean | `true` | Messages between a running child and its parent: questions, handoffs and live steering. Global-only |
+| `prWatchDurationMs` | number | `1800000` | How long a new PR watch runs, in milliseconds (30 minutes). Global-only. See [PR watching](pr-watch.md) |
+| `computerUse` | boolean | `true` | Offer the computer use tools on Windows and Apple Silicon macOS. Global-only. See [Computer use](computer-use.md) |
+| `computerForeground` | boolean | `true` | Shown as Allow foreground control. Off blocks desktop input, foreground window input, launching apps and window management. Global-only |
 | `doubleEscapeAction` | string | `"tree"` | Idle action for double-escape: `"tree"`, `"fork"`, or `"none"`. Active async subagents take priority: double-Escape requests their stop |
 | `treeFilterMode` | string | `"default"` | Default filter for `/tree`: `"default"`, `"no-tools"`, `"user-only"`, `"labeled-only"`, `"all"` |
 | `editorPaddingX` | number | `0` | Horizontal padding for input editor (0-3) |
@@ -108,6 +115,7 @@ For VS Code, include `--wait` so lunR resumes after the editor exits:
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
 | `compaction.reserveTokens` | number | `16384` | Tokens reserved for LLM response |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
+| `compaction.ceilingTokens` | number | unset | Compact once context passes this many tokens, even when the model's window is larger. Raised to at least twice the size of a compacted context. See [compaction.md](compaction.md#when-it-triggers) |
 
 ```json
 {
@@ -183,6 +191,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 |---------|------|---------|-------------|
 | `shellPath` | string | - | Custom shell path (e.g., for Cygwin on Windows); supports a leading `~` for the home directory |
 | `shellCommandPrefix` | string | - | Prefix for every bash command (e.g., `"shopt -s expand_aliases"`) |
+| `bashTimeoutSeconds` | number | `120` | Seconds before the agent's bash tool stops a command that passes no `timeout` of its own. `0` turns the default off; a negative or non-number value uses `120`. Your `!` commands have no timeout |
 | `npmCommand` | string[] | - | Command argv used for npm package lookup/install operations (e.g., `["mise", "exec", "node@20", "--", "npm"]`) |
 
 ```json

@@ -17,12 +17,8 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 			showWarning: vi.fn(),
 		};
 
-		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, {
-			provider: "anthropic",
-		});
-		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, {
-			provider: "anthropic",
-		});
+		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, "anthropic");
+		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, "anthropic");
 
 		expect(fakeThis.showWarning).toHaveBeenCalledTimes(1);
 		expect(modelRuntime.getAuth).toHaveBeenCalledTimes(1);
@@ -36,15 +32,13 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 			showWarning: vi.fn(),
 		};
 
-		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, {
-			provider: "anthropic",
-		});
+		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, "anthropic");
 
 		expect(fakeThis.showWarning).toHaveBeenCalledTimes(1);
 		expect(modelRuntime.getAuth).not.toHaveBeenCalled();
 	});
 
-	test("does not warn for non-Anthropic models", async () => {
+	test("does not warn after a login to another provider", async () => {
 		const modelRuntime = createModelRuntime(undefined);
 		const fakeThis: any = {
 			anthropicSubscriptionWarningShown: false,
@@ -52,9 +46,7 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 			showWarning: vi.fn(),
 		};
 
-		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, {
-			provider: "openai",
-		});
+		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, "openai");
 
 		expect(fakeThis.showWarning).not.toHaveBeenCalled();
 		expect(modelRuntime.getAuth).not.toHaveBeenCalled();

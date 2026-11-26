@@ -11,6 +11,8 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { truncateHead, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from "../../../../core/tools/truncate.js";
 import { Text } from "@earendil-works/pi-tui";
 import type { LspManager } from "../lsp-manager.js";
+import type { SentDiagnostics } from "../lsp-client.js";
+import { DIAGNOSTIC_TOOL_WAIT_MS } from "../shared/timing.js";
 import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
 import { resolveProvider } from "../resolve-provider.js";
 import { getSyntaxErrors } from "../tree-sitter/symbol-extractor.js";
@@ -43,15 +45,88 @@ const DiagnosticsParams = Type.Object({
 
 interface DiagnosticsDetails {
   count: number;
+  /** False when no server answered for the file's current content; `count` then holds syntax errors only. */
+  typeChecked?: boolean;
   errors?: number;
   warnings?: number;
   files?: number;
 }
 
+/** Resolves `promise`, or undefined once `deadline` passes or `signal` aborts. */
+function beforeDeadline<T>(promise: Promise<T>, deadline: number, signal?: AbortSignal): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    const done = (value: T | undefined) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", aborted);
+      resolve(value);
+    };
+    const aborted = () => done(undefined);
+    const timer = setTimeout(aborted, Math.max(0, deadline - Date.now()));
+    signal?.addEventListener("abort", aborted, { once: true });
+    promise.then(done, () => done(undefined));
+  });
+}
+
+function formatDiagnostics(diagnostics: Diagnostic[], relPath: string): { text: string; errors: number; warnings: number } {
+  const sorted = [...diagnostics].sort((a, b) => (a.severity ?? 99) - (b.severity ?? 99));
+  const output = sorted.map((d) => formatDiagnostic(d, relPath)).join("\n");
+  const errors = sorted.filter((d) => d.severity === DiagnosticSeverity.Error).length;
+  const warnings = sorted.filter((d) => d.severity === DiagnosticSeverity.Warning).length;
+  const other = sorted.length - errors - warnings;
+  const summary = [
+    errors > 0 ? `${errors} error(s)` : null,
+    warnings > 0 ? `${warnings} warning(s)` : null,
+    other > 0 ? `${other} other` : null,
+  ].filter(Boolean).join(", ");
+  const truncation = truncateHead(output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+  let text = `${summary}\n\n${truncation.content}`;
+  if (truncation.truncated) {
+    text += `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} diagnostics]`;
+  }
+  return { text, errors, warnings };
+}
+
+/**
+ * @param syncFile sends the file's current content to its server (didOpen or didChange), so the answer
+ * `diagnosticsForSentVersion` waits for is about that content.
+ */
 export function createDiagnosticsTool(
   manager: LspManager,
-  treeSitter?: TreeSitterManager | null,
+  treeSitter: TreeSitterManager | null | undefined,
+  syncFile: (filePath: string) => Promise<void>,
 ): ToolDefinition<typeof DiagnosticsParams, DiagnosticsDetails> {
+  /** The result when no type check ran for the file's current content. */
+  async function withoutTypeCheck(filePath: string, why: string, lastPublished: Diagnostic[] = []) {
+    const relPath = relative(manager.resolvePath("."), manager.resolvePath(filePath));
+    let text = `Type checking did not run for ${relPath}: ${why}.`;
+    let count = 0;
+    let errors = 0;
+    if (lastPublished.length > 0) {
+      const published = formatDiagnostics(lastPublished, relPath);
+      text += `\n\nThe server's last published diagnostics, which may not match the current content:\n${published.text}`;
+    }
+    if (treeSitter && resolveProvider(filePath, manager, treeSitter).type === "tree-sitter") {
+      try {
+        const absPath = manager.resolvePath(filePath);
+        const tree = await treeSitter.parse(absPath, await readFile(absPath, "utf-8"));
+        if (tree) {
+          const syntaxErrors = getSyntaxErrors(tree);
+          count = errors = syntaxErrors.length;
+          if (syntaxErrors.length === 0) {
+            text += "\n\nTree-sitter found no syntax errors (syntax only).";
+          } else {
+            const lines = syntaxErrors.map((e) => `${relPath}:${e.line + 1}:${e.character + 1} error: ${e.message}`);
+            const truncation = truncateHead(lines.join("\n"), { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+            text += `\n\n${syntaxErrors.length} syntax error(s) [tree-sitter, syntax only]\n\n${truncation.content}`;
+          }
+        }
+      } catch {
+        // No syntax check either; the text above says so.
+      }
+    }
+    return { content: [{ type: "text" as const, text }], details: { count, errors, typeChecked: false } };
+  }
+
   return {
     name: "lsp_diagnostics",
     label: "LSP Diagnostics",
@@ -63,87 +138,38 @@ export function createDiagnosticsTool(
     ],
     parameters: DiagnosticsParams,
 
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, signal) {
       const filePath = params.path.replace(/^@/, "");
 
-      // Workspace-wide mode
       if (filePath === "*" || filePath === "") {
         return executeWorkspaceDiagnostics(manager);
       }
-      const client = await manager.getClientForFile(filePath).catch(() => null);
+      // The model asked, so wait for a starting server and for an answer about the current content.
+      const deadline = Date.now() + DIAGNOSTIC_TOOL_WAIT_MS;
+      const client = await beforeDeadline(manager.waitForClientForFile(filePath).catch(() => null), deadline, signal);
+      if (!client) return withoutTypeCheck(filePath, manager.getUnavailableReason(filePath).replace(/\.$/, ""));
 
-      if (client) {
-        // LSP path
-        const uri = manager.getFileUri(filePath);
-        const diagnostics = client.getDiagnostics(uri);
+      const uri = manager.getFileUri(filePath);
+      let result: SentDiagnostics | undefined;
+      do {
+        await syncFile(filePath);
+        result = await beforeDeadline(client.diagnosticsForSentVersion(uri), deadline, signal);
+        // Superseded: the file changed or was closed while waiting, so ask again about its new content.
+      } while (result?.kind === "superseded" && Date.now() < deadline && !signal?.aborted);
 
-        if (diagnostics.length === 0) {
-          return { content: [{ type: "text", text: "No diagnostics (clean)." }], details: { count: 0 } };
+      if (result?.kind === "ready") {
+        if (result.diagnostics.length === 0) {
+          return { content: [{ type: "text", text: "No diagnostics (clean)." }], details: { count: 0, typeChecked: true } };
         }
-
-        const sorted = [...diagnostics].sort((a, b) => (a.severity ?? 99) - (b.severity ?? 99));
         const relPath = relative(manager.resolvePath("."), manager.resolvePath(filePath));
-        const lines = sorted.map((d) => formatDiagnostic(d, relPath));
-        const output = lines.join("\n");
-
-        const errors = sorted.filter((d) => d.severity === DiagnosticSeverity.Error).length;
-        const warnings = sorted.filter((d) => d.severity === DiagnosticSeverity.Warning).length;
-        const other = sorted.length - errors - warnings;
-
-        const summary = [
-          errors > 0 ? `${errors} error(s)` : null,
-          warnings > 0 ? `${warnings} warning(s)` : null,
-          other > 0 ? `${other} other` : null,
-        ].filter(Boolean).join(", ");
-
-        const truncation = truncateHead(output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
-        let resultText = `${summary}\n\n${truncation.content}`;
-        if (truncation.truncated) {
-          resultText += `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} diagnostics]`;
-        }
-
-        return {
-          content: [{ type: "text", text: resultText }],
-          details: { count: sorted.length, errors, warnings },
-        };
+        const { text, errors, warnings } = formatDiagnostics(result.diagnostics, relPath);
+        return { content: [{ type: "text", text }], details: { count: result.diagnostics.length, errors, warnings, typeChecked: true } };
       }
-
-      // Tree-sitter fallback: report syntax errors
-      if (treeSitter) {
-        const provider = resolveProvider(filePath, manager, treeSitter);
-        if (provider.type === "tree-sitter") {
-          try {
-            const absPath = manager.resolvePath(filePath);
-            const content = await readFile(absPath, "utf-8");
-            const tree = await treeSitter.parse(absPath, content);
-            if (tree) {
-              const syntaxErrors = getSyntaxErrors(tree);
-              if (syntaxErrors.length === 0) {
-                return { content: [{ type: "text", text: "No syntax errors detected. [tree-sitter — syntax only, no type checking]" }], details: { count: 0 } };
-              }
-              const relPath = relative(manager.resolvePath("."), absPath);
-              const lines = syntaxErrors.map((e) =>
-                `${relPath}:${e.line + 1}:${e.character + 1} error: ${e.message}`
-              );
-              const output = lines.join("\n");
-              const truncation = truncateHead(output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
-              let resultText = `${syntaxErrors.length} syntax error(s) [tree-sitter — syntax only, no type checking]\n\n${truncation.content}`;
-              if (truncation.truncated) {
-                resultText += `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} diagnostics]`;
-              }
-              return {
-                content: [{ type: "text", text: resultText }],
-                details: { count: syntaxErrors.length, errors: syntaxErrors.length },
-              };
-            }
-          } catch { /* fall through */ }
-        }
-      }
-
-      return {
-        content: [{ type: "text", text: manager.getUnavailableReason(filePath) }],
-        details: { count: 0 },
-      };
+      if (result?.kind === "unavailable") return withoutTypeCheck(filePath, result.reason, client.getDiagnostics(uri));
+      return withoutTypeCheck(
+        filePath,
+        `the language server gave no answer for its current content within ${DIAGNOSTIC_TOOL_WAIT_MS / 1000} s`,
+      );
     },
 
     renderCall(args, theme) {
@@ -159,6 +185,9 @@ export function createDiagnosticsTool(
     renderResult(result, { expanded, isPartial }, theme) {
       if (isPartial) return new Text(theme.fg("warning", "Checking..."), 0, 0);
       const details = result.details;
+      if (details?.typeChecked === false && details.count === 0) {
+        return new Text(theme.fg("warning", "Type check did not run"), 0, 0);
+      }
       if (!details || details.count === 0) {
         return new Text(theme.fg("success", "✓ No diagnostics"), 0, 0);
       }

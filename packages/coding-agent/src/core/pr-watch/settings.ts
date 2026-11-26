@@ -12,6 +12,8 @@ export function readPrWatchDuration(agentDir: string): number {
 			validPrWatchDuration(value.prWatchDurationMs)
 		)
 			return value.prWatchDurationMs;
-	} catch {}
+	} catch {
+		// Missing or unparsable settings.json means the default; SettingsManager reports parse errors.
+	}
 	return PR_WATCH_DEFAULT_DURATION_MS;
 }

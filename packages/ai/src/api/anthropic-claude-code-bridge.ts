@@ -1,14 +1,16 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
-import { CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
+import { CLAUDE_CODE_HISTORY_REPLAYED, CLAUDE_CODE_UPDATE_REQUIRED } from "../auth/anthropic-route.ts";
 import type { ExternalClaudeCodeCredential } from "../auth/types.ts";
 import { registerConversationCleanup, registerSessionResourceCleanup } from "../session-resources.ts";
 import type { Api, Context, Model, SimpleStreamOptions, StreamOptions } from "../types.ts";
-import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { removeOldClaudeCodeVersions } from "../utils/claude-code-release.ts";
+import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
+import { type AssistantMessageEventStream, createAssistantMessageEventStream } from "../utils/event-stream.ts";
 import { stream as streamMessages, streamSimple as streamSimpleMessages } from "./anthropic-messages.ts";
 import { ClaudeCodeLoopback, type ClaudeCodeTool } from "./claude-code-loopback.ts";
 import {
@@ -33,6 +35,7 @@ const SUPPORTED_PARAMS: ReadonlySet<string> = new Set([
 	"output_config",
 	"tool_choice",
 ]);
+const CLAUDE_MODEL_ID = /^claude-[a-z0-9.-]+(\[1m\])?$/;
 const USER_BLOCKS: ReadonlySet<unknown> = new Set(["text", "image", "document", "tool_result"]);
 const ASSISTANT_BLOCKS: ReadonlySet<unknown> = new Set(["text", "thinking", "redacted_thinking", "tool_use"]);
 const REQUEST_ENV = {
@@ -88,6 +91,8 @@ const HISTORY_MARKER = { type: "ephemeral", ttl: "1h" } as const;
  */
 interface ClaudeCodeRequest {
 	route: string;
+	/** Whether the saved login lists the model. */
+	listed: boolean;
 	system: string;
 	frames: Frame[];
 	tools: ClaudeCodeTool[];
@@ -100,13 +105,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Renames a tool_result's tool_reference entries, or drops one when `rename` returns undefined. The API
+ * rejects a reference to a tool the request does not declare as deferred.
+ */
+function mapToolReferences(block: Block, rename: (name: string) => string | undefined): Block {
+	if (block.type !== "tool_result" || !Array.isArray(block.content)) return block;
+	const content = block.content.flatMap((entry: unknown) => {
+		if (!isRecord(entry) || entry.type !== "tool_reference" || typeof entry.tool_name !== "string") return [entry];
+		const name = rename(entry.tool_name);
+		return name ? [{ ...entry, tool_name: name }] : [];
+	});
+	if (content.length) return { ...block, content };
+	// The tool's output already follows as a sibling text block, and tool_result content is optional.
+	const { content: _dropped, ...rest } = block;
+	return rest;
+}
+
+/** Claude Code knows lunR's tools by their MCP names. A tool the bridge left out for its name loses its reference. */
+const prefixedToolName = (name: string) => (TOOL_NAME.test(name) ? `${TOOL_PREFIX}${name}` : undefined);
+
 function contentBlocks(content: unknown, allowed: ReadonlySet<unknown>): Block[] {
 	if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
 	if (!Array.isArray(content)) throw new Error("Invalid Claude Code message content");
 	return content.map((block) => {
 		if (!isRecord(block) || !allowed.has(block.type))
 			throw new Error(`Claude Code subscription does not support ${isRecord(block) ? block.type : "this"} content`);
-		return block.type === "tool_use" ? { ...block, name: `${TOOL_PREFIX}${block.name}` } : block;
+		if (block.type === "tool_use") return { ...block, name: `${TOOL_PREFIX}${block.name}` };
+		return mapToolReferences(block, prefixedToolName);
 	});
 }
 
@@ -164,19 +190,29 @@ function queryFrame(history: readonly Frame[]): Frame {
 }
 
 /**
- * Validates the request lunR's Messages implementation built and maps it onto Claude Code's inputs, with the
- * history as stdin frames (`oneShotRequest` moves it into the body). The route is the one setup saved for
- * the model, so Claude Code gets exactly the variant discovery chose.
+ * Validates the request lunR's Messages implementation built and maps it onto Claude Code's inputs. The
+ * route is the one setup saved for the model, so Claude Code gets exactly the variant discovery chose. The
+ * history goes in the body when the settings JSON fits `limit` (the settings file's for a cold process, the
+ * control request's for a spare) and is replayed through stdin otherwise.
  */
-function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredential): ClaudeCodeRequest {
+function claudeCodeRequest(
+	body: unknown,
+	connection: ExternalClaudeCodeCredential,
+	limit = SETTINGS_LIMIT,
+): ClaudeCodeRequest {
 	if (!isRecord(body) || typeof body.model !== "string" || !Array.isArray(body.messages))
 		throw new Error("Invalid Claude Code request");
 	const unsupported = Object.keys(body).filter((key) => !SUPPORTED_PARAMS.has(key));
 	if (unsupported.length) throw new Error(`Claude Code subscription does not support ${unsupported.join(", ")}`);
 	if (body.tool_choice !== undefined && !(isRecord(body.tool_choice) && body.tool_choice.type === "auto"))
 		throw new Error("Claude Code subscription does not support forced tool choice");
-	const route = connection.models?.find((model) => model.id === body.model)?.route;
-	if (!route) throw new Error(`Claude Code ${body.model} is not available through this subscription connection`);
+	// A saved route keeps the variant setup chose. A Claude id the saved login does not list, such as a model
+	// newer than the login, goes to Claude Code as is; lunR only builds requests for ids its catalog or
+	// models.json knows, and Anthropic decides whether the plan includes it.
+	const saved = connection.models?.find((model) => model.id === body.model);
+	const route = saved?.route ?? body.model;
+	if (!CLAUDE_MODEL_ID.test(route))
+		throw new Error(`Claude Code ${body.model} is not available through this subscription connection`);
 
 	const system =
 		typeof body.system === "string"
@@ -188,13 +224,16 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 				: "";
 
 	// Claude Code's MCP names cap the length; one long or unusual tool name is left out rather than failing the turn.
-	const tools = (Array.isArray(body.tools) ? body.tools : []).flatMap((tool): ClaudeCodeTool[] =>
+	const listed = (Array.isArray(body.tools) ? body.tools : []).flatMap((tool) =>
 		isRecord(tool) && typeof tool.name === "string" && TOOL_NAME.test(tool.name) && isRecord(tool.input_schema)
 			? [
 					{
-						name: tool.name,
-						description: typeof tool.description === "string" ? tool.description : "",
-						inputSchema: tool.input_schema,
+						tool: {
+							name: tool.name,
+							description: typeof tool.description === "string" ? tool.description : "",
+							inputSchema: tool.input_schema,
+						} satisfies ClaudeCodeTool,
+						deferLoading: tool.defer_loading === true,
 					},
 				]
 			: [],
@@ -205,15 +244,17 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 	const history = historyFrames(body.messages, body.model);
 	const request = {
 		route,
+		listed: !!saved,
 		system,
 		frames: history,
-		tools,
+		tools: listed.map(({ tool }) => tool),
 		maxTokens,
 		extraBody: {
-			tools: tools.map((tool) => ({
+			tools: listed.map(({ tool, deferLoading }) => ({
 				name: `${TOOL_PREFIX}${tool.name}`,
 				description: tool.description,
 				input_schema: tool.inputSchema,
+				...(deferLoading ? { defer_loading: true } : {}),
 			})),
 			...(thinking ? { thinking } : {}),
 			// Claude Code's own clear-thinking context edits are invalid once thinking is disabled.
@@ -222,18 +263,36 @@ function claudeCodeRequest(body: unknown, connection: ExternalClaudeCodeCredenti
 			...(maxTokens ? { max_tokens: maxTokens } : {}),
 		},
 	};
-	return request;
-}
-
-/**
- * The request with lunR's history in the body when its settings JSON fits `limit`, and with the history
- * replayed through stdin otherwise.
- */
-function oneShotRequest(request: ClaudeCodeRequest, limit = SETTINGS_LIMIT): ClaudeCodeRequest {
-	const extraBody = { ...request.extraBody, messages: historyMessages(request.frames) };
-	return Buffer.byteLength(settingsJson(extraBody)) <= limit
-		? { ...request, frames: [queryFrame(request.frames)], extraBody }
-		: request;
+	const extraBody = { ...request.extraBody, messages: historyMessages(history) };
+	if (Buffer.byteLength(settingsJson(extraBody)) <= limit)
+		return { ...request, frames: [queryFrame(history)], extraBody };
+	// Claude Code strips tool_reference blocks from a replayed transcript, which would leave loaded tools
+	// unloaded. The replay drops the references and sends the deferred tools the history loaded or called
+	// as normal tools. Deferred tools it never used stay out, so the model cannot call them unloaded.
+	const used = new Set<unknown>();
+	const frames = history.map((frame) => ({
+		...frame,
+		message: {
+			...frame.message,
+			content: frame.message.content.map((block) => {
+				if (block.type === "tool_use") used.add(block.name);
+				return mapToolReferences(block, (name) => {
+					used.add(name);
+					return undefined;
+				});
+			}),
+		},
+	}));
+	return {
+		...request,
+		frames,
+		extraBody: {
+			...request.extraBody,
+			tools: request.extraBody.tools.flatMap(({ defer_loading, ...tool }) =>
+				!defer_loading || used.has(tool.name) ? [tool] : [],
+			),
+		},
+	};
 }
 
 /** Reads events up to the next `result`, or undefined when Claude Code's output ends first. */
@@ -274,12 +333,16 @@ function apiError(result: ClaudeCodeEvent): { status: number; body: string } | u
 	return { status, body: JSON.stringify(body) };
 }
 
-/** Strips the MCP prefix from a tool call in one stream event and rejects tools lunR did not offer. */
+/**
+ * Strips the MCP prefix from a tool call in one stream event and rejects tools lunR did not offer. A bare
+ * lunR name passes too: the model calls an unloaded tool by the name `load_tools`' catalog shows, and the
+ * agent loop answers that call with a load hint.
+ */
 function renameToolCall(event: Record<string, unknown>, inventory: ReadonlySet<string>): Record<string, unknown> {
 	const block = event.content_block;
 	if (event.type !== "content_block_start" || !isRecord(block) || block.type !== "tool_use") return event;
-	const name = block.name;
-	const tool = typeof name === "string" && name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : "";
+	const name = typeof block.name === "string" ? block.name : "";
+	const tool = name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : name;
 	if (!inventory.has(tool)) throw new Error("Claude Code returned a tool outside lunR's tool list");
 	return { ...event, content_block: { ...block, name: tool } };
 }
@@ -296,6 +359,7 @@ function answerStream(
 	next: () => Promise<ClaudeCodeEvent | undefined>,
 	inventory: ReadonlySet<string>,
 	finish: (graceful?: boolean) => Promise<void>,
+	answered: () => void,
 	/** Told when the answer ends, and whether it stopped for tool use (another request follows). */
 	nextRequest?: NextRequestHooks,
 ): ReadableStream<Uint8Array> {
@@ -335,6 +399,7 @@ function answerStream(
 					controller.close();
 					end(stopReason === "tool_use");
 					await finish();
+					answered();
 				}
 			} catch (error) {
 				controller.error(error);
@@ -357,6 +422,67 @@ function localFailure(message: string): Response {
 	});
 }
 
+/**
+ * Process directories not yet removed (they hold lunR's system prompt and the MCP URL). An exit mid-request
+ * or with a spare waiting skips `finish`, so the exit hook kills waiting spares and removes the directories.
+ */
+const liveDirectories = new Set<string>();
+let exitHookArmed = false;
+function removeOnExit(directory: string): () => void {
+	if (!exitHookArmed) {
+		exitHookArmed = true;
+		process.on("exit", () => {
+			killSpares();
+			for (const path of liveDirectories) rmSync(path, { recursive: true, force: true });
+		});
+	}
+	liveDirectories.add(directory);
+	return () => liveDirectories.delete(directory);
+}
+
+let oldVersionsRemoved = false;
+
+/**
+ * After the first answer this process gets from the saved Claude Code, removes other versions left by a pin
+ * bump. It runs once per process and in the background, so no request waits for it.
+ */
+function removeOldVersionsOnce(command: string): void {
+	if (oldVersionsRemoved) return;
+	oldVersionsRemoved = true;
+	void removeOldClaudeCodeVersions(command).catch(() => {});
+}
+
+/**
+ * The connection whose binary exists. When the in-memory one's binary is gone, another lunR on the profile
+ * logged in with a newer pin and removed the old version, so this reads the saved login once and uses the
+ * version it names.
+ */
+async function currentConnection(connection: ExternalClaudeCodeCredential): Promise<ExternalClaudeCodeCredential> {
+	if (existsSync(connection.command)) return connection;
+	const versions = dirname(dirname(connection.command));
+	if (basename(versions) === "claude-code") {
+		let saved: unknown;
+		try {
+			saved = JSON.parse(await readFile(join(dirname(versions), "auth.json"), "utf8"));
+		} catch {
+			/* Falls through to the missing-binary error. */
+		}
+		const anthropic = isRecord(saved) ? saved.anthropic : undefined;
+		if (isSavedConnection(anthropic) && existsSync(anthropic.command)) return anthropic;
+	}
+	throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
+}
+
+function isSavedConnection(value: unknown): value is ExternalClaudeCodeCredential {
+	return (
+		isRecord(value) &&
+		value.type === "external_claude_code" &&
+		value.version === 3 &&
+		value.manager === "claude-code" &&
+		typeof value.command === "string"
+	);
+}
+
 /** Hooks that start a session's spare once a request has left, and drop it when no request follows. */
 interface NextRequestHooks {
 	start(): void;
@@ -368,6 +494,8 @@ interface ClaudeCodeProcess {
 	child: ChildProcessWithoutNullStreams;
 	loopback: ClaudeCodeLoopback;
 	directory: string;
+	/** Drops the directory from the exit hook's list once it is removed. */
+	forget: () => void;
 	spawnedAt: number;
 }
 
@@ -386,13 +514,12 @@ async function startClaudeCode(
 	if (!existsSync(connection.command))
 		throw new Error("lunR's Claude Code is missing. Run /login anthropic to download it again.");
 	const loopback = await ClaudeCodeLoopback.open(request.tools);
-	sweepOrphanDirectories();
 	// The owner's pid in the name lets a later lunR remove what a killed one left behind.
 	const directory = await mkdtemp(join(tmpdir(), `lunr-claude-code-${process.pid}-`)).catch((error: unknown) => {
 		loopback.close();
 		throw error;
 	});
-	liveDirectories.add(directory);
+	const forget = removeOnExit(directory);
 	try {
 		const file = { encoding: "utf8", mode: 0o600 } as const;
 		await writeFile(join(directory, "system.md"), request.system, file);
@@ -454,62 +581,32 @@ async function startClaudeCode(
 		// A spawn failure (a binary removed meanwhile) arrives as an error event; whoever uses the process sees it
 		// through its own listener or its closed output, so it must not crash lunR here.
 		child.on("error", () => {});
-		return { child, loopback, directory, spawnedAt: Date.now() };
+		return { child, loopback, directory, forget, spawnedAt: Date.now() };
 	} catch (error) {
 		loopback.close();
 		await rm(directory, { recursive: true, force: true }).catch(() => {});
-		liveDirectories.delete(directory);
+		forget();
 		throw error;
 	}
 }
 
 /** Stops a process and releases its endpoint and files. */
-async function discardProcess({ child, loopback, directory }: ClaudeCodeProcess): Promise<void> {
+async function discardProcess({ child, loopback, directory, forget }: ClaudeCodeProcess): Promise<void> {
 	loopback.close();
 	await stopProcessTree(child.pid);
 	// Windows can hold the working directory briefly after the process tree ends.
 	await rm(directory, { recursive: true, force: true }).catch(() => {});
-	liveDirectories.delete(directory);
+	forget();
 }
 
-/**
- * Process directories not yet removed. They hold lunR's system prompt and the MCP URL; an exit skips
- * `discardProcess`, so the exit hook removes them (and kills waiting spares).
- */
-const liveDirectories = new Set<string>();
-process.once("exit", () => {
+/** Kills waiting spares at exit, before `removeOnExit` removes their directories. */
+function killSpares(): void {
 	for (const { process: spare } of spares.values()) {
 		try {
 			if (spare.child.pid) process.kill(-spare.child.pid, "SIGKILL");
 		} catch {
 			/* Already exited. */
 		}
-	}
-	for (const path of liveDirectories) rmSync(path, { recursive: true, force: true });
-});
-
-let swept = false;
-/** Once per lunR process, removes process directories whose owner died without its exit hook (kill -9). */
-function sweepOrphanDirectories(): void {
-	if (swept) return;
-	swept = true;
-	void (async () => {
-		const root = tmpdir();
-		for (const name of await readdir(root)) {
-			const owner = /^lunr-claude-code-(\d+)-/.exec(name)?.[1];
-			if (!owner || Number(owner) === process.pid || isRunning(Number(owner))) continue;
-			await rm(join(root, name), { recursive: true, force: true });
-		}
-	})().catch(() => {});
-}
-
-function isRunning(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		// EPERM: the pid belongs to another user's live process.
-		return isRecord(error) && error.code === "EPERM";
 	}
 }
 
@@ -656,14 +753,27 @@ async function runClaudeCode(
 				);
 			if (!error) throw new Error(stoppedBeforeRequest(first));
 			await finish(true);
+			// Claude Code's own 404 text points at its --model flag, which lunR users do not have. Its result
+			// carries Anthropic's message but not the error type, so a 403 counts as a model refusal only when
+			// the message names the model; any other 403 (a disabled organization, a policy block) keeps it.
+			const refusedModel =
+				error.status === 404 ||
+				(error.status === 403 && typeof first.result === "string" && first.result.includes(request.route));
+			if (!request.listed && refusedModel)
+				return localFailure(
+					`Claude ${request.route} is not available on this subscription, or the saved login predates it. Run /login anthropic to refresh the models it offers.`,
+				);
 			return new Response(error.body, { status: error.status, headers: { "content-type": "application/json" } });
 		}
 		const inventory = new Set(request.tools.map((tool) => tool.name));
 		const next = () => within(nextAnswerEvent(events), "Claude Code request timed out.");
-		return new Response(answerStream(first, next, inventory, finish, nextRequest), {
-			status: 200,
-			headers: { "content-type": "text/event-stream" },
-		});
+		return new Response(
+			answerStream(first, next, inventory, finish, () => removeOldVersionsOnce(connection.command), nextRequest),
+			{
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			},
+		);
 	} catch (error) {
 		await finish();
 		throw error;
@@ -861,41 +971,48 @@ export function claudeCodeFetch(
 	connection: ExternalClaudeCodeCredential,
 	idleMs: number,
 	upstream?: string,
+	/** Called when a request's history is too large for the body and is replayed uncached. */
+	onHistoryReplay?: () => void,
 	sessionId?: string,
 ): (input: string | URL | Request, init?: RequestInit) => Promise<Response> {
 	return async (_input, init) => {
 		const signal = init?.signal ?? undefined;
 		try {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-			const request = claudeCodeRequest(body, connection);
-			const live = sessionId && sparesWork(connection.command) ? sessionId : undefined;
+			// A binary another lunR removed sends the request cold with the re-read login: its spares no longer fit.
+			const current = await currentConnection(connection);
+			const request = claudeCodeRequest(body, current);
+			const live = sessionId && sparesWork(current.command) ? sessionId : undefined;
 			// The spare starts once this request has left, so it never slows this one; it is dropped unless the
 			// answer stops for tool use, after which a tool result and the next request follow.
 			const nextRequest = live
 				? {
-						start: () => void prepareSpare(live, connection, request, upstream).catch(() => {}),
+						start: () => void prepareSpare(live, current, request, upstream).catch(() => {}),
 						end: (toolUse: boolean) => {
 							if (!toolUse) stopSpares(live);
 						},
 					}
 				: undefined;
 			if (live) await startingSpares.get(live)?.catch(() => {});
-			const spare = live ? takeSpare(live, spareKey(connection, request, upstream)) : undefined;
-			const onSpare = spare && oneShotRequest(request, SPARE_BODY_LIMIT);
+			const spare = live ? takeSpare(live, spareKey(current, request, upstream)) : undefined;
+			// A spare gets its body through a control request, which carries up to SPARE_BODY_LIMIT of history.
+			const onSpare =
+				spare && ("messages" in request.extraBody ? request : claudeCodeRequest(body, current, SPARE_BODY_LIMIT));
 			if (spare && onSpare && "messages" in onSpare.extraBody) {
 				try {
-					const response = await runClaudeCode(connection, onSpare, signal, idleMs, upstream, {
+					const response = await runClaudeCode(current, onSpare, signal, idleMs, upstream, {
 						spare,
 						nextRequest,
 					});
-					noteSpare(connection.command, "confirmed");
+					noteSpare(current.command, "confirmed");
 					return response;
 				} catch (error) {
 					if (!(error instanceof SpareFailed)) throw error;
-					noteSpare(connection.command, error.reason);
+					noteSpare(current.command, error.reason);
 				}
 			} else if (spare) void discardProcess(spare);
-			return await runClaudeCode(connection, oneShotRequest(request), signal, idleMs, upstream, { nextRequest });
+			if (!("messages" in request.extraBody)) onHistoryReplay?.();
+			return await runClaudeCode(current, request, signal, idleMs, upstream, { nextRequest });
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			return localFailure(error instanceof Error ? error.message : String(error));
@@ -946,8 +1063,9 @@ function validateOptions(model: Model<Api>, options: StreamOptions | SimpleStrea
 /**
  * Streams one Anthropic turn for a Claude subscription. lunR builds the same Messages request it sends
  * with an API key; the injected client hands it to Claude Code, which authenticates and sends it.
- * Tool references, eager tool input, and sampling stay off because Claude Code manages those parts of
- * its own request. lunR adds no cache markers; the bridge places the history marker itself.
+ * Tool references and deferred tools pass through Claude Code unchanged. Eager tool input and sampling
+ * stay off because Claude Code manages those parts of its own request. lunR adds no cache markers; the
+ * bridge places the history marker itself.
  */
 export function streamClaudeCode(
 	model: Model<"anthropic-messages">,
@@ -962,17 +1080,25 @@ export function streamClaudeCode(
 	if (!connection) throw new Error("Claude Code subscription setup is required. Run /login anthropic.");
 	if (connection.version !== 3) throw new Error(CLAUDE_CODE_UPDATE_REQUIRED);
 	const idleMs = Math.min(300_000, Math.max(1000, options.timeoutMs ?? 180_000));
+	let replayed = false;
 	const client = new Anthropic({
 		// Never sent anywhere: the fetch override replaces HTTP, and Claude Code supplies its own sign-in.
 		apiKey: "claude-code-subscription",
 		maxRetries: 0,
-		fetch: claudeCodeFetch(connection, idleMs, upstream, options.sessionId),
+		fetch: claudeCodeFetch(
+			connection,
+			idleMs,
+			upstream,
+			() => {
+				replayed = true;
+			},
+			options.sessionId,
+		),
 	});
 	const transportModel: Model<"anthropic-messages"> = {
 		...model,
 		compat: {
 			...model.compat,
-			supportsToolReferences: false,
 			supportsEagerToolInputStreaming: false,
 			supportsCacheControlOnTools: false,
 			supportsTemperature: false,
@@ -984,7 +1110,21 @@ export function streamClaudeCode(
 		client,
 		cacheRetention: "none" as const,
 	};
-	return simple
+	const source = simple
 		? streamSimpleMessages(transportModel, context, transportOptions)
 		: streamMessages(transportModel, context, transportOptions);
+	// The final message records an uncached replay, so lunR can tell the user once and show it in /context.
+	const output = createAssistantMessageEventStream();
+	void (async () => {
+		for await (const event of source) {
+			if (replayed && (event.type === "done" || event.type === "error"))
+				appendAssistantMessageDiagnostic(event.type === "done" ? event.message : event.error, {
+					type: CLAUDE_CODE_HISTORY_REPLAYED,
+					timestamp: Date.now(),
+				});
+			output.push(event);
+		}
+		output.end();
+	})();
+	return output;
 }

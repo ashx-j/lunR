@@ -1,8 +1,13 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+	captureSingleOutputSnapshot,
+	outputTargetError,
+	resolveSingleOutput,
+} from "../src/builtin-extensions/pi-subagents/src/runs/shared/single-output.ts";
 import { gateToolCall, resetAllPermissionContexts, setPermissionMode } from "../src/core/permissions.ts";
 import { resolveToCwd } from "../src/core/tools/path-utils.ts";
 
@@ -26,22 +31,45 @@ afterEach(async () => {
 });
 
 describe("protected destinations", () => {
+	it("refuses a subagent's output to a protected target and still writes one in the project", async () => {
+		const settings = join(agentDir, "settings.json");
+		await writeFile(settings, "{}");
+		expect(outputTargetError(settings, profile)).toContain("settings are user-managed");
+		const saved = resolveSingleOutput(settings, "child reply", captureSingleOutputSnapshot(settings), profile);
+		expect(saved.saveError).toContain("settings are user-managed");
+		expect(await readFile(settings, "utf-8")).toBe("{}");
+
+		const report = join(profile, "out", "report.md");
+		expect(outputTargetError(report, profile)).toBeUndefined();
+		expect(resolveSingleOutput(report, "child reply", captureSingleOutputSnapshot(report), profile).savedPath).toBe(
+			report,
+		);
+		expect(await readFile(report, "utf-8")).toBe("child reply");
+	});
+
 	it("blocks all execution-supported representations in writable modes", async () => {
 		for (const mode of ["yolo", "auto"] as const) {
 			setPermissionMode(mode);
 			for (const target of [
 				join(agentDir, "settings.json"),
 				join(agentDir, "install-features.json"),
+				join(agentDir, "auth.json"),
+				join(agentDir, "subscriptions.json"),
 				join(agentDir, "agents", "AGENTS.md"),
 				join(profile, "simple-memory", "memory.md"),
 				join(profile, ".lunr", "settings.json"),
+				join(agentDir, "gateway.json"),
+				join(agentDir, "pairing", "telegram.json"),
+				join(agentDir, "mcp-oauth", "sha256-x", "tokens.json"),
+				join(agentDir, "claude-code", "2.1.310", "claude"),
 			]) {
 				for (const path of [
 					target,
 					`@${target}`,
 					pathToFileURL(target).href,
 					relative(profile, target),
-					`~/${relative(homedir(), target)}`,
+					// Windows has no `~/` form for a target on another drive than the home folder.
+					...(isAbsolute(relative(homedir(), target)) ? [] : [`~/${relative(homedir(), target)}`]),
 					target.replace("agent space", "agent\u202fspace"),
 				]) {
 					expect(resolveToCwd(path, profile)).toBe(target);
@@ -71,6 +99,24 @@ describe("protected destinations", () => {
 			expect((await gateToolCall("write", { path }, profile))?.block, path).toBe(true);
 		}
 		expect(await readFile(settings, "utf8")).toBe("original");
+	});
+
+	it("sees a protected path that became a symlink after an earlier check", async () => {
+		setPermissionMode("yolo");
+		expect(await gateToolCall("write", { path: join(profile, "notes.md") }, profile)).toBeUndefined();
+		// What `git checkout` of a branch with `.lunr -> tools/lunr` does, after the first check ran.
+		await mkdir(join(profile, "tools", "lunr"), { recursive: true });
+		await rm(join(profile, ".lunr"), { recursive: true });
+		await symlink(join("tools", "lunr"), join(profile, ".lunr"), "dir");
+		await mkdir(join(profile, "dotfiles", "agents"), { recursive: true });
+		await rm(join(agentDir, "agents"), { recursive: true });
+		await symlink(join(profile, "dotfiles", "agents"), join(agentDir, "agents"), "dir");
+		for (const path of [
+			join(profile, "tools", "lunr", "settings.json"),
+			join(profile, "dotfiles", "agents", "AGENTS.md"),
+		]) {
+			expect((await gateToolCall("write", { path }, profile))?.block, path).toBe(true);
+		}
 	});
 
 	it("fails closed for an unresolved symlink to a not-yet-created protected file", async () => {

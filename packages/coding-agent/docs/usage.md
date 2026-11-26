@@ -9,7 +9,7 @@ The interface has four main areas:
 - **Startup header** - shortcuts, loaded context files, prompt templates, skills, and extensions
 - **Messages** - user messages, assistant responses, tool calls, tool results, notifications, errors, and extension UI
 - **Editor** - where you type; border color indicates the current thinking level
-- **Footer** - permission mode with plan and goal status, TPS, MCP and LSP status, git branch with changed lines, subscription plan usage, context usage, token totals, and cache hit rate. Most parts can be turned off in `/settings` → Customize. The current model, provider and thinking level are on the editor's border
+- **Footer** - permission mode with plan and goal status, TPS, MCP and LSP status, git branch with changed lines, subscription plan usage, context usage, token totals, and cache hit rate (`cache 99.7%`: the share of the last request's prompt that was read from the provider's prompt cache; it reads `CH99.7%` on a terminal too narrow for the label, chosen once per width so it does not change as the counts grow). Most parts can be turned off in `/settings` → Customize. The current model, provider and thinking level are on the editor's border
 
 The editor can be replaced temporarily by built-in UI such as `/settings` or by custom extension UI. Click a thinking or tool card to expand or collapse that item. Smooth streaming (`smoothStreaming`, default off) is interactive TUI only.
 
@@ -26,7 +26,7 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 | Hidden shell command | `!!command` runs without sending output to the model |
 | External editor | Ctrl+G opens `externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere |
 
-See [Keybindings](keybindings.md) for all shortcuts and customization. Shift+Tab cycles permission mode (`yolo` → `auto` → `read`). Ctrl+O cycles `/tree` filters; it does not expand tool cards. `app.tools.expand` is unbound.
+See [Keybindings](keybindings.md) for all shortcuts and customization. Shift+Tab cycles permission mode (`yolo` → `auto` → `ask` → `read`). Ctrl+O cycles `/tree` filters; it does not expand tool cards. `app.tools.expand` is unbound.
 
 ### Copyable response blocks
 
@@ -66,7 +66,7 @@ Built-in commands:
 | `/fast [on\|off\|status]` | Toggle Fast mode for OpenAI Codex subscriptions only |
 | `/context` | Estimated context-window breakdown |
 | `/plan` | Switch to read-only mode, or `/plan <task>` to plan a task |
-| `/mode` | Set permission mode: `yolo`, `auto`, or `read` |
+| `/mode` | Set permission mode: `yolo`, `auto`, `ask`, or `read` |
 | `/processes` | View and manage background processes started this session |
 | `/rollback` | Undo the last turn's file changes and rewind the conversation. Off by default; turn it on in `/settings` → Rollback |
 | `/help` | Show the commands and keys you need most |
@@ -84,12 +84,14 @@ Built-in commands:
 | `/init` | Generate a starter AGENTS.md for this project |
 | `/compact` | Manually compact the session context |
 | `/resume` | Browse and resume sessions |
+| `/handoff [cancel]` | Mark this session for continuing on your phone through the gateway, or remove the mark |
+| `/reclaim` | Reopen a session here after the phone released it |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
 | `/quit` | Quit lunR |
 
-Hidden commands run when typed but stay out of the `/` list and the command lists sent to RPC and ACP clients: the aliases `/auth`, `/deauth`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo` and `/auto`, `/debug`, the `/thinking` aliases `/effort` and `/reasoning`, and `/websearch`, `/chain-workflows` and `/chain-prompts`, which moved into `/search` and `/chain`. Extensions can hide their own commands with `hidden: true` in `registerCommand`.
+Hidden commands run when typed but stay out of the `/` list and the command lists sent to RPC and ACP clients: the aliases `/auth`, `/deauth`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo`, `/auto` and `/ask`, `/debug`, the `/thinking` aliases `/effort` and `/reasoning`, and `/websearch`, `/chain-workflows` and `/chain-prompts`, which moved into `/search` and `/chain`. Extensions can hide their own commands with `hidden: true` in `registerCommand`.
 
-Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/cron`, `/goal`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/search`. See [Built-in features](features.md).
+Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/cron`, `/goal`, `/run`, `/chain`, `/parallel`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/search`, `/pr-watch`, `/intercom` and `/computer`. See [Built-in features](features.md).
 
 ## Message Queue
 
@@ -200,17 +202,19 @@ See [Packages](packages.md) for package sources and security notes.
 | Flag | Description |
 |------|-------------|
 | default | Interactive mode |
-| `-p`, `--print` | Print response and exit |
+| `-p`, `--print` | Print response and exit. Needs a prompt argument, `@file` or piped stdin |
 | `--mode json` | Output all events as JSON lines; see [JSON mode](json.md) |
 | `--mode rpc` | RPC mode over stdin/stdout; see [RPC mode](rpc.md) |
 | `--mode acp` | Agent Client Protocol for T3 Code and other ACP clients; see [ACP](acp.md) |
 | `--export <in> [out]` | Export a session to HTML |
 
-In print mode, lunR also reads piped stdin and merges it into the initial prompt:
+In print mode, lunR also reads piped stdin and puts it before the initial prompt, separated by a blank line:
 
 ```bash
 cat README.md | lunr -p "Summarize this text"
 ```
+
+lunR waits up to 3 seconds for the first byte of stdin. The wait starts early in startup, so it overlaps the time lunR takes to load. If nothing arrives, it prints a warning and continues without stdin. Once bytes arrive, lunR reads until the writer closes stdin, or until stdin sends nothing for 10 seconds. A program that runs `lunr -p` should close stdin or connect it to `/dev/null` to skip the wait.
 
 ### Model Options
 
@@ -245,7 +249,7 @@ cat README.md | lunr -p "Summarize this text"
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools but keep extension/custom tools enabled |
 | `--no-tools`, `-nt` | Disable all tools |
 
-Built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. Default on: `read`, `bash`, `edit`, `write`. `grep`/`find`/`ls` start off.
+Built-in tools: `read`, `bash`, `bash_job`, `edit`, `write`, `grep`, `find`, `ls`. Default on: `read`, `bash`, `edit`, `write`. `grep`/`find`/`ls` start off. `bash_job` is on whenever `bash` is: `bash` with `run_in_background` starts a job (a dev server, a watcher) and returns its id at once, and `bash_job` reads the job's new output or stops it. The footer lists running jobs. lunR stops them when the session ends. Processes a foreground command starts with `&` keep running after lunR exits, and lunR lists them on exit with the command to kill them.
 
 ### Resource Options
 

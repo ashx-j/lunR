@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { CLAUDE_CODE_HISTORY_REPLAYED_NOTE, claudeCodeHistoryReplayed } from "@earendil-works/pi-ai";
 import {
 	type Api,
 	type AssistantMessage,
@@ -63,7 +64,11 @@ import {
 	NothingToCompactError,
 	parseSkillBlock,
 } from "../../core/agent-session.ts";
-import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
+import {
+	type AgentSessionRuntime,
+	SessionImportFileNotFoundError,
+	SIGNAL_DISPOSE_LIMIT_MS,
+} from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import {
 	CACHE_TTL_MS,
@@ -97,7 +102,7 @@ import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
-import { type ApprovalResponse, registerApprovalHandler } from "../../core/permissions.ts";
+import { type ApprovalRequest, type ApprovalResponse, registerApprovalHandler } from "../../core/permissions.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import {
 	captureTreeChanges,
@@ -128,6 +133,7 @@ import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/subagent-cancellation.ts";
+import { sweepStaleTempFiles } from "../../core/temp-files.ts";
 import { time } from "../../core/timings.ts";
 import { notifyTodosEnabledChanged } from "../../core/todo-settings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
@@ -160,7 +166,16 @@ import { InjectedPromptMessageComponent } from "./components/injected-prompt-mes
 import { formatKeyText, keyDisplayText, keyText } from "./components/keybinding-hints.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import { type AuthSelectorProvider, formatAuthSelectorProviderType } from "./components/oauth-selector.ts";
-import { buildOnboardingOptions, OnboardingComponent, shouldShowOnboarding } from "./components/onboarding.ts";
+import {
+	buildOnboardingOptions,
+	OnboardingComponent,
+	PERMISSION_MODE_OPTIONS,
+	type PermissionModeChoice,
+	permissionModeStepText,
+	shouldAskPermissionMode,
+	shouldShowOnboarding,
+	WELCOME_TEXT,
+} from "./components/onboarding.ts";
 import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
@@ -175,7 +190,7 @@ import {
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
 import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/thinking-summary.ts";
-import { applySameToolGrouping, ToolExecutionComponent } from "./components/tool-execution.ts";
+import { applySameToolGrouping, applyToolRunSpacing, ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { renderUsageBox } from "./components/usage-view.ts";
@@ -230,6 +245,7 @@ import {
 	type SmoothStreamingOptions,
 	sliceMessageContent,
 } from "./smooth-streaming.ts";
+import { logStrayOutput } from "./stray-output.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -458,6 +474,8 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	// The card whose tool_execution_start came last; ask mode's approval dialog belongs to it.
+	private lastStartedTool: ToolExecutionComponent | undefined;
 	private browserActivityComponent: ToolExecutionComponent | undefined;
 
 	// Tool output expansion state
@@ -479,6 +497,9 @@ export class InteractiveMode {
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
 	private signalCleanupHandlers: Array<() => void> = [];
+
+	// True after this launch showed onboarding, until the permission mode step has run.
+	private onboardingShown = false;
 
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
@@ -526,6 +547,8 @@ export class InteractiveMode {
 
 	// Header container that holds the built-in or custom header
 	private headerContainer: Container;
+	// Startup warnings that finish after the first frame join the startup output here (see showStartupNotice).
+	private readonly startupNotices = new Container();
 
 	// Built-in header (logo + keybinding hints)
 	private builtInHeader: Component | undefined = undefined;
@@ -589,7 +612,7 @@ export class InteractiveMode {
 			this.permissions.syncPermissionModeEffects(mode);
 		});
 		this.version = VERSION;
-		this.ui = options.startupView?.ui ?? new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
+		this.ui = options.startupView?.ui ?? this.createTui();
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.ui.setFocusReporting(this.settingsManager.getAttentionNotification() !== "off");
 
@@ -848,8 +871,8 @@ export class InteractiveMode {
 		// Plans and large subagent launches use distinct approval dialogs.
 		registerApprovalHandler(async (req) => {
 			this.notifyAttention("input");
-			if (req.kind === "large-subagent-launch") {
-				return this.showLargeSubagentLaunchApprovalDialog(req);
+			if (req.kind === "large-subagent-launch" || req.kind === "tool") {
+				return this.showToolApprovalDialog(req);
 			}
 			// Approval restores writing access before the model's next tool call.
 			if (req.kind === "plan") {
@@ -918,6 +941,7 @@ export class InteractiveMode {
 			else this.showStatus(diagnostic.message);
 		}
 		for (const warning of this.options.deprecationWarnings ?? []) this.showWarning(warning);
+		this.chatContainer.addChild(this.startupNotices);
 		this.deferredBuiltinAttachPromise = this.attachDeferredBuiltinExtensions();
 		this.startupReadyPromise = this.deferredBuiltinAttachPromise.then(() => {
 			if (!this.isInitialized) return;
@@ -1045,11 +1069,12 @@ export class InteractiveMode {
 		}
 
 		await this.waitForStartupReady();
+		void sweepStaleTempFiles();
 
 		// Check tmux keyboard setup asynchronously
 		this.checkTmuxKeyboardSetup().then((warning) => {
 			if (warning) {
-				this.showWarning(warning);
+				this.showStartupNotice("warning", warning);
 			}
 		});
 
@@ -1057,19 +1082,17 @@ export class InteractiveMode {
 		const { migratedProviders, modelFallbackMessage, initialMessage, initialImages, initialMessages } = this.options;
 
 		if (migratedProviders && migratedProviders.length > 0) {
-			this.showWarning(`Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
+			this.showStartupNotice("warning", `Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
 		}
 
 		const modelsJsonError = this.session.modelRuntime.getError();
 		if (modelsJsonError) {
-			this.showError(`models.json error: ${modelsJsonError}`);
+			this.showStartupNotice("error", `models.json error: ${modelsJsonError}`);
 		}
 
 		void this.showModelSetupGuidance(modelFallbackMessage).catch((error: unknown) =>
-			this.showError(error instanceof Error ? error.message : String(error)),
+			this.showStartupNotice("error", error instanceof Error ? error.message : String(error)),
 		);
-
-		void this.maybeWarnAboutAnthropicSubscriptionAuth();
 
 		// Process initial messages
 		if (initialMessage) {
@@ -1121,10 +1144,11 @@ export class InteractiveMode {
 	private async showModelSetupGuidance(modelFallbackMessage: string | undefined): Promise<void> {
 		const credentials = await this.session.modelRuntime.listCredentials();
 		if (!shouldShowOnboarding(credentials, this.session.model)) {
-			if (modelFallbackMessage) this.showWarning(modelFallbackMessage);
+			if (modelFallbackMessage) this.showStartupNotice("warning", modelFallbackMessage);
 			else await this.warnIfModelHasNoAuth();
 			return;
 		}
+		this.onboardingShown = true;
 		await this.waitForDeferredBuiltins();
 		await this.session.modelRuntime.getAvailable();
 		// Leave a selector or dialog the user opened in the meantime (such as /login) alone.
@@ -1138,7 +1162,8 @@ export class InteractiveMode {
 		if (!model || isUnknownModel(model)) return;
 		const runtime = this.session.modelRuntime;
 		if (runtime.hasConfiguredAuth(model.provider) || (await runtime.checkAuth(model.provider))) return;
-		this.showWarning(
+		this.showStartupNotice(
+			"warning",
 			`${model.provider} has no API key or login. Run /login ${model.provider}, or /model to pick another model.`,
 		);
 	}
@@ -1147,7 +1172,7 @@ export class InteractiveMode {
 	private showOnboarding(): void {
 		const options = buildOnboardingOptions(getLoginProviderOptions(this.session.modelRuntime));
 		this.showSelector((done) => {
-			const onboarding = new OnboardingComponent(options, (choice) => {
+			const onboarding = new OnboardingComponent(options, WELCOME_TEXT, (choice) => {
 				done();
 				if (choice === "skip") {
 					this.showStatus("No provider yet. Run /login when you are ready.");
@@ -1161,6 +1186,42 @@ export class InteractiveMode {
 			});
 			return { component: onboarding, focus: onboarding };
 		});
+	}
+
+	/**
+	 * `onLoginSucceeded`: after the first successful login on a launch that showed onboarding, asks once
+	 * for the default permission mode and saves it once the session is in that mode (for auto, after the
+	 * review model picker). Escape saves nothing and keeps the current mode; the next launch has a
+	 * login, so it is not asked again. A failed write shows a warning.
+	 */
+	private async askDefaultPermissionModeAfterFirstLogin(): Promise<void> {
+		const savedDefault = this.settingsManager.getGlobalSettings().defaultPermissionMode;
+		if (!shouldAskPermissionMode({ onboardingShown: this.onboardingShown, savedDefault })) return;
+		this.onboardingShown = false;
+		const choice = await new Promise<PermissionModeChoice>((resolve) => {
+			this.showSelector((done) => {
+				const step = new OnboardingComponent<PermissionModeChoice>(
+					PERMISSION_MODE_OPTIONS,
+					permissionModeStepText(this.session.permissionMode),
+					(picked) => {
+						done();
+						resolve(picked);
+					},
+				);
+				return { component: step, focus: step };
+			});
+		});
+		if (choice === "keep") return;
+		// Auto may open the review model picker first; save only a mode the session actually entered.
+		const applied = await new Promise<boolean>((resolve) =>
+			this.permissions.applyPermissionMode(choice, { onSettled: resolve }),
+		);
+		if (!applied) return;
+		this.settingsManager.setDefaultPermissionMode(choice);
+		await this.settingsManager.flush();
+		for (const { error } of this.settingsManager.drainErrors()) {
+			this.showWarning(`Couldn't save ${choice} as the default mode: ${error.message}`);
+		}
 	}
 
 	/** After a login, opens /model when the session still has no model and there is one to pick. */
@@ -2234,6 +2295,13 @@ export class InteractiveMode {
 		});
 	}
 
+	/** The TUI for a launch without a startup view, which already made its own the same way. */
+	private createTui(): TUI {
+		const terminal = new ProcessTerminal();
+		terminal.setStrayOutputHandler(logStrayOutput);
+		return new TUI(terminal, this.settingsManager.getShowHardwareCursor());
+	}
+
 	/**
 	 * Show an extension error in the UI.
 	 */
@@ -2550,7 +2618,7 @@ export class InteractiveMode {
 				text &&
 				!this.runtimeHost.isDetached &&
 				(!text.startsWith("/") ||
-					/^\/(?:model|thinking|effort|reasoning|mode|plan|read|yolo|auto|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
+					/^\/(?:model|thinking|effort|reasoning|mode|plan|read|yolo|auto|ask|name|title|undo|edit|redo|tree|compact)(?:\s|$)/.test(
 						text,
 					))
 			) {
@@ -2767,9 +2835,27 @@ export class InteractiveMode {
 	}
 
 	private subscribeToAgent(): void {
-		this.unsubscribe = this.session.subscribe(async (event) => {
+		const offEvents = this.session.subscribe(async (event) => {
 			await this.handleEvent(event);
 		});
+		// Footer list of running `run_in_background` jobs; the session stops them when it ends.
+		const jobs = this.session.bashJobs;
+		const showJobs = () => {
+			const running = jobs.running().map((job) => {
+				const command = job.command.trim().split("\n")[0] ?? "";
+				return `${job.id} ${command.length > 32 ? `${command.slice(0, 32)}…` : command}`;
+			});
+			this.setExtensionStatus(
+				"bash-jobs",
+				running.length > 0 ? theme.fg("dim", `jobs: ${running.join(", ")}`) : undefined,
+			);
+		};
+		const offJobs = jobs.subscribe(showJobs);
+		showJobs();
+		this.unsubscribe = () => {
+			offEvents();
+			offJobs();
+		};
 	}
 
 	private async handleEvent(event: AgentSessionEvent): Promise<void> {
@@ -2925,6 +3011,7 @@ export class InteractiveMode {
 					updateThinkingRunTimings(this.thinkingRunTimings, this.streamingMessage.content, Date.now(), true);
 					this.thinkingTimingsByMessage.set(this.streamingMessage, this.thinkingRunTimings);
 					this.streamingComponent.updateContent(this.streamingMessage);
+					this.maybeShowHistoryReplayNotice(this.streamingMessage);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
@@ -2970,6 +3057,8 @@ export class InteractiveMode {
 					component.beginNextExecution(event.toolCallId, event.args);
 				}
 				component.markExecutionStarted();
+				// The agent loop asks for a call's approval right after its start event.
+				this.lastStartedTool = component;
 				this.ui.requestRender();
 				break;
 			}
@@ -3406,6 +3495,20 @@ export class InteractiveMode {
 		if (miss) this.addCacheMissNotice(miss);
 	}
 
+	/** Warns when a Claude subscription session first grows past what Claude Code can send prompt-cached. */
+	private maybeShowHistoryReplayNotice(message: AssistantMessage): void {
+		if (!claudeCodeHistoryReplayed(message)) return;
+		// Entries don't contain `message` yet: message_end fires before persistence.
+		const entries = this.sessionManager.getEntries();
+		for (let index = entries.length - 1; index >= 0; index--) {
+			const entry = entries[index];
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			if (claudeCodeHistoryReplayed(entry.message)) return;
+			break;
+		}
+		this.showWarning(CLAUDE_CODE_HISTORY_REPLAYED_NOTE);
+	}
+
 	private addCacheMissNotice(miss: CacheMiss): void {
 		if (miss.missedTokens < 20_000 && miss.missedCost < 0.1) return;
 
@@ -3544,12 +3647,24 @@ export class InteractiveMode {
 			// terminal. If the terminal is gone, the restore writes below emit EIO,
 			// which the stdout/stderr error handler turns into emergencyTerminalExit;
 			// the render loop is already idle, so this cannot hot-spin (see #4144).
+			const disposeLimit = setTimeout(() => {
+				try {
+					processRegistry.killAll();
+				} catch {
+					// Exit goes on even if a tracked process cannot be signalled.
+				}
+				this.stop();
+				process.exit(0);
+			}, SIGNAL_DISPOSE_LIMIT_MS);
 			await this.runtimeHost.dispose();
+			clearTimeout(disposeLimit);
 			this.themeController.disableAutoSync();
 			await this.ui.terminal.drainInput(1000);
 			try {
 				processRegistry.killAll();
-			} catch {}
+			} catch {
+				// Shutdown continues even if a tracked process cannot be signalled.
+			}
 			this.stop();
 			process.exit(0);
 		}
@@ -3586,7 +3701,9 @@ export class InteractiveMode {
 		killTrackedDetachedChildren();
 		try {
 			processRegistry.killAll();
-		} catch {}
+		} catch {
+			// The terminal is gone; nothing can report this, and exit must go on.
+		}
 		// The terminal is gone. Do not run normal shutdown because TUI and
 		// extension cleanup can write restore sequences and re-trigger EIO.
 		process.exit(129);
@@ -3610,13 +3727,19 @@ export class InteractiveMode {
 		this.isShuttingDown = true;
 		try {
 			this.unregisterSignalHandlers();
-		} catch {}
+		} catch {
+			// Crash path: keep going so the original error is printed.
+		}
 		try {
 			killTrackedDetachedChildren();
-		} catch {}
+		} catch {
+			// Crash path: keep going so the original error is printed.
+		}
 		try {
 			this.ui.stop();
-		} catch {}
+		} catch {
+			// Crash path: keep going so the original error is printed.
+		}
 		console.error(`${APP_NAME} exiting due to uncaughtException:`);
 		console.error(error);
 		process.exit(1);
@@ -3815,7 +3938,6 @@ export class InteractiveMode {
 			} else {
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				void this.maybeWarnAboutAnthropicSubscriptionAuth(result.model);
 			}
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
@@ -3882,10 +4004,25 @@ export class InteractiveMode {
 	// lunr: consecutive same-tool grouping — a tool component appended right after
 	// another component for the SAME tool becomes a group continuation (no top
 	// spacer / top pad); the previous card drops its bottom pad. Mixed neighbors
-	// and singletons keep Box(1, 1). Adjacency is decided at add time only.
+	// and singletons keep Box(1, 1). A same-tool card from the turn before, past an empty
+	// assistant message, only loses the padding between them (applyToolRunSpacing).
+	// Adjacency is decided at add time only.
 	private addToolComponentToChat(component: ToolExecutionComponent): void {
-		const last = this.chatContainer.children[this.chatContainer.children.length - 1];
-		applySameToolGrouping(last instanceof ToolExecutionComponent ? last : undefined, component);
+		const children = this.chatContainer.children;
+		const last = children[children.length - 1];
+		if (last instanceof ToolExecutionComponent) {
+			applySameToolGrouping(last, component);
+		} else {
+			// A tool-only assistant message renders nothing, so the card before it is the visible neighbor.
+			const previous = children[children.length - 2];
+			if (
+				last instanceof AssistantMessageComponent &&
+				previous instanceof ToolExecutionComponent &&
+				last.render(this.ui.terminal.columns).length === 0
+			) {
+				applyToolRunSpacing(previous, component);
+			}
+		}
 		this.chatContainer.addChild(component);
 	}
 
@@ -3990,6 +4127,22 @@ export class InteractiveMode {
 
 	showWarning(warningMessage: string): void {
 		this.showNotice("warning", `Warning: ${warningMessage}`);
+	}
+
+	/**
+	 * Shows a startup check's result at the end of the startup output, above the first prompt, so a
+	 * check that finishes late (the tmux probe, auth lookups) never lands between messages and tool
+	 * cards. After /new, /resume or /tree cleared the chat it falls back to a normal notice.
+	 */
+	private showStartupNotice(kind: "error" | "warning", message: string): void {
+		const notice = `${kind === "error" ? "Error" : "Warning"}: ${message}`;
+		if (!this.chatContainer.children.includes(this.startupNotices)) {
+			this.showNotice(kind, notice);
+			return;
+		}
+		this.startupNotices.addChild(new Spacer(1));
+		this.startupNotices.addChild(new Text(theme.fg(kind, notice), 1, 0));
+		this.ui.requestRender();
 	}
 
 	// An error or warning identical to the chat's last entry bumps a " (×N)" count on that entry
@@ -4172,8 +4325,9 @@ export class InteractiveMode {
 		};
 
 		try {
-			if (options?.willRetry) {
-				// When retry is pending, queue messages for the retry turn
+			// A retry is pending, or a compaction between tool turns ended (failed or cancelled included)
+			// while the run goes on: queue the messages into that run instead of starting a new prompt.
+			if (options?.willRetry || this.session.isStreaming) {
 				for (const message of queuedMessages) {
 					if (this.isExtensionCommand(message.text)) {
 						await this.promptAfterDeferredBuiltins(message.text);
@@ -4267,6 +4421,9 @@ export class InteractiveMode {
 			const selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
+					compactionCeilingTokens: this.settingsManager.getCompactionCeilingTokens(),
+					compactionCeilingFloorTokens: this.session.getCompactionCeilingFloor().floor,
+					compactionCeilingKeptTokens: this.session.getCompactionCeilingFloor().keptTokens,
 					showImages: this.settingsManager.getShowImages(),
 					imageWidthCells: this.settingsManager.getImageWidthCells(),
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
@@ -4319,6 +4476,7 @@ export class InteractiveMode {
 					memoryEnabled: this.settingsManager.getMemoryEnabled(),
 					memoryCharCap: this.settingsManager.getMemoryCharCap(),
 					todosEnabled: this.settingsManager.getTodosEnabled(),
+					deferredToolsEnabled: this.settingsManager.getDeferredToolsEnabled(),
 					searchCurator: getSearchCuratorSetting(),
 					// lunr: TUI customize settings
 					footerMcp: this.settingsManager.getFooterMcp(),
@@ -4346,6 +4504,9 @@ export class InteractiveMode {
 					onAutoCompactChange: (enabled) => {
 						this.session.setAutoCompactionEnabled(enabled);
 						this.footer.setAutoCompactEnabled(enabled);
+					},
+					onCompactionCeilingChange: (ceilingTokens) => {
+						this.settingsManager.setCompactionCeilingTokens(ceilingTokens);
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
@@ -4567,6 +4728,10 @@ export class InteractiveMode {
 						this.session.refreshToolRegistry();
 						this.showStatus(`Agent memory: ${enabled ? "on" : "off"}`);
 					},
+					// lunr: saved only; a running session keeps its tool list.
+					onDeferredToolsEnabledChange: (enabled) => {
+						this.settingsManager.setDeferredToolsEnabled(enabled);
+					},
 					onTodosEnabledChange: (enabled) => {
 						this.settingsManager.setTodosEnabled(enabled);
 						notifyTodosEnabledChanged(enabled);
@@ -4729,13 +4894,10 @@ export class InteractiveMode {
 		this.footerDataProvider.setAvailableProviderCount(uniqueProviders.size);
 	}
 
-	private async maybeWarnAboutAnthropicSubscriptionAuth(
-		model: Model<Api> | undefined = this.session.model,
-	): Promise<void> {
-		if (this.anthropicSubscriptionWarningShown) {
-			return;
-		}
-		if (!model || model.provider !== "anthropic") {
+	// Called only after a login to `providerId`, once per session: a notice on every launch or model
+	// switch was noise. `lunr doctor` repeats it for a Claude Code login.
+	private async maybeWarnAboutAnthropicSubscriptionAuth(providerId: string): Promise<void> {
+		if (this.anthropicSubscriptionWarningShown || providerId !== "anthropic") {
 			return;
 		}
 
@@ -4745,7 +4907,7 @@ export class InteractiveMode {
 				this.showWarning(ANTHROPIC_SUBSCRIPTION_AUTH_WARNING);
 				return;
 			}
-			const apiKey = (await this.session.modelRuntime.getAuth(model.provider))?.auth.apiKey;
+			const apiKey = (await this.session.modelRuntime.getAuth(providerId))?.auth.apiKey;
 			if (!isAnthropicSubscriptionAuthKey(apiKey)) {
 				return;
 			}
@@ -5114,10 +5276,12 @@ export class InteractiveMode {
 			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
 			showExtensionInput: (title, placeholder) => this.showExtensionInput(title, placeholder),
 			requestRender: () => this.ui.requestRender(),
-			maybeWarnAboutAnthropicSubscriptionAuth: (model) => this.maybeWarnAboutAnthropicSubscriptionAuth(model),
+			maybeWarnAboutAnthropicSubscriptionAuth: (providerId) =>
+				this.maybeWarnAboutAnthropicSubscriptionAuth(providerId),
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
+			onLoginSucceeded: () => this.askDefaultPermissionModeAfterFirstLogin(),
 			openModelSelectorIfUnset: () => this.openModelSelectorIfUnset(),
 		};
 	}
@@ -5139,7 +5303,6 @@ export class InteractiveMode {
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
-			maybeWarnAboutAnthropicSubscriptionAuth: (model) => this.maybeWarnAboutAnthropicSubscriptionAuth(model),
 		};
 	}
 
@@ -5886,7 +6049,19 @@ export class InteractiveMode {
 			return;
 		}
 
-		const lines = renderContextBox({ breakdown, model: `${model.provider}/${model.id}` }, this.ui.terminal.columns);
+		const lastReply = [...this.session.messages].reverse().find((message) => message.role === "assistant");
+		const lines = renderContextBox(
+			{
+				breakdown,
+				model: `${model.provider}/${model.id}`,
+				compactionCeiling: this.session.getCompactionCeiling(),
+				notice:
+					lastReply?.role === "assistant" && claudeCodeHistoryReplayed(lastReply)
+						? CLAUDE_CODE_HISTORY_REPLAYED_NOTE
+						: undefined,
+			},
+			this.ui.terminal.columns,
+		);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		this.ui.requestRender();
@@ -5907,26 +6082,41 @@ export class InteractiveMode {
 		if (this.session.isStreaming) this.notifyAttention("input");
 	}
 
-	// Approval dialog for one subagent call launching more than two children.
-	// "Reject with feedback" collects a one-line
+	// Approval dialog for one subagent call launching more than two children, and for ask mode's
+	// question before one call (`title`; no session answer when `allowSession` is false; "Always
+	// allow" when the request carries a `rule`). "Reject with feedback" collects a one-line
 	// reason that becomes the block reason the model sees, so it can adjust the plan.
-	private async showLargeSubagentLaunchApprovalDialog(req: {
-		toolName: string;
-		action: string;
-		detail: string;
-	}): Promise<ApprovalResponse> {
+	private async showToolApprovalDialog(req: ApprovalRequest): Promise<ApprovalResponse> {
+		// Ask mode's question belongs to the call that started last. Its card leaves the time spent
+		// deciding out of "Took" and says "rejected" in words.
+		const card = req.kind === "tool" ? this.lastStartedTool : undefined;
+		card?.beginApproval();
+		const response = await this.askToolApproval(req);
+		card?.endApproval((typeof response === "string" ? response : response.decision) !== "reject");
+		return response;
+	}
+
+	private askToolApproval(req: ApprovalRequest): Promise<ApprovalResponse> {
+		const always = req.rule ? `Always allow in every project (saves ${req.rule} to global settings)` : undefined;
 		return new Promise((resolve) => {
 			this.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
-					"Approve large subagent launch?",
-					["Approve once", "Approve for this session", "Reject", "Reject with feedback"],
+					req.title ?? "Approve large subagent launch?",
+					[
+						"Approve once",
+						...(req.allowSession === false ? [] : ["Approve for this session"]),
+						...(always ? [always] : []),
+						"Reject",
+						"Reject with feedback",
+					],
 					(option) => {
 						done();
 						if (option === "Approve once") resolve("once");
 						else if (option === "Approve for this session") resolve("session");
+						else if (option === always) resolve("always");
 						else if (option === "Reject with feedback") {
 							void this.showExtensionInput(
-								"Reject large subagent launch",
+								req.kind === "tool" ? `Reject ${req.toolName}` : "Reject large subagent launch",
 								"feedback for the agent (optional)",
 							).then((feedback) => {
 								const trimmed = feedback?.trim();

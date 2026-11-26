@@ -1,6 +1,10 @@
 import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
-import { formatGroupedCall, GroupedCallText, toolGroupTree } from "../src/core/tools/render-utils.ts";
+import {
+	formatGroupedCall,
+	GroupedCallText,
+	toolGroupTree,
+} from "../src/modes/interactive/tool-renderers/render-utils.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 describe("formatGroupedCall", () => {

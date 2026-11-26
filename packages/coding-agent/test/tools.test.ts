@@ -5,7 +5,10 @@ import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
 import { type BashOperations, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
+import { BashJobs, stopLiveJobs } from "../src/core/tools/bash-jobs.ts";
 import { computeEditsDiff } from "../src/core/tools/edit-diff.ts";
+import { createAllTools } from "../src/core/tools/index.ts";
+import { formatSize } from "../src/core/tools/truncate.ts";
 import {
 	createEditTool,
 	createFindTool,
@@ -16,6 +19,7 @@ import {
 } from "../src/index.ts";
 import * as shellModule from "../src/utils/shell.ts";
 
+const windows = process.platform === "win32";
 const readTool = createReadTool(process.cwd());
 const writeTool = createWriteTool(process.cwd());
 const editTool = createEditTool(process.cwd());
@@ -235,6 +239,48 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("definitely not a png");
 			expect(result.content.some((c: any) => c.type === "image")).toBe(false);
 		});
+
+		it("describes a binary file in one line instead of returning its bytes", async () => {
+			const allBytes = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+			const files = {
+				"random.bin": Buffer.from(Array.from({ length: 3000 }, (_, i) => (i * 131 + 7) % 256)),
+				// Mostly text, with one binary stream: only the NUL rule catches it.
+				"doc.pdf": Buffer.concat([
+					Buffer.from("%PDF-1.4\n".repeat(400)),
+					allBytes,
+					Buffer.from("trailer text\n".repeat(400)),
+				]),
+			};
+			for (const [name, bytes] of Object.entries(files)) {
+				const file = join(testDir, name);
+				writeFileSync(file, bytes);
+				const output = getTextOutput(await readTool.execute(`test-call-${name}`, { path: file }));
+				expect(output).toBe(
+					`[${file} is a binary file (${formatSize(bytes.length)}). Its bytes are not shown. Inspect it with bash, for example file or xxd | head.]`,
+				);
+			}
+		});
+
+		it("reads Latin-1 text and UTF-16 files with a BOM as text", async () => {
+			const utf16 = Buffer.from("hello utf16\n", "utf16le");
+			const files = {
+				"latin1.txt": [Buffer.from("café déjà vu\n".repeat(50), "latin1"), "d\uFFFDj\uFFFD vu"],
+				"le.txt": [Buffer.concat([Buffer.from([0xff, 0xfe]), utf16]), "hello utf16"],
+				"be.txt": [Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(utf16).swap16()]), "hello utf16"],
+			} as const;
+			for (const [name, [bytes, expected]] of Object.entries(files)) {
+				const file = join(testDir, name);
+				writeFileSync(file, bytes);
+				const output = getTextOutput(await readTool.execute(`test-call-${name}`, { path: file }));
+				expect(output).toContain(expected);
+			}
+		});
+
+		it("says a directory is a directory and points at ls", async () => {
+			await expect(readTool.execute("test-call-dir", { path: testDir })).rejects.toThrow(
+				`${testDir} is a directory. Use ls to list its contents.`,
+			);
+		});
 	});
 
 	describe("write tool", () => {
@@ -257,6 +303,17 @@ describe("Coding Agent Tools", () => {
 
 			expect(getTextOutput(result)).toContain("Successfully wrote");
 		});
+
+		// Node's recursive mkdir loops forever here: /proc answers ENOENT for a new name.
+		it.runIf(process.platform === "linux")(
+			"returns the system error when a parent cannot be created under /proc",
+			async () => {
+				await expect(
+					writeTool.execute("test-call-proc", { path: "/proc/nope/a.py", content: "x" }),
+				).rejects.toThrow("ENOENT");
+			},
+			2000,
+		);
 	});
 
 	describe("edit tool", () => {
@@ -431,7 +488,7 @@ describe("Coding Agent Tools", () => {
 					path: testFile,
 					edits: [{ oldText: "hello", newText: "world" }],
 				}),
-			).rejects.toThrow(`Could not edit file: ${testFile}. Error code: EACCES.`);
+			).rejects.toThrow(`Could not edit file: ${testFile}. Error code: ${windows ? "EPERM" : "EACCES"}.`);
 		});
 
 		it("should include the original error message for unknown edit access errors", async () => {
@@ -460,7 +517,8 @@ describe("Coding Agent Tools", () => {
 			expect(result).toEqual({ error: `Could not edit file: ${missingFile}. Error code: ENOENT.` });
 		});
 
-		it("should include EACCES in diff preview for unreadable files", async () => {
+		// chmod cannot take away read access on Windows.
+		it.skipIf(windows)("should include EACCES in diff preview for unreadable files", async () => {
 			const unreadableFile = join(testDir, "unreadable-preview.txt");
 			writeFileSync(unreadableFile, "hello\n");
 			chmodSync(unreadableFile, 0o222);
@@ -495,6 +553,113 @@ describe("Coding Agent Tools", () => {
 			await expect(bashTool.execute("test-call-10", { command: "sleep 5", timeout: 1 })).rejects.toThrow(
 				/timed out/i,
 			);
+		});
+
+		it("stops a command with no timeout after the default and says how to raise it", async () => {
+			const bash = createBashTool(testDir, { defaultTimeout: 1 });
+			await expect(bash.execute("test-call-default-timeout", { command: "sleep 5" })).rejects.toThrow(
+				"Command timed out after 1 seconds. If it needs longer, run it again with a larger timeout (in seconds).",
+			);
+		});
+
+		it("passes no timeout and does not claim one when the default is off", async () => {
+			const timeouts: Array<number | undefined> = [];
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { timeout }) => {
+					timeouts.push(timeout);
+					return { exitCode: 0 };
+				},
+			};
+			const bash = createBashTool(testDir, { operations, defaultTimeout: 0 });
+			await bash.execute("test-call-no-default-timeout", { command: "true" });
+			expect(timeouts).toEqual([undefined]);
+			expect(bash.description).toContain("Commands have no default timeout");
+			expect(bash.description).not.toContain("stopped after");
+		});
+
+		it("runs a background job, reads only new output, stops its process group and announces other exits once", async () => {
+			const jobs = new BashJobs();
+			const tools = createAllTools(testDir, { bash: { jobs } });
+			const start = await tools.bash.execute("bg-start", {
+				command: "echo first; echo second; sleep 60",
+				run_in_background: true,
+			});
+			expect(getTextOutput(start)).toBe("Started job j1.");
+			const job = jobs.get("j1");
+			if (!job?.pid) throw new Error("job did not start");
+			expect(job.exit).toBeUndefined();
+			await vi.waitFor(() => expect(readFileSync(job.logPath, "utf-8")).toContain("second"), { timeout: 10_000 });
+			expect(getTextOutput(await tools.bash_job.execute("bg-read-1", { id: "j1" }))).toBe(
+				"first\nsecond\n[running]",
+			);
+			expect(getTextOutput(await tools.bash_job.execute("bg-read-2", { id: "j1" }))).toBe(
+				"(no new output)\n[running]",
+			);
+
+			expect(getTextOutput(await tools.bash_job.execute("bg-stop", { id: "j1", action: "stop" }))).toBe(
+				"Stopped job j1.",
+			);
+			expect(jobs.running()).toEqual([]);
+			await vi.waitFor(() => expect(job.exit).toBeDefined(), { timeout: 10_000 });
+			expect(() => process.kill(-job.pid!, 0)).toThrow();
+
+			await tools.bash.execute("bg-exit", { command: "exit 3", run_in_background: true });
+			await vi.waitFor(() => expect(jobs.get("j2")?.exit).toBeDefined(), { timeout: 10_000 });
+			expect(jobs.running()).toEqual([]);
+			expect(jobs.takeExitNotices()).toBe("[Background job j2 exited with code 3: exit 3]");
+			expect(jobs.takeExitNotices()).toBeUndefined();
+			jobs.stopAll();
+		});
+
+		it("keeps a background job running while processes its shell started with & live, and stops them", async () => {
+			const jobs = new BashJobs();
+			const tools = createAllTools(testDir, { bash: { jobs } });
+			try {
+				await tools.bash.execute("bg-amp", { command: "sleep 60 & echo started", run_in_background: true });
+				const job = jobs.get("j1");
+				if (!job?.pid) throw new Error("job did not start");
+				await vi.waitFor(() => expect(job.exit).toBeDefined(), { timeout: 10_000 });
+
+				expect(jobs.running()).toEqual([job]);
+				expect(jobs.takeExitNotices()).toContain(
+					"shell exited with code 0, but processes it started are still running",
+				);
+				expect(getTextOutput(await tools.bash_job.execute("bg-amp-stop", { id: "j1", action: "stop" }))).toBe(
+					"Stopped job j1.",
+				);
+				await vi.waitFor(() => expect(() => process.kill(-job.pid!, 0)).toThrow(), { timeout: 10_000 });
+			} finally {
+				jobs.stopAll();
+			}
+		});
+
+		it.skipIf(process.platform === "win32")(
+			"sends no signal at exit to a job whose shell and & processes have all ended",
+			async () => {
+				const jobs = new BashJobs();
+				const tools = createAllTools(testDir, { bash: { jobs } });
+				const kill = vi.spyOn(process, "kill");
+				try {
+					await tools.bash.execute("bg-gone", { command: "sleep 0.3 & echo started", run_in_background: true });
+					const pid = jobs.get("j1")?.pid;
+					if (!pid) throw new Error("job did not start");
+					// The pid is free once the group is empty, and may belong to another process by exit.
+					await vi.waitFor(() => expect(() => process.kill(-pid, 0)).toThrow(), { timeout: 10_000 });
+					kill.mockClear();
+					stopLiveJobs();
+					expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([]);
+				} finally {
+					kill.mockRestore();
+					jobs.stopAll();
+				}
+			},
+		);
+
+		it("runs commands with editors, pagers and git prompts disabled", async () => {
+			const result = await bashTool.execute("test-call-env", {
+				command: 'echo "$GIT_EDITOR $GIT_TERMINAL_PROMPT $GIT_PAGER $PAGER"',
+			});
+			expect(getTextOutput(result).trim()).toBe("true 0 cat cat");
 		});
 
 		it("should include full output path for truncated timeout and abort errors", async () => {
@@ -819,7 +984,8 @@ describe("Coding Agent Tools", () => {
 			writeFileSync(testFile, "target\n");
 
 			const result = await grepTool.execute("test-call-grep-injection", {
-				pattern: `--pre=${payload}`,
+				// Forward slashes keep a Windows path from reading as regex escapes.
+				pattern: `--pre=${payload.replace(/\\/g, "/")}`,
 				path: testDir,
 			});
 

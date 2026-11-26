@@ -11,11 +11,12 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { stripAnsi } from "../../utils/ansi.ts";
-import { resolvePath } from "../../utils/paths.ts";
-import { sanitizeBinaryOutput } from "../../utils/shell.ts";
-import type { ToolGroupRole } from "../extensions/types.ts";
+import type { TSchema } from "typebox";
+import type { ToolDefinition, ToolGroupRole } from "../../../core/extensions/types.ts";
+import { stripAnsi } from "../../../utils/ansi.ts";
+import { resolvePath } from "../../../utils/paths.ts";
+import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
+import type { Theme } from "../theme/theme.ts";
 
 /**
  * Shows a path under the home directory as `~/...`. Only whole directory names match, so with home
@@ -75,6 +76,21 @@ export function getTextOutput(
 
 	return output;
 }
+
+/**
+ * The drawing members of a tool definition. Built-in tools keep them in this directory, not in core;
+ * `getBuiltinToolRenderer` in `index.ts` looks them up by tool name. The `any` defaults match `ToolDef`.
+ */
+export interface ToolRenderer<TParams extends TSchema = any, TDetails = any, TState = any> {
+	renderCall?: ToolDefinition<TParams, TDetails, TState>["renderCall"];
+	renderResult?: ToolDefinition<TParams, TDetails, TState>["renderResult"];
+	renderShell?: ToolDefinition<TParams, TDetails, TState>["renderShell"];
+}
+
+/** The `ToolRenderer` for a core definition type `TDef`, with `TState` as the per-call render state. */
+export type ToolRendererFor<TDef, TState = unknown> = TDef extends ToolDefinition<infer TParams, infer TDetails>
+	? ToolRenderer<TParams, TDetails, TState>
+	: never;
 
 export type ToolRenderResultLike<TDetails> = {
 	content: (TextContent | ImageContent)[];
@@ -136,24 +152,49 @@ interface GroupedCallOptions {
 	detail?: string;
 }
 
+/** `text` with ` ${suffix}` at the end of its first line. */
+export function appendToFirstLine(text: string, suffix: string): string {
+	const lineEnd = text.indexOf("\n");
+	return lineEnd === -1 ? `${text} ${suffix}` : `${text.slice(0, lineEnd)} ${suffix}${text.slice(lineEnd)}`;
+}
+
 export class GroupedCallText extends Text {
 	private call?: GroupedCallOptions;
+	// Text set directly instead of through setCall (write's expanded and failed header).
+	private plainText?: string;
 	private formattedWidth?: number;
+	private note?: string;
 
 	setCall(call: GroupedCallOptions): void {
-		this.setText(formatGroupedCall(call));
 		this.call = call;
+		this.plainText = undefined;
+		this.formattedWidth = undefined;
+		super.setText(formatGroupedCall(this.withNote(call)));
+	}
+
+	/** Styled text after the header that names a state the dot shows only by color ("— rejected"). */
+	setNote(note: string | undefined): void {
+		if (note === this.note) return;
+		this.note = note;
+		if (this.call) this.setCall(this.call);
+		else if (this.plainText !== undefined) this.setText(this.plainText);
+	}
+
+	private withNote(call: GroupedCallOptions): GroupedCallOptions {
+		if (!this.note) return call;
+		return { ...call, detail: call.detail?.trim() ? `${call.detail} ${this.note}` : this.note };
 	}
 
 	override setText(text: string): void {
 		this.call = undefined;
+		this.plainText = text;
 		this.formattedWidth = undefined;
-		super.setText(text);
+		super.setText(this.note ? appendToFirstLine(text, this.note) : text);
 	}
 
 	override render(width: number): string[] {
 		if (this.call && this.formattedWidth !== width) {
-			super.setText(formatGroupedCall(this.call, width));
+			super.setText(formatGroupedCall(this.withNote(this.call), width));
 			this.formattedWidth = width;
 		}
 		return super.render(width);

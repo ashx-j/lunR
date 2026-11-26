@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as registry from "../src/core/process-registry.ts";
 import { isWindows } from "../src/core/process-registry.ts";
@@ -150,7 +151,7 @@ describe("process-registry", () => {
 			stdio: "ignore",
 		});
 		if (!child.pid) return;
-		registry.register(child.pid, "node -e setTimeout", "/tmp");
+		registry.register(child.pid, "node -e setTimeout", tmpdir());
 		const newPid = registry.restart(child.pid);
 		expect(newPid).toBeDefined();
 		if (newPid) {

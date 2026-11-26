@@ -223,7 +223,9 @@ const newCommand: ChatCommand = {
 			try {
 				resolveWithinRoots(cfg.defaultProject, cfg.projectRoots ?? []);
 				ready = true;
-			} catch {}
+			} catch {
+				// defaultProject is outside the approved roots: the reply asks for /project.
+			}
 		}
 		await ctx.reply(
 			ready

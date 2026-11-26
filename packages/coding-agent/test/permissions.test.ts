@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { buildProxyDescription } from "../src/builtin-extensions/pi-mcp-adapter/direct-tools.ts";
@@ -6,7 +7,11 @@ import {
 	effectiveLargeSubagentLaunchCountForTurn,
 	LARGE_SUBAGENT_LAUNCH_THRESHOLD,
 } from "../src/core/large-subagent-launch.ts";
+import { compilePermissionRules } from "../src/core/permission-rules.ts";
 import {
+	APPROVAL_TIMEOUT_REASON,
+	type ApprovalRequest,
+	type ApprovalResponse,
 	clearSessionApprovals,
 	createPermissionContext,
 	deletePermissionContext,
@@ -15,9 +20,11 @@ import {
 	getPermissionMode,
 	isReadOnlyModeActive,
 	MEMORY_FILE_DIRECT_WRITE_BLOCK_REASON,
+	NO_HANDLER_REASON,
 	NO_LARGE_SUBAGENT_LAUNCH_HANDLER_REASON,
 	nextPermissionMode,
 	PERMISSION_MODES,
+	READ_ONLY_TOOLS,
 	registerApprovalHandler,
 	resetAllPermissionContexts,
 	resetPermissions,
@@ -35,11 +42,12 @@ beforeEach(() => {
 });
 
 describe("permission modes", () => {
-	it("defaults to yolo and cycles through exactly three modes", () => {
-		expect(PERMISSION_MODES).toEqual(["yolo", "auto", "read-only"]);
+	it("defaults to yolo and cycles from least to most strict", () => {
+		expect(PERMISSION_MODES).toEqual(["yolo", "auto", "ask", "read-only"]);
 		expect(getPermissionMode()).toBe("yolo");
 		expect(nextPermissionMode("yolo")).toBe("auto");
-		expect(nextPermissionMode("auto")).toBe("read-only");
+		expect(nextPermissionMode("auto")).toBe("ask");
+		expect(nextPermissionMode("ask")).toBe("read-only");
 		expect(nextPermissionMode("read-only")).toBe("yolo");
 	});
 
@@ -131,6 +139,29 @@ describe("permission modes", () => {
 	});
 });
 
+describe("read-only tool list", () => {
+	// A stale name lets a future or extension tool with that name skip the read-only gate.
+	it("names only tools lunR registers", () => {
+		const registered = new Set<string>();
+		const scan = (dir: string) => {
+			for (const entry of readdirSync(dir, { withFileTypes: true })) {
+				const path = join(dir, entry.name);
+				if (entry.isDirectory()) scan(path);
+				else if (path.endsWith(".ts") && !path.endsWith(join("core", "permissions.ts"))) {
+					// Tool definitions use `name: "x"`; a few take the name from a `*_TOOL_NAME` constant.
+					for (const match of readFileSync(path, "utf8").matchAll(
+						/(?:\bname:|TOOL_NAME =)\s*["']([a-z_]+)["']/g,
+					)) {
+						registered.add(match[1]!);
+					}
+				}
+			}
+		};
+		scan(join(import.meta.dirname, "..", "src"));
+		expect([...READ_ONLY_TOOLS].filter((tool) => !registered.has(tool))).toEqual([]);
+	});
+});
+
 describe("large subagent launch", () => {
 	const threeTasks = {
 		tasks: [
@@ -196,6 +227,11 @@ describe("large subagent launch", () => {
 		expect((await gateToolCall("subagent", { action: "resume", id: "old-run" }, "/cwd"))?.block).toBe(true);
 		expect(await gateToolCall("subagent", { action: "status", id: "old-run" }, "/cwd")).toBeUndefined();
 	});
+
+	it("lets load_tools run in read-only mode", async () => {
+		setPermissionMode("read-only");
+		expect(await gateToolCall("load_tools", { names: ["cron"] }, "/cwd")).toBeUndefined();
+	});
 });
 
 describe("same-turn executable launch approval", () => {
@@ -227,5 +263,200 @@ describe("same-turn executable launch approval", () => {
 			].map((arguments_) => ({ type: "toolCall", name: "subagent", arguments: arguments_ })),
 		};
 		expect(effectiveLargeSubagentLaunchCountForTurn(launch, assistantMessage)).toBe(3);
+	});
+});
+
+describe("ask mode", () => {
+	const rules = (allow: string[], deny: string[] = []) => ({
+		rules: compilePermissionRules({ allow, deny }, undefined, true, "/cwd"),
+	});
+	const answer = (response: ApprovalResponse) => {
+		const asked: ApprovalRequest[] = [];
+		registerApprovalHandler(async (req) => {
+			asked.push(req);
+			return response;
+		});
+		return asked;
+	};
+
+	beforeEach(() => setPermissionMode("ask"));
+
+	it("runs reads without asking and asks before a call read-only mode would block", async () => {
+		const asked = answer("once");
+		expect(await gateToolCall("read", { path: "a.ts" }, "/cwd")).toBeUndefined();
+		expect(await gateToolCall("bash", { command: "git status" }, "/cwd")).toBeUndefined();
+		expect(asked).toHaveLength(0);
+		expect(await gateToolCall("bash", { command: "npm test" }, "/cwd")).toBeUndefined();
+		expect(asked).toMatchObject([{ kind: "tool", toolName: "bash", detail: "npm test", title: "Allow bash?" }]);
+		await gateToolCall("bash", { command: "npm test" }, "/cwd");
+		expect(asked).toHaveLength(2);
+	});
+
+	it("asks before a read-only child's result replaces a file, as a write would", async () => {
+		const asked = answer("once");
+		const inspect = { task: "inspect", description: "Inspector", permissions: "read-only" };
+		expect(await gateToolCall("subagent", inspect, "/cwd")).toBeUndefined();
+		expect(asked).toHaveLength(0);
+		await gateToolCall("subagent", { tasks: [inspect], output: "README.md" }, "/cwd");
+		expect(asked).toMatchObject([{ toolName: "subagent", detail: "Inspector" }]);
+		expect(asked[0]?.title).toContain("saves its result to a file");
+		asked.length = 0;
+		const three = [1, 2, 3].map((i) => ({ ...inspect, task: `inspect ${i}` }));
+		await gateToolCall("subagent", { tasks: three, output: "notes.md" }, "/cwd", undefined, {
+			confirmLargeSubagentLaunches: true,
+		});
+		expect(asked.map((req) => req.title)).toEqual([
+			"Launch read-only subagents that save their results to files? lunR writes the files, replacing any files there.",
+		]);
+	});
+
+	it("remembers a session answer for the exact command only", async () => {
+		const asked = answer("session");
+		await gateToolCall("bash", { command: "npm test" }, "/cwd");
+		await gateToolCall("bash", { command: "npm test" }, "/cwd");
+		expect(asked).toHaveLength(1);
+		await gateToolCall("bash", { command: "rm -rf build" }, "/cwd");
+		expect(asked).toHaveLength(2);
+	});
+
+	it("returns the user's feedback to the model on reject", async () => {
+		answer({ decision: "reject", feedback: "use pnpm" });
+		expect(await gateToolCall("bash", { command: "npm i" }, "/cwd")).toEqual({
+			block: true,
+			reason: "The user rejected this call. Their feedback: use pnpm",
+		});
+	});
+
+	it("blocks with a way forward when nobody can answer", async () => {
+		const result = await gateToolCall("bash", { command: "npm test" }, "/cwd");
+		expect(result?.reason).toContain("nobody can answer in this session");
+		expect(result?.reason).toContain('"bash(npm test)"');
+		createPermissionContext("cron", "ask", false);
+		answer("once");
+		expect(await gateToolCall("write", { path: "x" }, "/cwd", "cron")).toMatchObject({ block: true });
+	});
+
+	it("skips the question for an allow rule and saves one after an always answer", async () => {
+		const asked = answer("always");
+		expect(
+			await gateToolCall("bash", { command: "npm test" }, "/cwd", undefined, rules(["bash(npm test)"])),
+		).toBeUndefined();
+		expect(asked).toHaveLength(0);
+		const saved: string[] = [];
+		await gateToolCall("bash", { command: "make" }, "/cwd", undefined, { saveAllowRule: (rule) => saved.push(rule) });
+		expect(asked[0]?.rule).toBe("bash(make)");
+		expect(saved).toEqual(["bash(make)"]);
+	});
+
+	it("says plainly that a full-access child runs commands without asking", async () => {
+		const asked = answer("reject");
+		const result = await gateToolCall("subagent", { task: "fix it", description: "Fixer" }, "/cwd");
+		expect(result?.block).toBe(true);
+		expect(asked[0]?.title).toBe(
+			"Launch a full-access subagent? It runs commands and edits files without asking you.",
+		);
+		expect(
+			await gateToolCall("subagent", { task: "look", description: "Reader", permissions: "read-only" }, "/cwd"),
+		).toBeUndefined();
+	});
+});
+
+describe("ask mode details", () => {
+	beforeEach(() => setPermissionMode("ask"));
+	const record = (response: ApprovalResponse | (() => never)) => {
+		const asked: ApprovalRequest[] = [];
+		registerApprovalHandler(async (req) => {
+			asked.push(req);
+			return typeof response === "function" ? response() : response;
+		});
+		return asked;
+	};
+
+	it("never asks before todo and goal updates, even with nobody to answer", async () => {
+		for (const tool of ["todo", "goal_complete", "goal_blocked"]) {
+			expect(await gateToolCall(tool, { action: "add" }, "/cwd")).toBeUndefined();
+		}
+	});
+
+	it("offers a session answer only for shell commands and file tools", async () => {
+		const asked = record("session");
+		await gateToolCall("bash", { command: "make" }, "/cwd");
+		await gateToolCall("browser", { action: "act", interaction: "click" }, "/cwd");
+		await gateToolCall("browser", { action: "act", interaction: "click" }, "/cwd");
+		await gateToolCall("subagent", { action: "steer", id: "a" }, "/cwd");
+		await gateToolCall("subagent", { task: "delete everything in ~", description: "Cleaner" }, "/cwd");
+		expect(asked.map((req) => [req.toolName, req.allowSession])).toEqual([
+			["bash", true],
+			["browser", false],
+			["browser", false],
+			["subagent", false],
+			["subagent", false],
+		]);
+	});
+
+	it("tells the model how to proceed when a gateway chat can't answer or nobody answers in time", async () => {
+		record(() => {
+			throw new Error(NO_HANDLER_REASON);
+		});
+		expect((await gateToolCall("bash", { command: "make" }, "/cwd"))?.reason).toContain(
+			"nobody can answer in this chat",
+		);
+		record(() => {
+			throw new Error(APPROVAL_TIMEOUT_REASON);
+		});
+		expect((await gateToolCall("bash", { command: "make" }, "/cwd"))?.reason).toContain(
+			'nobody answered the question in time, so it did not run. Tell the user what you need to run. They can allow it with the rule "bash(make)"',
+		);
+	});
+
+	it("asks once for a large full-access launch and names the children in the plural", async () => {
+		const asked = record("once");
+		const tasks = ["a", "b", "c"].map((name) => ({ task: `do ${name}`, description: name }));
+		expect(
+			await gateToolCall("subagent", { tasks }, "/cwd", undefined, { confirmLargeSubagentLaunches: true }),
+		).toBeUndefined();
+		expect(asked.map((req) => req.title)).toEqual([
+			"Launch 3 full-access subagents? They run commands and edit files without asking you.",
+		]);
+	});
+});
+
+describe("allow and deny rules in other modes", () => {
+	it("blocks a denied call in yolo", async () => {
+		const options = { rules: compilePermissionRules({ deny: ["bash(git push*)"] }, undefined, true, "/cwd") };
+		expect(await gateToolCall("bash", { command: "git push" }, "/cwd", undefined, options)).toMatchObject({
+			block: true,
+		});
+	});
+
+	it("lets a deny rule win over an allow rule in ask mode", async () => {
+		setPermissionMode("ask");
+		registerApprovalHandler(async () => "once");
+		const options = {
+			rules: compilePermissionRules(
+				{ allow: ["bash(git push*)"], deny: ["bash(git push*)"] },
+				undefined,
+				true,
+				"/cwd",
+			),
+		};
+		expect(await gateToolCall("bash", { command: "git push" }, "/cwd", undefined, options)).toMatchObject({
+			block: true,
+			reason: expect.stringContaining('deny rule "bash(git push*)"'),
+		});
+	});
+
+	it("never lets an allow rule pass read-only mode or a protected target", async () => {
+		const options = { rules: compilePermissionRules({ allow: ["bash", "write"] }, undefined, true, "/cwd") };
+		setPermissionMode("read-only");
+		expect(await gateToolCall("bash", { command: "rm x" }, "/cwd", undefined, options)).toMatchObject({
+			block: true,
+		});
+		setPermissionMode("ask");
+		const settings = join(process.env.PI_CODING_AGENT_DIR!, "settings.json");
+		expect(await gateToolCall("write", { path: settings }, "/cwd", undefined, options)).toEqual({
+			block: true,
+			reason: SETTINGS_FILE_DIRECT_WRITE_BLOCK_REASON,
+		});
 	});
 });

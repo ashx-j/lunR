@@ -1,27 +1,13 @@
-import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
-import { Text } from "@earendil-works/pi-tui";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { type Static, Type } from "typebox";
-import { getReadmePath } from "../../config.ts";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
-import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { processImage } from "../../utils/image-process.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
-import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.ts";
-import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
-import { resolveReadPathAsync, resolveToCwd } from "./path-utils.ts";
-import {
-	GroupedCallText,
-	getTextOutput,
-	renderToolFileName,
-	replaceTabs,
-	str,
-	toolGroupTree,
-	toolStatusDotFromContext,
-} from "./render-utils.ts";
+import { credentialFileReason } from "../credential-files.ts";
+import type { ToolDefinition } from "../extensions/types.ts";
+import { resolveReadPathAsync } from "./path-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
 
@@ -36,13 +22,6 @@ export type ReadToolInput = Static<typeof readSchema>;
 export interface ReadToolDetails {
 	truncation?: TruncationResult;
 }
-
-interface CompactReadClassification {
-	kind: "docs" | "resource" | "skill";
-	label: string;
-}
-
-const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]);
 
 /**
  * Pluggable operations for the read tool.
@@ -70,29 +49,6 @@ export interface ReadToolOptions {
 	operations?: ReadOperations;
 }
 
-type ReadRenderArgs = { path?: string; file_path?: string; offset?: number; limit?: number };
-
-function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): string {
-	if (args?.offset === undefined && args?.limit === undefined) return "";
-	const startLine = args.offset ?? 1;
-	const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
-	return theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
-}
-
-function formatReadDetail(args: ReadRenderArgs | undefined, theme: Theme, cwd: string, expanded = false): string {
-	const pathDisplay = renderToolFileName(str(args?.file_path ?? args?.path), theme, cwd);
-	const range = expanded ? formatReadLineRange(args, theme) : "";
-	return `${pathDisplay}${range}`;
-}
-
-function trimTrailingEmptyLines(lines: string[]): string[] {
-	let end = lines.length;
-	while (end > 0 && lines[end - 1] === "") {
-		end--;
-	}
-	return lines.slice(0, end);
-}
-
 function getNonVisionImageNote(model: Model<Api> | undefined): string | undefined {
 	if (!model || model.input.includes("image")) {
 		return undefined;
@@ -100,89 +56,42 @@ function getNonVisionImageNote(model: Model<Api> | undefined): string | undefine
 	return "[Current model does not support images. The image will be omitted from this request.]";
 }
 
-function toPosixPath(filePath: string): string {
-	return filePath.split(sep).join("/");
-}
+/** Bytes read from the start of a file to decide whether it is binary. */
+const BINARY_SAMPLE_BYTES = 8192;
+/** Control characters that occur in ordinary text: backspace, tab, newline, vertical tab, form feed, carriage return, escape. */
+const TEXT_CONTROL_CODES = new Set([8, 9, 10, 11, 12, 13, 27]);
 
-function getPiDocsClassification(absolutePath: string): CompactReadClassification | undefined {
-	const packageRoot = dirname(getReadmePath());
-	const relativePath = relative(resolvePath(packageRoot), resolvePath(absolutePath));
-	if (
-		relativePath === "" ||
-		relativePath === ".." ||
-		relativePath.startsWith(`..${sep}`) ||
-		isAbsolute(relativePath)
-	) {
-		return undefined;
-	}
-
-	const label = toPosixPath(relativePath);
-	if (label === "README.md" || label.startsWith("docs/") || label.startsWith("examples/")) {
-		return { kind: "docs", label };
-	}
+function utf16Encoding(buffer: Buffer): "utf-16le" | "utf-16be" | undefined {
+	if (buffer[0] === 0xff && buffer[1] === 0xfe) return "utf-16le";
+	if (buffer[0] === 0xfe && buffer[1] === 0xff) return "utf-16be";
 	return undefined;
 }
 
-function getCompactReadClassification(
-	args: ReadRenderArgs | undefined,
-	cwd: string,
-): CompactReadClassification | undefined {
-	const rawPath = str(args?.file_path ?? args?.path);
-	if (!rawPath) return undefined;
-
-	const absolutePath = resolveToCwd(rawPath, cwd);
-	const fileName = basename(absolutePath);
-	if (fileName === "SKILL.md") {
-		return { kind: "skill", label: basename(dirname(absolutePath)) || fileName };
+/**
+ * Binary when the first 8 KB has a NUL byte (git's rule), more than 10% other control
+ * characters, or more than half invalid UTF-8. Text in a legacy encoding such as Latin-1
+ * stays under the last limit. Files with a UTF-16 BOM are text.
+ */
+function looksBinary(buffer: Buffer): boolean {
+	if (utf16Encoding(buffer)) return false;
+	const sample = buffer.subarray(0, BINARY_SAMPLE_BYTES);
+	if (sample.includes(0)) return true;
+	let total = 0;
+	let controls = 0;
+	let invalid = 0;
+	for (const char of sample.toString("utf-8")) {
+		const code = char.charCodeAt(0);
+		total++;
+		if (code === 0xfffd) invalid++;
+		else if (code === 0x7f || (code < 0x20 && !TEXT_CONTROL_CODES.has(code))) controls++;
 	}
-
-	const docsClassification = getPiDocsClassification(absolutePath);
-	if (docsClassification) return docsClassification;
-
-	if (COMPACT_RESOURCE_FILE_NAMES.has(fileName)) {
-		return { kind: "resource", label: formatPathRelativeToCwdOrAbsolute(absolutePath, cwd) };
-	}
-
-	return undefined;
+	return controls > total * 0.1 || invalid > total * 0.5;
 }
 
-function formatReadResult(
-	args: ReadRenderArgs | undefined,
-	result: { content: (TextContent | ImageContent)[]; details?: ReadToolDetails },
-	options: ToolRenderResultOptions,
-	theme: Theme,
-	showImages: boolean,
-	_cwd: string,
-	isError: boolean,
-): string {
-	if (!options.expanded && !isError) {
-		return "";
-	}
-
-	const rawPath = str(args?.file_path ?? args?.path);
-	const output = getTextOutput(result, showImages);
-	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-	const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
-	const lines = trimTrailingEmptyLines(renderedLines);
-	const maxLines = options.expanded ? lines.length : 10;
-	const displayLines = lines.slice(0, maxLines);
-	const remaining = lines.length - maxLines;
-	let text = `\n${displayLines.map((line) => (lang ? replaceTabs(line) : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
-	if (remaining > 0) {
-		text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
-	}
-
-	const truncation = result.details?.truncation;
-	if (truncation?.truncated) {
-		if (truncation.firstLineExceedsLimit) {
-			text += `\n${theme.fg("warning", `[First line exceeds ${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit]`)}`;
-		} else if (truncation.truncatedBy === "lines") {
-			text += `\n${theme.fg("warning", `[Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines (${truncation.maxLines ?? DEFAULT_MAX_LINES} line limit)]`)}`;
-		} else {
-			text += `\n${theme.fg("warning", `[Truncated: ${truncation.outputLines} lines shown (${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit)]`)}`;
-		}
-	}
-	return text;
+/** Decodes UTF-16 files marked with a BOM (PowerShell redirects write these), everything else as UTF-8. */
+function decodeText(buffer: Buffer): string {
+	const encoding = utf16Encoding(buffer);
+	return encoding ? new TextDecoder(encoding).decode(buffer) : buffer.toString("utf-8");
 }
 
 export function createReadToolDefinition(
@@ -225,13 +134,16 @@ export function createReadToolDefinition(
 							// Check if file exists and is readable.
 							await ops.access(absolutePath);
 							if (aborted) return;
+							// The gate sees only the name given; a symlink to lunR's saved logins is caught here.
+							const credentialReason = credentialFileReason(absolutePath);
+							if (credentialReason) throw new Error(credentialReason);
 							const mimeType = ops.detectImageMimeType ? await ops.detectImageMimeType(absolutePath) : undefined;
 							let content: (TextContent | ImageContent)[];
 							let details: ReadToolDetails | undefined;
 							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+							const buffer = await ops.readFile(absolutePath);
 							if (mimeType) {
 								// Read image as binary.
-								const buffer = await ops.readFile(absolutePath);
 								const processed = await processImage(buffer, mimeType, { autoResizeImages });
 								if (!processed.ok) {
 									let textNote = `Read image file [${mimeType}]\n${processed.message}`;
@@ -246,10 +158,12 @@ export function createReadToolDefinition(
 										{ type: "image", data: processed.data, mimeType: processed.mimeType },
 									];
 								}
+							} else if (looksBinary(buffer)) {
+								const text = `[${path} is a binary file (${formatSize(buffer.length)}). Its bytes are not shown. Inspect it with bash, for example file or xxd | head.]`;
+								content = [{ type: "text", text }];
 							} else {
 								// Read text content.
-								const buffer = await ops.readFile(absolutePath);
-								const textContent = buffer.toString("utf-8");
+								const textContent = decodeText(buffer);
 								const allLines = textContent.split("\n");
 								const totalFileLines = allLines.length;
 								// Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
@@ -305,50 +219,16 @@ export function createReadToolDefinition(
 							resolve({ content, details });
 						} catch (error: any) {
 							signal?.removeEventListener("abort", onAbort);
-							if (!aborted) reject(error);
+							if (aborted) return;
+							reject(
+								error?.code === "EISDIR"
+									? new Error(`${path} is a directory. Use ls to list its contents.`)
+									: error,
+							);
 						}
 					})();
 				},
 			);
-		},
-		renderCall(args, theme, context) {
-			const text = (context.lastComponent as GroupedCallText | undefined) ?? new GroupedCallText("", 0, 0);
-			const compact = !context.isPartial && !context.expanded && !context.isError;
-			const classification = !context.expanded ? getCompactReadClassification(args, context.cwd) : undefined;
-			let title = theme.fg("toolTitle", theme.bold("read"));
-			let detail: string;
-			if (classification?.kind === "skill") {
-				title = theme.fg("customMessageLabel", `\x1b[1m[skill]\x1b[22m`);
-				detail = theme.fg("customMessageText", classification.label);
-			} else if (classification) {
-				title = theme.fg("toolTitle", theme.bold(`read ${classification.kind}`));
-				detail = theme.fg("accent", classification.label);
-			} else {
-				detail = formatReadDetail(args, theme, context.cwd, context.expanded);
-			}
-			text.setCall({
-				role: context.groupRole ?? "singleton",
-				compact,
-				tree: toolGroupTree(context),
-				dot: toolStatusDotFromContext(context, theme),
-				title,
-				detail,
-			});
-			return text;
-		},
-		renderResult(result, options, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			// lunr: compact-by-default — finished, successful, non-expanded calls
-			// render header-only (ctrl+o reveals the full result). Continuation
-			// notices stay in execute() output for the model, not in TUI chrome.
-			if (!options.isPartial && !options.expanded && !context.isError) {
-				text.setText("");
-				return text;
-			}
-			text.setText(
-				formatReadResult(context.args, result, options, theme, context.showImages, context.cwd, context.isError),
-			);
-			return text;
 		},
 	};
 }

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { parseSessionRequests, parseSessionUsage, sessionUsageDelta } from "../../shared/session-tokens.ts";
 /**
  * Core execution logic for running subagents
@@ -58,7 +57,7 @@ import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-a
 import { READ_ONLY_WRITE_SPAWN_ERROR, resolveChildPermissions, snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { readStructuredOutput } from "../shared/structured-output.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
-import { captureSingleOutputSnapshot, extractChildWrittenOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
+import { captureSingleOutputSnapshot, extractChildWrittenOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, outputTargetError, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
 	formatModelAttemptNote,
@@ -92,11 +91,11 @@ import {
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
 
-function emptyUsage(): Usage {
+function emptyUsage(): Required<Usage> {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, unknownRequests: 0, partialRequests: 0, unknownCosts: 0 };
 }
 
-function sumUsage(target: Usage, source: Usage): void {
+function sumUsage(target: Required<Usage>, source: Usage): void {
 	target.input += source.input;
 	target.output += source.output;
 	target.cacheRead += source.cacheRead;
@@ -270,7 +269,8 @@ async function runSingleAttempt(
 	});
 
 	const thinkingFromModel = modelArg ? splitKnownThinkingSuffix(modelArg).thinkingSuffix.slice(1) || undefined : undefined;
-	const result: SingleResult = {
+	// messages and usage start filled in here and are only replaced by full values.
+	const result: SingleResult & { messages: Message[]; usage: Required<Usage> } = {
 		childId: spec.childId,
 		description: spec.description,
 		permissions: spec.effectivePermissions,
@@ -775,10 +775,7 @@ async function runSingleAttempt(
 					current: childWatchdogState,
 					event: evt,
 					runId: options.runId,
-					childId: spec.childId,
-		description: spec.description,
-		permissions: spec.effectivePermissions,
-		agent: spec.description,
+					agent: spec.description,
 					childIndex: options.index ?? 0,
 				});
 				if (!next) return;
@@ -1045,7 +1042,7 @@ async function runSingleAttempt(
 				fullOutput = fullOutput.trim() || recoveredResult.error || recoveredResult.finalOutput || "Detached child exited without final output.";
 				recoveredResult.outputMode = options.outputMode ?? "inline";
 				if (options.outputPath && recoveredResult.exitCode === 0) {
-					const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
+					const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot, runtimeCwd);
 					fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
 					recoveredResult.savedOutputPath = resolvedOutput.savedPath;
 					recoveredResult.outputSaveError = resolvedOutput.saveError;
@@ -1253,7 +1250,7 @@ async function runSingleAttempt(
 		}));
 	}
 		if (options.outputPath && result.exitCode === 0) {
-			const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
+			const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot, runtimeCwd);
 			fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
 			result.savedOutputPath = resolvedOutput.savedPath;
 			result.outputSaveError = resolvedOutput.saveError;
@@ -1311,7 +1308,7 @@ export async function runSync(
 			error,
 		};
 	}
-	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${label})`);
+	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${label})`) ?? outputTargetError(options.outputPath, runtimeCwd);
 	if (outputModeValidationError) {
 		return {
 			childId: spec.childId,

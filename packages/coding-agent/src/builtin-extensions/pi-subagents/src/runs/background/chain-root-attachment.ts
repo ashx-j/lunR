@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AccountedRequest } from "../../../../../core/usage-accounting.ts";
@@ -164,7 +163,7 @@ function buildImportedResult(root: ImportedAsyncRoot, status: AsyncStatus | null
 		...(child?.sessionFile ?? step?.sessionFile ?? status?.sessionFile ? { sessionFile: child?.sessionFile ?? step?.sessionFile ?? status?.sessionFile } : {}),
 		...(child?.intercomTarget ? { intercomTarget: child.intercomTarget } : {}),
 		...(child?.model ?? step?.model ? { model: child?.model ?? step?.model } : {}),
-		...(child?.modelSelection ?? step?.modelSelection ? { modelSelection: child?.modelSelection ?? step?.modelSelection } : {}),
+		...(step?.modelSelection ? { modelSelection: step.modelSelection } : {}),
 		...(child?.attemptedModels ?? step?.attemptedModels ? { attemptedModels: child?.attemptedModels ?? step?.attemptedModels } : {}),
 		...(child?.usage ? { usage: child.usage } : {}),
 		...(child?.usageRequests ? { usageRequests: child.usageRequests } : {}),

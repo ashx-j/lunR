@@ -7,7 +7,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
 import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, enqueueStepSteer, steerAcksDir, steerCapabilityPath, stepSteerInboxDir, watchAsyncControlInbox, type SteerAck, type SteerCapability, type SteerRequest } from "./control-channel.ts";
-import { appendJsonl as appendRawJsonl, getArtifactPaths } from "../../shared/artifacts.ts";
+import { appendJsonl as appendRawJsonl, ensureArtifactsDir, getArtifactPaths, writeArtifact } from "../../shared/artifacts.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, injectSingleOutputInstruction, resolveSingleOutput, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
@@ -120,6 +120,8 @@ interface SubagentRunConfig {
 	steps: RunnerStep[];
 	resultPath: string;
 	cwd: string;
+	/** The parent session's directory, which decides the project `.lunr/settings.json` output may not write. */
+	sessionCwd?: string;
 	placeholder: string;
 	taskIndex?: number;
 	totalTasks?: number;
@@ -874,6 +876,7 @@ interface SingleStepContext {
 	outputs?: ChainOutputMap;
 	placeholder: string;
 	cwd: string;
+	sessionCwd?: string;
 	sessionEnabled: boolean;
 	sessionDir?: string;
 	artifactsDir?: string;
@@ -1029,9 +1032,9 @@ export async function runSingleStep(
 	if (ctx.artifactsDir && ctx.artifactConfig?.enabled !== false) {
 		const index = ctx.flatStepCount > 1 ? ctx.flatIndex : undefined;
 		artifactPaths = getArtifactPaths(ctx.artifactsDir, ctx.id, step.agent, index);
-		fs.mkdirSync(ctx.artifactsDir, { recursive: true });
+		ensureArtifactsDir(ctx.artifactsDir);
 		if (ctx.artifactConfig?.includeInput !== false) {
-			fs.writeFileSync(artifactPaths.inputPath, `# Task for ${step.agent}\n\n${task}`, "utf-8");
+			writeArtifact(artifactPaths.inputPath, `# Task for ${step.agent}\n\n${task}`);
 		}
 		if (ctx.artifactConfig?.includeTranscript !== false) {
 			transcriptWriter = createChildTranscriptWriter({
@@ -1248,7 +1251,7 @@ export async function runSingleStep(
 	const rawOutput = finalResult?.finalOutput ?? "";
 	const outputForPersistence = stripAcceptanceReport(rawOutput);
 	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
-		? resolveSingleOutput(step.outputPath, outputForPersistence, finalOutputSnapshot)
+		? resolveSingleOutput(step.outputPath, outputForPersistence, finalOutputSnapshot, ctx.sessionCwd ?? ctx.cwd)
 		: { fullOutput: outputForPersistence };
 	const output = stripAcceptanceReport(resolvedOutput.fullOutput);
 	const outputReference = resolvedOutput.savedPath ? formatSavedOutputReference(resolvedOutput.savedPath, output) : undefined;
@@ -1317,7 +1320,7 @@ export async function runSingleStep(
 
 	if (artifactPaths && ctx.artifactConfig?.enabled !== false) {
 		if (ctx.artifactConfig?.includeOutput !== false) {
-			fs.writeFileSync(artifactPaths.outputPath, output, "utf-8");
+			writeArtifact(artifactPaths.outputPath, output);
 		}
 		if (ctx.artifactConfig?.includeMetadata !== false) {
 			fs.writeFileSync(
@@ -1337,7 +1340,7 @@ export async function runSingleStep(
 					skills: step.skills,
 					timestamp: Date.now(),
 				}, null, 2),
-				"utf-8",
+				{ encoding: "utf-8", mode: 0o600 },
 			);
 		}
 	}
@@ -2794,7 +2797,7 @@ async function runSubagent(
 				flushPendingStepSteers(fi);
 				const singleResult = await runSingleStep(task, {
 					supervisorSessionId: config.sessionId ?? undefined,
-					previousOutput, placeholder, cwd, sessionEnabled,
+					previousOutput, placeholder, cwd, sessionCwd: config.sessionCwd, sessionEnabled,
 					handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 					outputs,
 					sessionDir: config.sessionDir ? path.join(config.sessionDir, `dynamic-${stepIndex}-${taskIdx}`) : undefined,
@@ -3103,7 +3106,7 @@ async function runSubagent(
 
 						const singleResult = await runSingleStep(taskForRun, {
 							supervisorSessionId: config.sessionId ?? undefined,
-							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
+							previousOutput, placeholder, cwd: taskCwd, sessionCwd: config.sessionCwd, sessionEnabled,
 							handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 							outputs,
 							sessionDir: taskSessionDir,
@@ -3316,7 +3319,7 @@ async function runSubagent(
 			flushPendingStepSteers(flatIndex);
 			const singleResult = await runSingleStep(seqStep, {
 				supervisorSessionId: config.sessionId ?? undefined,
-				previousOutput, placeholder, cwd, sessionEnabled,
+				previousOutput, placeholder, cwd, sessionCwd: config.sessionCwd, sessionEnabled,
 				handoffToNext: config.mode === "chain" && stepIndex < steps.length - 1,
 				outputs: statusPayload.mode === "single" ? undefined : outputs,
 				sessionDir: config.sessionDir,

@@ -12,6 +12,7 @@ import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-
 interface AsyncRunStepSummary {
 	index: number;
 	agent: string;
+	sessionFile?: string;
 	label?: string;
 	phase?: string;
 	outputName?: string;
@@ -169,6 +170,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 			...(step.outputName ? { outputName: step.outputName } : {}),
 			...(step.structured ? { structured: step.structured } : {}),
 			status: step.status,
+			...(step.sessionFile ? { sessionFile: step.sessionFile } : {}),
 			...(stepActivityState ? { activityState: stepActivityState } : {}),
 			...(stepLastActivityAt ? { lastActivityAt: stepLastActivityAt } : {}),
 			...(step.currentTool ? { currentTool: step.currentTool } : {}),

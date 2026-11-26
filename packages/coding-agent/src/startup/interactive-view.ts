@@ -21,6 +21,7 @@ import type { SessionInfo, SessionListProgress } from "../core/session-manager.t
 import type { Settings } from "../core/settings-manager.ts";
 import { BootScreenComponent } from "../modes/interactive/components/boot-screen.ts";
 import { ExitConfirmation } from "../modes/interactive/exit-confirmation.ts";
+import { logStrayOutput } from "../modes/interactive/stray-output.ts";
 import { getEditorTheme, getThemeName, initTheme, theme } from "../modes/interactive/theme/theme.ts";
 import { markStartupMilestone } from "./startup-milestones.ts";
 
@@ -93,12 +94,13 @@ export class InteractiveView {
 		registerPermissionModeBridge(() =>
 			permission === "plan"
 				? "read-only"
-				: permission === "auto" || permission === "read-only"
+				: permission === "auto" || permission === "ask" || permission === "read-only"
 					? permission
 					: "yolo",
 		);
 		initTheme(typeof settings.theme === "string" ? settings.theme : undefined);
 		this.terminal = new StartupProcessTerminal();
+		this.terminal.setStrayOutputHandler(logStrayOutput);
 		this.ui = new TUI(this.terminal, settings.showHardwareCursor);
 		this.ui.setClearOnShrink(settings.terminal?.clearOnShrink ?? false);
 		this.keybindings = KeybindingsManager.create();

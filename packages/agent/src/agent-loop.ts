@@ -311,6 +311,7 @@ async function streamAssistantResponse(
 		systemPrompt: context.systemPrompt,
 		messages: llmMessages,
 		tools: context.tools,
+		deferredTools: context.deferredTools,
 	};
 
 	const streamFunction = streamFn || streamSimple;
@@ -484,6 +485,21 @@ type ExecutedToolCallBatch = {
 	terminate: boolean;
 };
 
+/**
+ * lunr: makes declared tools a result just loaded callable by the rest of the same message. The run's
+ * `tools` snapshot otherwise only refreshes at the next turn, so `[load_tools(cron), cron(...)]` failed.
+ * Sequential execution only, which a loader opts into. Parallel execution may prepare a call before an
+ * earlier call in the same message has run.
+ */
+function addLoadedDeferredTools(currentContext: AgentContext, addedToolNames: string[] | undefined): void {
+	if (!addedToolNames?.length || !currentContext.deferredTools) return;
+	const tools = currentContext.tools ?? [];
+	const loaded = currentContext.deferredTools.filter(
+		(tool) => addedToolNames.includes(tool.name) && !tools.some((t) => t.name === tool.name),
+	);
+	if (loaded.length) currentContext.tools = [...tools, ...loaded];
+}
+
 async function executeToolCallsSequential(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -528,6 +544,7 @@ async function executeToolCallsSequential(
 		await emitToolResultMessage(toolResultMessage, emit);
 		finalizedCalls.push(finalized);
 		messages.push(toolResultMessage);
+		addLoadedDeferredTools(currentContext, finalized.result.addedToolNames);
 
 		if (signal?.aborted) {
 			break;
@@ -557,6 +574,11 @@ async function executeToolCallsSequential(
 	};
 }
 
+/**
+ * Preflights calls in source order and runs them concurrently, except calls that
+ * `config.toolCallMutates` flags: those wait for every earlier call to settle and
+ * finish before any later call starts.
+ */
 async function executeToolCallsParallel(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -565,7 +587,16 @@ async function executeToolCallsParallel(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
-	const finalizedCalls: FinalizedToolCallEntry[] = [];
+	const settled: FinalizedToolCallOutcome[] = [];
+	// Calls since the last mutating call, in source order; they run together.
+	let queued: FinalizedToolCallEntry[] = [];
+	const settleQueued = async () => {
+		const outcomes = await Promise.all(
+			queued.map((entry) => (typeof entry === "function" ? entry() : Promise.resolve(entry))),
+		);
+		settled.push(...outcomes);
+		queued = [];
+	};
 
 	for (const toolCall of toolCalls) {
 		await emit({
@@ -583,14 +614,14 @@ async function executeToolCallsParallel(
 				isError: preparation.isError,
 			} satisfies FinalizedToolCallOutcome;
 			await emitToolExecutionEnd(finalized, emit);
-			finalizedCalls.push(finalized);
+			queued.push(finalized);
 			if (signal?.aborted) {
 				break;
 			}
 			continue;
 		}
 
-		finalizedCalls.push(async () => {
+		const run = async () => {
 			const executed = await executePreparedToolCall(preparation, signal, emit);
 			const finalized = await finalizeExecutedToolCall(
 				currentContext,
@@ -602,7 +633,15 @@ async function executeToolCallsParallel(
 			);
 			await emitToolExecutionEnd(finalized, emit);
 			return finalized;
-		});
+		};
+		if (config.toolCallMutates?.(preparation.toolCall, preparation.args)) {
+			await settleQueued();
+			queued.push(run);
+			// An abort while earlier calls ran leaves this call unstarted; the abort pass below fails it.
+			if (!signal?.aborted) await settleQueued();
+		} else {
+			queued.push(run);
+		}
 		if (signal?.aborted) {
 			break;
 		}
@@ -611,14 +650,14 @@ async function executeToolCallsParallel(
 	// After an abort, nothing queued may start: queued calls and calls never reached
 	// both become "Operation aborted" results, so every call still gets a result.
 	if (signal?.aborted) {
-		for (const [index, entry] of finalizedCalls.entries()) {
-			const toolCall = toolCalls[index];
+		for (const [index, entry] of queued.entries()) {
+			const toolCall = toolCalls[settled.length + index];
 			if (typeof entry !== "function" || !toolCall) continue;
 			const finalized = createAbortedToolCallOutcome(toolCall);
 			await emitToolExecutionEnd(finalized, emit);
-			finalizedCalls[index] = finalized;
+			queued[index] = finalized;
 		}
-		for (const toolCall of toolCalls.slice(finalizedCalls.length)) {
+		for (const toolCall of toolCalls.slice(settled.length + queued.length)) {
 			await emit({
 				type: "tool_execution_start",
 				toolCallId: toolCall.id,
@@ -627,15 +666,13 @@ async function executeToolCallsParallel(
 			});
 			const finalized = createAbortedToolCallOutcome(toolCall);
 			await emitToolExecutionEnd(finalized, emit);
-			finalizedCalls.push(finalized);
+			queued.push(finalized);
 		}
 	}
 
-	const orderedFinalizedCalls = await Promise.all(
-		finalizedCalls.map((entry) => (typeof entry === "function" ? entry() : Promise.resolve(entry))),
-	);
+	await settleQueued();
 	const messages: ToolResultMessage[] = [];
-	for (const finalized of orderedFinalizedCalls) {
+	for (const finalized of settled) {
 		const toolResultMessage = createToolResultMessage(finalized);
 		await emitToolResultMessage(toolResultMessage, emit);
 		messages.push(toolResultMessage);
@@ -643,7 +680,7 @@ async function executeToolCallsParallel(
 
 	return {
 		messages,
-		terminate: shouldTerminateToolBatch(orderedFinalizedCalls),
+		terminate: shouldTerminateToolBatch(settled),
 	};
 }
 
@@ -700,9 +737,16 @@ async function prepareToolCall(
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
 	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
 	if (!tool) {
+		// lunr: a declared but unloaded tool tells the model to load it. The loop cannot know which tool
+		// loads it (an extension may declare its own), and that loader's description already says so.
+		const deferred = currentContext.deferredTools?.some((t) => t.name === toolCall.name);
 		return {
 			kind: "immediate",
-			result: createErrorToolResult(`Tool ${toolCall.name} not found`),
+			result: createErrorToolResult(
+				deferred
+					? `Tool ${toolCall.name} is not loaded. Load it first, then call it again.`
+					: `Tool ${toolCall.name} not found`,
+			),
 			isError: true,
 		};
 	}
@@ -787,7 +831,7 @@ async function executePreparedToolCall(
 		);
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
-		return { result, isError: false };
+		return { result, isError: result.isError === true };
 	} catch (error) {
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);

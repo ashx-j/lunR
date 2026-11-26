@@ -307,6 +307,161 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
+	it("treats a returned isError result as a failed call and keeps its details", async () => {
+		const toolSchema = Type.Object({});
+		const tool: AgentTool<typeof toolSchema, { reason: string }> = {
+			name: "refuse",
+			label: "Refuse",
+			description: "Refuses without throwing",
+			parameters: toolSchema,
+			async execute() {
+				return { content: [{ type: "text", text: "refused" }], details: { reason: "read-only" }, isError: true };
+			},
+		};
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [tool] };
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+		let callIndex = 0;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message =
+					callIndex === 0
+						? createAssistantMessage(
+								[{ type: "toolCall", id: "tool-1", name: "refuse", arguments: {} }],
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+				stream.push({ type: "done", reason: callIndex === 0 ? "toolUse" : "stop", message });
+				callIndex++;
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, streamFn);
+		for await (const event of stream) events.push(event);
+
+		const toolEnd = events.find((e) => e.type === "tool_execution_end");
+		expect(toolEnd).toMatchObject({ isError: true, result: { details: { reason: "read-only" } } });
+		const toolResult = (await stream.result()).find((m) => m.role === "toolResult");
+		expect(toolResult).toMatchObject({ isError: true, details: { reason: "read-only" } });
+	});
+
+	it("tells the model to load a declared but unloaded tool and keeps not-found for unknown tools", async () => {
+		const tool = (name: string): AgentTool => ({
+			name,
+			label: name,
+			description: name,
+			parameters: Type.Object({}),
+			async execute() {
+				return { content: [{ type: "text", text: "ran" }], details: undefined };
+			},
+		});
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool("echo")],
+			deferredTools: [tool("cron")],
+		};
+		const requests: Array<string[] | undefined> = [];
+		let callIndex = 0;
+		const streamFn = (_model: Model<"openai-responses">, llmContext: { deferredTools?: { name: string }[] }) => {
+			requests.push(llmContext.deferredTools?.map((t) => t.name));
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message =
+					callIndex++ === 0
+						? createAssistantMessage(
+								[
+									{ type: "toolCall", id: "tool-1", name: "cron", arguments: {} },
+									{ type: "toolCall", id: "tool-2", name: "missing", arguments: {} },
+								],
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+				stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });
+			});
+			return stream;
+		};
+
+		const messages = await runAgentLoop(
+			[createUserMessage("go")],
+			context,
+			{ model: createModel(), convertToLlm: identityConverter },
+			() => {},
+			undefined,
+			streamFn,
+		);
+
+		expect(requests[0]).toEqual(["cron"]);
+		const results = messages.flatMap((message) =>
+			message.role === "toolResult" && message.content[0]?.type === "text" ? [message.content[0].text] : [],
+		);
+		expect(results).toEqual([
+			"Tool cron is not loaded. Load it first, then call it again.",
+			"Tool missing not found",
+		]);
+	});
+
+	it("runs a declared tool that an earlier call in the same message loaded", async () => {
+		const cron: AgentTool = {
+			name: "cron",
+			label: "cron",
+			description: "cron",
+			parameters: Type.Object({}),
+			async execute() {
+				return { content: [{ type: "text", text: "no jobs" }], details: undefined };
+			},
+		};
+		const loader: AgentTool = {
+			name: "load_tools",
+			label: "load_tools",
+			description: "load",
+			parameters: Type.Object({}),
+			executionMode: "sequential",
+			async execute() {
+				return {
+					content: [{ type: "text", text: "Loaded tools: cron." }],
+					details: undefined,
+					addedToolNames: ["cron"],
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [loader], deferredTools: [cron] };
+		let callIndex = 0;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message =
+					callIndex++ === 0
+						? createAssistantMessage(
+								[
+									{ type: "toolCall", id: "tool-1", name: "load_tools", arguments: {} },
+									{ type: "toolCall", id: "tool-2", name: "cron", arguments: {} },
+								],
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+				stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });
+			});
+			return stream;
+		};
+
+		const messages = await runAgentLoop(
+			[createUserMessage("go")],
+			context,
+			{ model: createModel(), convertToLlm: identityConverter },
+			() => {},
+			undefined,
+			streamFn,
+		);
+
+		const results = messages.flatMap((message) =>
+			message.role === "toolResult" && message.content[0]?.type === "text" ? [message.content[0].text] : [],
+		);
+		expect(results).toEqual(["Loaded tools: cron.", "no jobs"]);
+	});
+
 	it("should not execute tool calls from a length-truncated assistant message", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];
@@ -1652,5 +1807,129 @@ describe("exported loop preparation failures", () => {
 			runAgentLoopContinue({ systemPrompt: "", messages: [prompt], tools: [] }, config, emit),
 		).rejects.toThrow("preparation failed");
 		expect(events.some((event) => event.type === "agent_end")).toBe(false);
+	});
+});
+
+describe("parallel tool calls with toolCallMutates", () => {
+	const fileSchema = Type.Object({ path: Type.String(), content: Type.Optional(Type.String()) });
+
+	// read and write tools over an in-memory file map that log when each call starts and ends.
+	function createFileTools(onWrite?: () => void) {
+		const files = new Map<string, string>();
+		const log: string[] = [];
+		const tool = (name: string): AgentTool<typeof fileSchema, Record<string, never>> => ({
+			name,
+			label: name,
+			description: name,
+			parameters: fileSchema,
+			async execute(toolCallId, params) {
+				log.push(`start ${toolCallId}`);
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				if (name === "write") {
+					onWrite?.();
+					files.set(params.path, params.content ?? "");
+				}
+				log.push(`end ${toolCallId}`);
+				const text = name === "write" ? "written" : (files.get(params.path) ?? "missing");
+				return { content: [{ type: "text", text }], details: {} };
+			},
+		});
+		return { files, log, tools: [tool("read"), tool("write")] };
+	}
+
+	async function runBatch(
+		calls: Array<{ id: string; name: string; path: string }>,
+		options: { onWrite?: (controller: AbortController) => void } = {},
+	) {
+		const controller = new AbortController();
+		const { log, tools } = createFileTools(() => options.onWrite?.(controller));
+		const gated: string[] = [];
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			toolCallMutates: (toolCall) => toolCall.name === "write",
+			beforeToolCall: async ({ toolCall }) => {
+				gated.push(toolCall.id);
+				return undefined;
+			},
+		};
+		let llmCalls = 0;
+		const stream = agentLoop(
+			[createUserMessage("go")],
+			{ systemPrompt: "", messages: [], tools },
+			config,
+			controller.signal,
+			() => {
+				const mockStream = new MockAssistantStream();
+				const first = llmCalls++ === 0;
+				queueMicrotask(() => {
+					const message = first
+						? createAssistantMessage(
+								calls.map((call) => ({
+									type: "toolCall" as const,
+									id: call.id,
+									name: call.name,
+									arguments: { path: call.path, content: call.id },
+								})),
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+					mockStream.push({ type: "done", reason: first ? "toolUse" : "stop", message });
+				});
+				return mockStream;
+			},
+		);
+		for await (const _event of stream) {
+			// consume
+		}
+		const results = (await stream.result()).filter((message) => message.role === "toolResult");
+		return {
+			log,
+			gated,
+			llmCalls,
+			results: results.map((result) => ({
+				id: result.toolCallId,
+				text: result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+			})),
+		};
+	}
+
+	it("runs reads together, and a mutating call after earlier calls and before later ones", async () => {
+		const { log, gated, results } = await runBatch([
+			{ id: "r1", name: "read", path: "a" },
+			{ id: "r2", name: "read", path: "a" },
+			{ id: "w", name: "write", path: "a" },
+			{ id: "r3", name: "read", path: "a" },
+			{ id: "r4", name: "read", path: "a" },
+		]);
+
+		expect(log.slice(0, 2).sort()).toEqual(["start r1", "start r2"]);
+		expect(log.slice(4, 6)).toEqual(["start w", "end w"]);
+		expect(log.slice(6, 8).sort()).toEqual(["start r3", "start r4"]);
+		expect(gated).toEqual(["r1", "r2", "w", "r3", "r4"]);
+		expect(results).toEqual([
+			{ id: "r1", text: "missing" },
+			{ id: "r2", text: "missing" },
+			{ id: "w", text: "written" },
+			{ id: "r3", text: "w" },
+			{ id: "r4", text: "w" },
+		]);
+	});
+
+	it("does not start later calls after an abort during a mutating call", async () => {
+		const { log, llmCalls, results } = await runBatch(
+			[
+				{ id: "w", name: "write", path: "a" },
+				{ id: "r", name: "read", path: "a" },
+			],
+			{ onWrite: (controller) => controller.abort() },
+		);
+
+		expect(log).toEqual(["start w", "end w"]);
+		expect(llmCalls).toBe(1);
+		expect(results).toEqual([
+			{ id: "w", text: "written" },
+			{ id: "r", text: "Operation aborted" },
+		]);
 	});
 });

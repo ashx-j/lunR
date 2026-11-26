@@ -68,14 +68,18 @@ import {
 	parseAutoReviewVerdict,
 	registerAutoReviewSnapshot,
 	resolveAutoReviewer,
+	reviewerFailed,
 	SUBAGENT_CHILD_AUTO_REVIEW_ENV,
 } from "./auto-review.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionResult,
+	type CompactionSettings,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
 	compact,
+	compactionCeilingFloor,
+	compactionThreshold,
 	estimateContextTokens,
 	estimateTokens,
 	generateBranchSummary,
@@ -118,6 +122,7 @@ import { convertToLlm } from "./messages.ts";
 import { isUserInstructionsPath, loadSelectedUserInstructions } from "./model-instructions.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import { type CompiledPermissionRules, compilePermissionRules } from "./permission-rules.ts";
 import {
 	AUTONOMOUS_ADDENDUM,
 	deletePermissionContext,
@@ -129,7 +134,7 @@ import {
 	setPermissionAutonomous,
 	setPermissionMode,
 } from "./permissions.ts";
-import { READ_ONLY_MODE_ADDENDUM } from "./plan-mode.ts";
+import { READ_ONLY_MODE_ADDENDUM, readOnlyModeBlockReason } from "./plan-mode.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
@@ -151,6 +156,7 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import { measureStartup } from "./timings.ts";
 import { TODO_TOOL_NAMES } from "./todo-settings.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
+import { BashJobs } from "./tools/bash-jobs.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -433,6 +439,8 @@ export class AgentSession {
 	private _followUpMessages: string[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
+	/** `run_in_background` jobs. They survive tool rebuilds and stop when the session is disposed. */
+	readonly bashJobs = new BashJobs();
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
@@ -483,6 +491,8 @@ export class AgentSession {
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
+	// lunr: tools this session started unloaded, in declared order (see setDeferredToolsByName).
+	private _deferredToolNames: string[] = [];
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
 	private _toolPromptSnippets: Map<string, string> = new Map();
 	private _toolPromptGuidelines: Map<string, string[]> = new Map();
@@ -495,6 +505,11 @@ export class AgentSession {
 	private _systemPromptAppend?: string;
 	// lunr: core-owned tool-call gates (read-only mode) checked before extension tool_call handlers
 	private _toolCallGates: ToolCallGate[] = [];
+	/** Set when a ceiling compaction fails or is cancelled; cleared just before the next prompt's opening check. */
+	private _ceilingCompactionFailedThisRun = false;
+	/** `_lastCompactedTokens`: the estimated context size the latest compaction left. Not persisted. */
+	private _compactedContextTokens = 0;
+	private _compactionPrefixCache: { systemPrompt: string; tools: readonly AgentTool[]; tokens: number } | undefined;
 	// lunr: "no questions" for /goal, subagents and ACP Autonomous, separate from the permission mode.
 	private _autonomous = false;
 	// lunr: ACP clients approve tools themselves, so their sessions skip auto review.
@@ -644,8 +659,13 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
+		// lunr: calls read-only mode knows to change state (edit, write, mutating bash, ...) run in
+		// the order the model wrote them; other calls in the same message still run concurrently.
+		// Unknown extension tools stay concurrent; they can opt out with executionMode "sequential".
+		this.agent.toolCallMutates = (toolCall, args) => readOnlyModeBlockReason(toolCall.name, args) !== undefined;
 		this.agent.beforeToolCall = async ({ toolCall, args, assistantMessage }) => {
 			// lunr: the permission gate runs before host gates and may request approval.
+			const rules = this._permissionRules();
 			const permBlock = await gateToolCall(
 				toolCall.name,
 				args as Record<string, unknown>,
@@ -654,6 +674,8 @@ export class AgentSession {
 				{
 					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
 					assistantMessage,
+					rules,
+					saveAllowRule: (rule) => this.settingsManager.addPermissionAllowRule(rule),
 				},
 			);
 			if (permBlock) {
@@ -662,7 +684,8 @@ export class AgentSession {
 			if (
 				this.permissionMode === "auto" &&
 				this._autoReviewEnabled &&
-				needsAutoReview(toolCall.name, args as Record<string, unknown>, this._cwd)
+				needsAutoReview(toolCall.name, args as Record<string, unknown>, this._cwd) &&
+				!rules.allowed(toolCall.name, args as Record<string, unknown>)
 			) {
 				const reviewBlock = await this._reviewAutoAction(toolCall.name, args, toolCall.id);
 				if (reviewBlock) return { block: true, reason: reviewBlock };
@@ -723,9 +746,14 @@ export class AgentSession {
 		};
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+			// A job that exited during the run is announced in the next tool result, which the
+			// next request carries anyway. Steering would cost an extra request after a final answer.
+			const jobNotice = this.bashJobs.takeExitNotices();
+			if (jobNotice) result = { ...result, content: [...result.content, { type: "text", text: jobNotice }] };
+			const unchanged = jobNotice ? { content: result.content } : undefined;
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_result")) {
-				return undefined;
+				return unchanged;
 			}
 
 			const hookResult = await runner.emitToolResult({
@@ -739,7 +767,7 @@ export class AgentSession {
 			});
 
 			if (!hookResult) {
-				return undefined;
+				return unchanged;
 			}
 
 			return {
@@ -762,17 +790,24 @@ export class AgentSession {
 				...(previousSnapshot?.context ?? turn.context),
 				systemPrompt: this._withSystemPromptAppend(this._systemPromptOverride ?? this._baseSystemPrompt),
 				tools: this.agent.state.tools.slice(),
+				deferredTools: this.agent.state.deferredTools,
 			};
 			const model = this.model;
 			const settings = this.settingsManager.getCompactionSettings();
+			// Codex has a hard window, and a ceiling exists for long runs, so both check between tool turns.
+			// A ceiling compaction that failed or was cancelled is not retried until the next prompt.
+			const ceilingSet = settings.ceilingTokens !== undefined;
 			if (
-				model?.provider === "openai-codex" &&
+				model &&
+				(model.provider === "openai-codex" || (ceilingSet && !this._ceilingCompactionFailedThisRun)) &&
 				settings.enabled &&
 				shouldCompact(
 					estimateRequestContextTokens({ ...previousContext, messages: convertToLlm(previousContext.messages) })
 						.tokens,
 					model.contextWindow,
 					settings,
+					this._compactionPrefixTokens(settings),
+					this._lastCompactedTokens(settings),
 				)
 			) {
 				const previousCompactionId = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
@@ -780,6 +815,8 @@ export class AgentSession {
 				const currentCompaction = getLatestCompactionEntry(this.sessionManager.getBranch());
 				if (currentCompaction && currentCompaction.id !== previousCompactionId) {
 					previousContext = { ...previousContext, messages: this.agent.state.messages.slice() };
+				} else if (ceilingSet) {
+					this._ceilingCompactionFailedThisRun = true;
 				}
 			}
 
@@ -1184,6 +1221,7 @@ export class AgentSession {
 		);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
+		this.bashJobs.stopAll();
 		cleanupSessionResources(this.sessionId);
 		deletePermissionContext(this.sessionId);
 		this.sessionManager.dispose();
@@ -1278,6 +1316,12 @@ export class AgentSession {
 		);
 	}
 
+	/** Settings allow and deny rules, compiled once per settings change. */
+	private _permissionRules(): CompiledPermissionRules {
+		const { global, project, projectTrusted } = this.settingsManager.getPermissionRuleSettings();
+		return compilePermissionRules(global, project, projectTrusted, this._cwd);
+	}
+
 	/** ACP clients approve each tool themselves, so their workers turn auto review off. */
 	setAutoReviewEnabled(enabled: boolean): void {
 		this._autoReviewEnabled = enabled;
@@ -1290,6 +1334,12 @@ export class AgentSession {
 			configuredRef: this.settingsManager.getAutoReviewModel(),
 			sessionModel: this.model,
 			getModel: (provider, modelId) => this._modelRuntime.getModel(provider, modelId),
+			getOffered: (provider) => {
+				const offered = this._modelRuntime.getAvailableSnapshot().filter((model) => model.provider === provider);
+				// An ambient env key, or a subscription saved without a model list, lists nothing to check against.
+				return offered.length > 0 ? offered : undefined;
+			},
+			getCatalog: (provider) => this._modelRuntime.getModels(provider),
 		});
 	}
 
@@ -1331,11 +1381,11 @@ export class AgentSession {
 				reason =
 					verdict?.reason ??
 					(response.stopReason === "error"
-						? `The review model failed: ${response.errorMessage ?? "unknown error"}.`
+						? reviewerFailed(reviewer.ref, response.errorMessage ?? "unknown error")
 						: "The review model gave no clear answer.");
 			} catch (error) {
 				if (this.agent.signal?.aborted) return "Aborted before auto review finished.";
-				reason = `The review model failed: ${error instanceof Error ? error.message : String(error)}.`;
+				reason = reviewerFailed(reviewer.ref, error instanceof Error ? error.message : String(error));
 			}
 		}
 		const limitReached = this._autoReviewTracker.recordBlock();
@@ -1437,6 +1487,11 @@ export class AgentSession {
 	setActiveToolsByName(toolNames: string[]): void {
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
+		// bash_job is the only way to read or stop what bash starts in the background, so it comes with bash.
+		const bashIndex = toolNames.indexOf("bash");
+		if (bashIndex !== -1 && !toolNames.includes("bash_job")) {
+			toolNames = [...toolNames.slice(0, bashIndex + 1), "bash_job", ...toolNames.slice(bashIndex + 1)];
+		}
 		for (const name of toolNames) {
 			const tool = this._toolRegistry.get(name);
 			if (tool) {
@@ -1445,12 +1500,30 @@ export class AgentSession {
 			}
 		}
 		this.agent.state.tools = tools;
+		// lunr: every registry refresh ends here, so the declared deferred tools always carry current wrappers.
+		this.agent.state.deferredTools = this._deferredToolNames.flatMap((name) => this._toolRegistry.get(name) ?? []);
 
 		// Rebuild base system prompt with new tool set
 		this._baseSystemPrompt = this._rebuildSystemPrompt(validToolNames);
 		this.agent.state.systemPrompt = this._withSystemPromptAppend(
 			this._systemPromptOverride ?? this._baseSystemPrompt,
 		);
+	}
+
+	/**
+	 * lunr: start these registered tools unloaded. They leave the active set and join the set declared to
+	 * providers with native deferred loading (`Context.deferredTools`), after any names declared earlier.
+	 * A name declared earlier keeps its place and stays loaded if it loaded since. Accepts nothing when the
+	 * session has an explicit tool allowlist or the user turned off loading tools on demand. Returns the
+	 * accepted names.
+	 */
+	setDeferredToolsByName(toolNames: string[]): string[] {
+		if (this._allowedToolNames || !this.settingsManager.getDeferredToolsEnabled()) return [];
+		const accepted = [...new Set(toolNames.filter((name) => this._toolRegistry.has(name)))];
+		const added = new Set(accepted.filter((name) => !this._deferredToolNames.includes(name)));
+		this._deferredToolNames = [...this._deferredToolNames, ...added];
+		this.setActiveToolsByName(this.getActiveToolNames().filter((name) => !added.has(name)));
+		return accepted;
 	}
 
 	/** Rebuild the registry after a settings-backed feature changes availability. */
@@ -1537,7 +1610,13 @@ export class AgentSession {
 	}
 
 	private _rebuildSystemPrompt(toolNames: string[]): string {
-		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
+		// lunr: declared deferred tools count as selected whether loaded or not, in declared order after the
+		// rest. The prompt's tool checks then give the same text before and after a load, so a load keeps
+		// the cached prefix and the model keeps the guidance that tells it when to load a tool.
+		const validToolNames = [
+			...toolNames.filter((name) => !this._deferredToolNames.includes(name)),
+			...this._deferredToolNames,
+		].filter((name) => this._toolRegistry.has(name));
 		const toolSnippets: Record<string, string> = {};
 		const promptGuidelines: string[] = [];
 		for (const name of validToolNames) {
@@ -1905,6 +1984,8 @@ export class AgentSession {
 		}
 
 		const lastAssistant = this._findLastAssistantMessage();
+		// A new prompt may try a failed ceiling compaction once more; this opening check counts as that try.
+		this._ceilingCompactionFailedThisRun = false;
 		if (lastAssistant) await this._checkCompaction(lastAssistant, false);
 
 		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: input.text }];
@@ -1913,6 +1994,16 @@ export class AgentSession {
 		if (input.fromExtension) this._extensionUserMessages.add(userMessage);
 		const messages: AgentMessage[] = [userMessage, ...this._pendingNextTurnMessages];
 		this._pendingNextTurnMessages = [];
+		const jobNotice = this.bashJobs.takeExitNotices();
+		if (jobNotice) {
+			messages.push({
+				role: "custom",
+				customType: "bash-job",
+				content: jobNotice,
+				display: true,
+				timestamp: Date.now(),
+			});
+		}
 
 		const result = await this._extensionRunner.emitBeforeAgentStart(
 			input.text,
@@ -2744,6 +2835,7 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
+			this._recordCompactedSize(estimatedTokensAfter);
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2904,10 +2996,91 @@ export class AgentSession {
 		} else {
 			contextTokens = directContextTokens;
 		}
-		if (shouldCompact(contextTokens, contextWindow, settings)) {
-			return await this._runAutoCompaction("threshold", false);
+		if (
+			shouldCompact(
+				contextTokens,
+				contextWindow,
+				settings,
+				this._compactionPrefixTokens(settings),
+				this._lastCompactedTokens(settings),
+			)
+		) {
+			const previousCompactionId = compactionEntry?.id;
+			const continued = await this._runAutoCompaction("threshold", false);
+			if (
+				settings.ceilingTokens !== undefined &&
+				getLatestCompactionEntry(this.sessionManager.getBranch())?.id === previousCompactionId
+			) {
+				this._ceilingCompactionFailedThisRun = true;
+			}
+			return continued;
 		}
 		return false;
+	}
+
+	/**
+	 * System prompt and tool schema tokens, which a compacted context still carries. Only the ceiling
+	 * needs them. Cached on the prompt string and tools array, since counting a 65k-character prefix
+	 * takes 1 to 3 ms and the ceiling checks it every tool turn.
+	 */
+	private _compactionPrefixTokens(settings: CompactionSettings): number {
+		if (!settings.ceilingTokens) return 0;
+		const systemPrompt = this.systemPrompt;
+		const tools = this.agent.state.tools;
+		const cached = this._compactionPrefixCache;
+		if (cached?.systemPrompt === systemPrompt && cached.tools === tools) return cached.tokens;
+		const tokens = estimateRequestContextTokens({ systemPrompt, tools, messages: [] }).tokens;
+		this._compactionPrefixCache = { systemPrompt, tools, tokens };
+		return tokens;
+	}
+
+	/**
+	 * The configured compaction ceiling and the token count this session compacts at (the raised
+	 * ceiling, capped by the window threshold), when a ceiling is set.
+	 */
+	getCompactionCeiling(): { configured: number; effective: number; keptTokens?: number } | undefined {
+		const settings = this.settingsManager.getCompactionSettings();
+		if (settings.ceilingTokens === undefined) return undefined;
+		const effective = compactionThreshold(
+			this.model?.contextWindow ?? 0,
+			settings,
+			this._compactionPrefixTokens(settings),
+			this._lastCompactedTokens(settings),
+		);
+		const { keptTokens } = this.getCompactionCeilingFloor();
+		return { configured: settings.ceilingTokens, effective, ...(keptTokens ? { keptTokens } : {}) };
+	}
+
+	/**
+	 * The lowest ceiling this session would use, whatever the setting (`compactionCeilingFloor`), and
+	 * `keptTokens` when what the last compaction kept, not the estimate, sets it. That lasts until the
+	 * next compaction keeps less.
+	 */
+	getCompactionCeilingFloor(): { floor: number; keptTokens?: number } {
+		const settings = { ...this.settingsManager.getCompactionSettings(), ceilingTokens: 1 };
+		const contextWindow = this.model?.contextWindow ?? 0;
+		const prefix = this._compactionPrefixTokens(settings);
+		const kept = this._lastCompactedTokens(settings);
+		const floor = compactionCeilingFloor(contextWindow, settings, prefix, kept);
+		return floor > compactionCeilingFloor(contextWindow, settings, prefix) ? { floor, keptTokens: kept } : { floor };
+	}
+
+	/**
+	 * The estimated size of the context the latest compaction in this process left (system prompt and
+	 * tools plus the summary and kept messages), recorded when it succeeded. An estimate, like the
+	 * mid-prompt check it feeds, so a retried, aborted or zero-usage request can't change it. 0 without
+	 * a ceiling or before the first compaction, so behavior without a ceiling is unchanged.
+	 */
+	private _lastCompactedTokens(settings: CompactionSettings): number {
+		return settings.ceilingTokens ? this._compactedContextTokens : 0;
+	}
+
+	/** Records `_lastCompactedTokens` after a compaction rebuilt the context from `messages`. */
+	private _recordCompactedSize(messagesTokens: number): void {
+		const settings = this.settingsManager.getCompactionSettings();
+		this._compactedContextTokens = settings.ceilingTokens
+			? this._compactionPrefixTokens(settings) + messagesTokens
+			: 0;
 	}
 
 	/**
@@ -3021,6 +3194,7 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
+			this._recordCompactedSize(estimatedTokensAfter);
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -3338,6 +3512,7 @@ export class AgentSession {
 				getActiveTools: () => this.getActiveToolNames(),
 				getAllTools: () => this.getAllTools(),
 				setActiveTools: (toolNames) => this.setActiveToolsByName(toolNames),
+				setDeferredTools: (toolNames) => this.setDeferredToolsByName(toolNames),
 				refreshTools: () => this._refreshToolRegistry(),
 				getCommands,
 				setModel: async (model) => {
@@ -3401,9 +3576,12 @@ export class AgentSession {
 		const previousActiveToolNames = this.getActiveToolNames();
 		const allowedToolNames = this._allowedToolNames;
 		const excludedToolNames = this._excludedToolNames;
+		// bash_job follows bash, so `--tools read,bash` keeps a way to read background jobs.
+		const isListed = (names: Set<string>, name: string): boolean =>
+			names.has(name) || (name === "bash_job" && names.has("bash"));
 		const isAllowedTool = (name: string): boolean =>
-			(!allowedToolNames || allowedToolNames.has(name)) &&
-			!excludedToolNames?.has(name) &&
+			(!allowedToolNames || isListed(allowedToolNames, name)) &&
+			!(excludedToolNames && isListed(excludedToolNames, name)) &&
 			(this.settingsManager.getMemoryEnabled() || !MEMORY_TOOL_NAMES.has(name)) &&
 			(this.settingsManager.getTodosEnabled() || !TODO_TOOL_NAMES.has(name)) &&
 			(name !== "browser" || this.settingsManager.getBrowserEnabled());
@@ -3480,7 +3658,8 @@ export class AgentSession {
 			}
 		} else if (options?.includeAllExtensionTools) {
 			for (const tool of wrappedExtensionTools) {
-				nextActiveToolNames.push(tool.name);
+				// lunr: a declared deferred tool stays unloaded until something loads it.
+				if (!this._deferredToolNames.includes(tool.name)) nextActiveToolNames.push(tool.name);
 			}
 		} else if (!options?.activeToolNames) {
 			for (const toolName of this._toolRegistry.keys()) {
@@ -3501,6 +3680,7 @@ export class AgentSession {
 		const autoResizeImages = this.settingsManager.getImageAutoResize();
 		const shellCommandPrefix = this.settingsManager.getShellCommandPrefix();
 		const shellPath = this.settingsManager.getShellPath();
+		const defaultTimeout = this.settingsManager.getBashTimeoutSeconds();
 		const baseToolDefinitions = this._baseToolsOverride
 			? Object.fromEntries(
 					Object.entries(this._baseToolsOverride).map(([name, tool]) => [
@@ -3510,7 +3690,7 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					bash: { commandPrefix: shellCommandPrefix, shellPath, defaultTimeout, jobs: this.bashJobs },
 				});
 
 		this._baseToolDefinitions = new Map(
@@ -3555,6 +3735,8 @@ export class AgentSession {
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
 		await this._resourceLoader.reload();
+		// lunr: reload reactivates every extension tool; the loader declares its deferred set again at the next prompt.
+		this._deferredToolNames = [];
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),
 			flagValues: previousFlagValues,
@@ -4202,16 +4384,22 @@ export class AgentSession {
 	 * @returns Path to exported file
 	 */
 	async exportToHtml(outputPath?: string): Promise<string> {
-		const [{ exportSessionToHtml }, { createToolHtmlRenderer }] = await Promise.all([
+		const [{ exportSessionToHtml }, { createToolHtmlRenderer }, { getBuiltinToolRenderer }] = await Promise.all([
 			import("./export-html/index.ts"),
 			import("./export-html/tool-renderer.ts"),
+			import("../modes/interactive/tool-renderers/index.ts"),
 		]);
 		const configuredThemeName = this.settingsManager.getTheme();
 		const themeName = configuredThemeName && getThemeByName(configuredThemeName) ? configuredThemeName : undefined;
 
 		// Create tool renderer if we have an extension runner (for custom tool HTML rendering)
 		const toolRenderer: ToolHtmlRenderer = createToolHtmlRenderer({
-			getToolDefinition: (name) => this.getToolDefinition(name),
+			// Built-in definitions carry no renderers; the export draws them as the TUI does.
+			getToolDefinition: (name) => {
+				const definition = this.getToolDefinition(name);
+				if (!definition || definition !== this._baseToolDefinitions.get(name)) return definition;
+				return { ...definition, ...getBuiltinToolRenderer(name) };
+			},
 			theme,
 			cwd: this.sessionManager.getCwd(),
 		});

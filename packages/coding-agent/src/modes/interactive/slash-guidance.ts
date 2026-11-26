@@ -6,6 +6,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
+import { PERMISSION_MODES, permissionModeLabel } from "../../core/permissions.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 
 /**
@@ -88,7 +89,7 @@ type HelpEntry = readonly [command: string, description: string];
 // One `/help` row with two aligned command columns.
 function helpRow(left: HelpEntry, right: HelpEntry): string {
 	const leftCell = `${left[0].padEnd(14)}${left[1]}`;
-	return `  ${leftCell.padEnd(36)}${right[0].padEnd(11)}${right[1]}`;
+	return `  ${leftCell.padEnd(40)}${right[0].padEnd(11)}${right[1]}`;
 }
 
 const HELP_SECTIONS: ReadonlyArray<{ title: string; lines: readonly string[] }> = [
@@ -96,7 +97,7 @@ const HELP_SECTIONS: ReadonlyArray<{ title: string; lines: readonly string[] }> 
 		title: "Getting started",
 		lines: [
 			helpRow(["/login", "add a provider"], ["/model", "pick a model"]),
-			helpRow(["/mode", "yolo | auto | read"], ["/thinking", "reasoning level"]),
+			helpRow(["/mode", PERMISSION_MODES.map(permissionModeLabel).join(" | ")], ["/thinking", "reasoning level"]),
 			helpRow(["/settings", "all options"], ["/hotkeys", "every key"]),
 		],
 	},

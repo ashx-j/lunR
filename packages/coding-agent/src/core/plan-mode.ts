@@ -35,7 +35,10 @@ const SYSTEM_BIN_DIRS = new Set(["/bin", "/usr/bin", "/usr/local/bin", "/opt/hom
 /** Characters after `$` that start an expansion: names, positional and special parameters, `${`, `$(`, `$[`. */
 const DOLLAR_EXPANSION_START = /[A-Za-z0-9_{([@*#?$!-]/;
 
-/** Small allowlist of read-only commands permitted in read-only mode. Everything else is rejected. */
+/**
+ * Allowlist of read-only commands permitted in read-only mode. Everything else is rejected.
+ * It also decides scheduling: bash calls outside it run one after another (`toolCallMutates`).
+ */
 const ALLOWED_COMMANDS = new Set([
 	"ls",
 	"ll",
@@ -83,6 +86,35 @@ const ALLOWED_COMMANDS = new Set([
 	"npm",
 	"pnpm",
 	"bun",
+	// These only read their inputs and print. None has an option that writes a file or runs
+	// a program (checked against GNU coreutils, procps, util-linux and jq 1.8).
+	"sleep",
+	"cut",
+	"tr",
+	"basename",
+	"dirname",
+	"seq",
+	"nl",
+	"rev",
+	"paste",
+	"join",
+	"column",
+	"fold",
+	"od",
+	"hexdump",
+	"strings",
+	"md5sum",
+	"sha1sum",
+	"sha256sum",
+	"sha512sum",
+	"cksum",
+	"expr",
+	"ps",
+	"df",
+	"free",
+	// Checked below: du and jq.
+	"du",
+	"jq",
 ]);
 
 const READ_ONLY_GIT_SUBCOMMANDS = new Set([
@@ -188,31 +220,94 @@ function readBashCommand(input: unknown): string {
 export function isMutatingBashCommand(command: string): boolean {
 	if (!command.trim()) return false;
 
-	// Any output redirect outside quotes can write a file.
-	if (hasUnquotedRedirect(command)) return true;
+	// Output redirects outside quotes can write a file, except to /dev/null or onto another descriptor.
+	const withoutRedirects = withoutHarmlessRedirects(joinLineContinuations(command));
+	if (withoutRedirects === undefined) return true;
 
 	// Substitutions, parameter expansion, ANSI-C quoting and brace expansion change
 	// the words after this check, so a literal word check cannot classify them.
-	if (hasShellExpansion(command)) return true;
+	if (hasShellExpansion(withoutRedirects)) return true;
 
 	// Every segment separated by ; | & && || must individually be read-only.
-	for (const segment of splitShellSegments(command)) {
+	let changedDir = false;
+	for (const segment of splitShellSegments(withoutRedirects)) {
+		const tokens = shellWords(segment);
+		if (tokens?.[0] === "cd") {
+			if (!isPlainCd(segment, tokens)) return true;
+			changedDir = true;
+			continue;
+		}
 		if (isMutatingSegment(segment)) return true;
+		// `cd dir && git log` is `git -C dir log`: the new directory's config can run a program.
+		const name = tokens?.find((token) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token));
+		if (changedDir && name && CWD_CONFIG_COMMANDS.has(basenameOf(name).toLowerCase())) return true;
 	}
 	return false;
 }
 
-function hasUnquotedRedirect(command: string): boolean {
+/**
+ * The command without the backslash-newline pairs bash deletes before it tokenizes, so a
+ * continuation can't split `<<`, `>>`, `&&`, `$(` or a command name across lines. Bash keeps the
+ * pair inside single quotes and ends a comment at the newline even after a backslash, so those
+ * stay as written.
+ */
+function joinLineContinuations(command: string): string {
+	if (!command.includes("\\\n")) return command;
+	let out = "";
 	let quote: "'" | '"' | undefined;
-	let escaped = false;
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
-		if (escaped) {
-			escaped = false;
-			continue;
+		if (quote === "'") {
+			if (ch === "'") quote = undefined;
+			out += ch;
+		} else if (ch === "\\") {
+			if (command[i + 1] !== "\n") out += ch + (command[i + 1] ?? "");
+			i++;
+		} else if (quote) {
+			if (ch === quote) quote = undefined;
+			out += ch;
+		} else if (ch === "'" || ch === '"') {
+			quote = ch;
+			out += ch;
+		} else if (ch === "#" && (out === "" || /[ \t\n;|&()<>]/.test(out[out.length - 1]))) {
+			const lineEnd = command.indexOf("\n", i);
+			const end = lineEnd < 0 ? command.length : lineEnd;
+			out += command.slice(i, end);
+			i = end - 1;
+		} else {
+			out += ch;
 		}
+	}
+	return out;
+}
+
+/** Allowed commands that load config, hooks or a program from the working directory. */
+const CWD_CONFIG_COMMANDS = new Set(["git", "gh", "npm", "pnpm", "bun"]);
+
+/** `cd <dir>` alone: one literal argument that isn't an option, `-` or a glob. */
+function isPlainCd(segment: string, tokens: string[]): boolean {
+	return tokens.length === 2 && tokens[1] !== "" && !tokens[1].startsWith("-") && !unquotedGlobs(segment).any;
+}
+
+/**
+ * The command with each unquoted `[n]>/dev/null`, `&>/dev/null` and `[n]>&m` blanked out, or
+ * undefined when any other output redirect remains (`>file`, `>>`, `>|`, `<>`, `>&-`, a quoted or
+ * expanded target), any redirect names its fd (`{PATH}>`, `{HOME}<`) or a here-document starts (`<<`).
+ * Comments are blanked too.
+ * Blanking keeps the `&` of `2>&1` from reading as an operator later.
+ */
+function withoutHarmlessRedirects(command: string): string | undefined {
+	const parts: string[] = [];
+	let copied = 0;
+	const blank = (start: number, end: number) => {
+		parts.push(command.slice(copied, start), " ".repeat(end - start));
+		copied = end;
+	};
+	let quote: "'" | '"' | undefined;
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
 		if (ch === "\\" && quote !== "'") {
-			escaped = true;
+			i++;
 			continue;
 		}
 		if (quote) {
@@ -223,9 +318,66 @@ function hasUnquotedRedirect(command: string): boolean {
 			quote = ch;
 			continue;
 		}
-		if (ch === ">") return true;
+		// A comment runs to the end of its line, so a quote inside it can't hide the next line. Bash starts
+		// one only after its own word breaks: `\r`, a no-break space and other Unicode spaces are word text.
+		if (ch === "#" && (i === 0 || /[ \t\n;|&()<>]/.test(command[i - 1]))) {
+			const lineEnd = command.indexOf("\n", i);
+			const end = lineEnd < 0 ? command.length : lineEnd;
+			blank(i, end);
+			i = end - 1;
+			continue;
+		}
+		if (ch !== ">" && ch !== "<") continue;
+		// `{name}>` and `{name}<` store the new fd number in a variable such as PATH or HOME.
+		if (command[fdStart(command, i) - 1] === "}") return undefined;
+		if (ch === "<") {
+			// A here-document body is text, not code, so a quote in it would hide the lines after it from
+			// this scan. Bash ends the body at a delimiter line; rather than track that, block `<<`.
+			if (command[i + 1] === "<") {
+				if (command[i + 2] !== "<") return undefined;
+				i += 2; // `<<<` is a here-string: one word on the same line.
+			}
+			continue;
+		}
+		const end = harmlessRedirectEnd(command, i);
+		if (end === undefined) return undefined;
+		blank(redirectStart(command, i), end);
+		i = end - 1;
 	}
-	return false;
+	parts.push(command.slice(copied));
+	return parts.join("");
+}
+
+/** Index of the fd digits before the redirect operator at `at`, or `at` when there are none. */
+function fdStart(command: string, at: number): number {
+	let start = at;
+	while (start > 0 && /\d/.test(command[start - 1])) start--;
+	return start;
+}
+
+/** Where the redirect whose `>` is at `at` begins: a whole-word fd number or a lone `&` before it. */
+function redirectStart(command: string, at: number): number {
+	const start = fdStart(command, at);
+	if (start < at) return start === 0 || /[ \t\n;|&(]/.test(command[start - 1]) ? start : at;
+	return command[at - 1] === "&" && (at === 1 || /[ \t\n]/.test(command[at - 2])) ? at - 1 : at;
+}
+
+/** End index of a harmless redirect whose `>` is at `at`, or undefined. */
+function harmlessRedirectEnd(command: string, at: number): number | undefined {
+	if (command[at - 1] === "<") return undefined;
+	// Bash's word breaks only: after `>&1`, a no-break space and a name would be a file target.
+	const boundary = (index: number) => index >= command.length || /[ \t\n;|&)]/.test(command[index]);
+	const next = command[at + 1];
+	if (next === "&" && command[at - 1] !== "&") {
+		let end = at + 2;
+		while (end < command.length && /\d/.test(command[end])) end++;
+		return end > at + 2 && boundary(end) ? end : undefined;
+	}
+	if (next === ">" || next === "|" || next === "&" || next === "(") return undefined;
+	let target = at + 1;
+	while (command[target] === " " || command[target] === "\t") target++;
+	const end = target + "/dev/null".length;
+	return command.startsWith("/dev/null", target) && boundary(end) ? end : undefined;
 }
 
 function splitShellSegments(command: string): string[] {
@@ -316,7 +468,8 @@ function hasShellExpansion(command: string): boolean {
 			braceDepth--;
 		} else if (braceDepth > 0 && (ch === "," || (ch === "." && next === "."))) {
 			braceList = true;
-		} else if (/[\s;&|]/.test(ch)) {
+		} else if (/[ \t\n;&|]/.test(ch)) {
+			// Bash's word breaks only: `{-o,x<NBSP>}` is one word to bash and still expands.
 			braceDepth = 0;
 			braceList = false;
 		}
@@ -346,7 +499,8 @@ function shellWords(segment: string): string[] | undefined {
 		} else if (ch === "'" || ch === '"') {
 			quote = ch;
 			inWord = true;
-		} else if (/\s/.test(ch)) {
+		} else if (/[ \t\n]/.test(ch)) {
+			// Bash splits only here: `A=1<NBSP>ls touch x` assigns "1<NBSP>ls" and runs touch.
 			if (inWord) words.push(word);
 			word = "";
 			inWord = false;
@@ -425,9 +579,8 @@ function isMutatingSegment(segment: string): boolean {
 	const globs = unquotedGlobs(segment);
 	if (globs.leading && OPTION_GLOB_SENSITIVE.has(command)) return true;
 
-	if (command === "sed") {
-		return args.some((a) => a === "-i" || a.startsWith("-i") || a.startsWith("--in-place") || /^-[^-]*i/.test(a));
-	}
+	if (command === "sed") return isMutatingSed(args, globs.any);
+	if (command === "date") return isSettingDate(args);
 	if (command === "find") {
 		return args.some((a) =>
 			["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"].includes(a),
@@ -504,6 +657,19 @@ function isMutatingSegment(segment: string): boolean {
 		// env may launch any executable or parse a command with -S.
 		return args.length > 0 && !(args.length === 1 && ["--version", "--help", "-0", "--null"].includes(args[0]));
 	}
+	if (command === "du") {
+		// --files0-from opens every file named in another file; the plain forms are enough.
+		// GNU accepts any unambiguous prefix (--f).
+		return args.some((a) => {
+			const option = a.split("=")[0];
+			return option.length >= 3 && "--files0-from".startsWith(option);
+		});
+	}
+	if (command === "jq") {
+		// jq has no in-place option and cannot run programs. --rawfile/--slurpfile read extra
+		// files into the filter, which the plain forms do not need.
+		return args.some((a) => ["--rawfile", "--slurpfile"].includes(a.split("=")[0]));
+	}
 	if (command === "sort") {
 		return args.some((arg) => {
 			const option = arg.split("=")[0];
@@ -513,6 +679,292 @@ function isMutatingSegment(segment: string): boolean {
 
 	// Final gate: the command must be in the read-only allowlist.
 	return !ALLOWED_COMMANDS.has(command);
+}
+
+/** sed options that change neither where the script comes from nor what sed writes. */
+const SED_SAFE_SHORT = new Set("nErsuzb");
+const SED_SAFE_LONG = new Set([
+	"--quiet",
+	"--silent",
+	"--regexp-extended",
+	"--separate",
+	"--unbuffered",
+	"--null-data",
+	"--zero-terminated",
+	"--posix",
+	"--debug",
+	"--sandbox",
+	"--follow-symlinks",
+	"--binary",
+	"--help",
+	"--version",
+]);
+
+/**
+ * sed writes with -i, -f hides the script, and the script itself can write (w, W, s///w) or run
+ * commands (e, s///e). Unknown or abbreviated options fail closed. GNU sed permutes options and
+ * operands, so options count anywhere before `--`.
+ */
+function isMutatingSed(args: string[], hasGlob: boolean): boolean {
+	const scripts: string[] = [];
+	const operands: string[] = [];
+	for (let k = 0; k < args.length; k++) {
+		const arg = args[k];
+		if (arg === "--") {
+			operands.push(...args.slice(k + 1));
+			break;
+		}
+		if (arg.startsWith("--")) {
+			const eq = arg.indexOf("=");
+			const name = eq < 0 ? arg : arg.slice(0, eq);
+			const value = eq < 0 ? undefined : arg.slice(eq + 1);
+			if (name === "--expression" || name === "--line-length") {
+				const taken = value ?? args[++k];
+				if (taken === undefined) return true;
+				// BSD sed's -l takes no value, so a non-number here could be the script there.
+				if (name === "--line-length" && !/^\d+$/.test(taken)) return true;
+				if (name === "--expression") scripts.push(taken);
+			} else if (value !== undefined || !SED_SAFE_LONG.has(name)) {
+				return true;
+			}
+			continue;
+		}
+		if (arg.length > 1 && arg.startsWith("-")) {
+			for (let j = 1; j < arg.length; j++) {
+				const flag = arg[j];
+				if (flag === "e" || flag === "l") {
+					const taken = arg.slice(j + 1) || args[++k];
+					if (taken === undefined) return true;
+					if (flag === "l" && !/^\d+$/.test(taken)) return true;
+					if (flag === "e") scripts.push(taken);
+					break;
+				}
+				if (!SED_SAFE_SHORT.has(flag)) return true;
+			}
+			continue;
+		}
+		operands.push(arg);
+	}
+	if (scripts.length === 0) {
+		if (operands[0] === undefined) return false;
+		scripts.push(operands[0]);
+	}
+	// GNU sed joins -e scripts with newlines.
+	const script = scripts.join("\n");
+	// With an unquoted glob in the command, glob characters here may mean the script is a file name.
+	if (hasGlob && /[*?[]/.test(script)) return true;
+	return sedScriptWritesOrRuns(script);
+}
+
+/**
+ * Walks a sed script with GNU sed's grammar. True when a command or `s` flag writes a file or runs a
+ * command, and for anything the walk does not understand. `r` and `R` only read.
+ */
+function sedScriptWritesOrRuns(script: string): boolean {
+	let i = 0;
+	const fail = (): never => {
+		throw new Error("unparsed sed script");
+	};
+	const skipWhile = (test: RegExp) => {
+		while (i < script.length && test.test(script[i])) i++;
+	};
+	const skipToLineEnd = () => {
+		while (i < script.length && script[i] !== "\n") i++;
+	};
+	// Up to and past the closing delimiter. A bracket expression may hold the delimiter.
+	const skipRegex = (delim: string) => {
+		for (;;) {
+			const ch = script[i++];
+			if (ch === undefined || ch === "\n") fail();
+			if (ch === "\\") {
+				if (script[i++] === undefined) fail();
+			} else if (ch === delim) {
+				return;
+			} else if (ch === "[") {
+				if (script[i] === "^") i++;
+				if (script[i] === "]") i++;
+				for (;;) {
+					const inner = script[i++];
+					// Escapes inside brackets differ between seds, so they fail closed.
+					if (inner === undefined || inner === "\n" || inner === "\\") fail();
+					if (inner === "]") break;
+					if (inner === "[" && /[:.=]/.test(script[i] ?? "")) {
+						const close = script.indexOf(`${script[i]}]`, i + 1);
+						if (close < 0) fail();
+						i = close + 2;
+					}
+				}
+			}
+		}
+	};
+	const skipText = (delim: string) => {
+		for (;;) {
+			const ch = script[i++];
+			if (ch === undefined || ch === "\n") fail();
+			if (ch === "\\") {
+				if (script[i++] === undefined) fail();
+			} else if (ch === delim) {
+				return;
+			}
+		}
+	};
+	const delimiter = () => {
+		const delim = script[i++];
+		if (delim === undefined || delim === "\n" || delim === "\\" || delim === "[") fail();
+		return delim;
+	};
+	const address = (): boolean => {
+		const ch = script[i];
+		if (ch === undefined) return false;
+		if (/\d/.test(ch)) {
+			skipWhile(/\d/);
+			if (script[i] === "~") {
+				i++;
+				skipWhile(/\d/);
+			}
+		} else if (ch === "$") {
+			i++;
+		} else if (ch === "/" || ch === "\\") {
+			i++;
+			skipRegex(ch === "/" ? "/" : delimiter());
+			skipWhile(/[IM]/);
+		} else {
+			return false;
+		}
+		return true;
+	};
+	const endCommand = () => {
+		skipWhile(/[ \t]/);
+		if (i < script.length && !/[;\n}]/.test(script[i])) fail();
+	};
+	try {
+		while (i < script.length) {
+			skipWhile(/[\s;]/);
+			if (i >= script.length) break;
+			if (script[i] === "#") {
+				skipToLineEnd();
+				continue;
+			}
+			if (address()) {
+				skipWhile(/[ \t]/);
+				if (script[i] === ",") {
+					i++;
+					skipWhile(/[ \t]/);
+					if (/[+~]/.test(script[i] ?? "")) {
+						i++;
+						if (!/\d/.test(script[i] ?? "")) fail();
+						skipWhile(/\d/);
+					} else if (!address()) {
+						fail();
+					}
+				}
+			}
+			skipWhile(/[ \t!]/);
+			const command = script[i++];
+			switch (command) {
+				case "{":
+				case "}":
+					break;
+				case "=":
+				case "d":
+				case "D":
+				case "g":
+				case "G":
+				case "h":
+				case "H":
+				case "n":
+				case "N":
+				case "p":
+				case "P":
+				case "x":
+				case "z":
+				case "F":
+					endCommand();
+					break;
+				case "l":
+				case "q":
+				case "Q":
+					skipWhile(/[ \t]/);
+					skipWhile(/\d/);
+					endCommand();
+					break;
+				case ":":
+				case "b":
+				case "t":
+				case "T":
+				case "v":
+					while (i < script.length && !/[;\n]/.test(script[i])) i++;
+					break;
+				case "a":
+				case "i":
+				case "c":
+					// Text runs to the first unescaped newline.
+					while (i < script.length && script[i] !== "\n") i += script[i] === "\\" ? 2 : 1;
+					break;
+				case "r":
+				case "R":
+					skipToLineEnd();
+					break;
+				case "s": {
+					const delim = delimiter();
+					skipRegex(delim);
+					skipText(delim);
+					skipWhile(/[gpiImM\d]/);
+					if (script[i] === "w" || script[i] === "e") return true;
+					endCommand();
+					break;
+				}
+				case "y": {
+					const delim = delimiter();
+					skipText(delim);
+					skipText(delim);
+					endCommand();
+					break;
+				}
+				default:
+					// w, W and e write or run; anything else is not understood.
+					return true;
+			}
+		}
+	} catch {
+		return true;
+	}
+	return false;
+}
+
+/**
+ * `date` sets the system clock with -s/--set or a bare MMDDhhmm operand. Only GNU display forms are
+ * allowed: +FORMAT, -u, -R, -I, --debug and the -d/-r inputs, bundled or not. BSD's -j/-f/-v need
+ * their own parsing, so they block.
+ */
+function isSettingDate(args: string[]): boolean {
+	for (let k = 0; k < args.length; k++) {
+		const arg = args[k];
+		if (arg.startsWith("+")) continue;
+		if (arg === "--date" || arg === "--reference") {
+			k++;
+			continue;
+		}
+		if (arg.startsWith("--")) {
+			if (!/^--(?:utc|universal|rfc-email|debug|iso-8601(?:=\w+)?|rfc-3339=\w+|date=.*|reference=.*)$/s.test(arg)) {
+				return true;
+			}
+			continue;
+		}
+		if (!/^-./.test(arg)) return true;
+		for (let j = 1; j < arg.length; j++) {
+			const flag = arg[j];
+			if (flag === "u" || flag === "R") continue;
+			// -I takes an optional attached precision; -d and -r take the rest or the next word.
+			if (flag === "I") break;
+			if (flag === "d" || flag === "r") {
+				if (j === arg.length - 1) k++;
+				break;
+			}
+			return true;
+		}
+	}
+	return false;
 }
 
 /**

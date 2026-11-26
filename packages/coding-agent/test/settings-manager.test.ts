@@ -41,6 +41,21 @@ describe("SettingsManager", () => {
 		expect(SettingsManager.create(projectDir, agentDir).getReasoningDisplay()).toBe("auto");
 	});
 
+	it("turns the compaction ceiling off for anything but a positive whole number, with a warning", () => {
+		for (const ceilingTokens of [0, -5, 1.5, "abc", "300000", true, null, [300000], {}]) {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ compaction: { ceilingTokens } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getCompactionCeilingTokens(), JSON.stringify(ceilingTokens)).toBeUndefined();
+			expect(manager.drainErrors().map(({ error }) => error.message)).toEqual([
+				`compaction.ceilingTokens must be a positive whole number of tokens, got ${JSON.stringify(ceilingTokens)}. The compaction ceiling is off.`,
+			]);
+		}
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ compaction: { ceilingTokens: 300000 } }));
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getCompactionCeilingTokens()).toBe(300000);
+		expect(manager.drainErrors()).toEqual([]);
+	});
+
 	it("reads the removed shadow-git rollback capture as copies", () => {
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ rollbackCapture: "shadow-git" }));
 		expect(SettingsManager.create(projectDir, agentDir).getRollbackCapture()).toBe("copies");
@@ -451,6 +466,16 @@ describe("SettingsManager", () => {
 			if (originalPlatform) {
 				Object.defineProperty(process, "platform", originalPlatform);
 			}
+		});
+
+		it("reads bashTimeoutSeconds as given, 0 as off, and anything invalid as unset", () => {
+			const read = (value: unknown) =>
+				SettingsManager.inMemory(JSON.parse(JSON.stringify({ bashTimeoutSeconds: value }))).getBashTimeoutSeconds();
+			expect(read(30)).toBe(30);
+			expect(read(0)).toBe(0);
+			expect(read(-5)).toBeUndefined();
+			expect(read("x")).toBeUndefined();
+			expect(SettingsManager.inMemory().getBashTimeoutSeconds()).toBeUndefined();
 		});
 
 		it("should resolve editor commands by precedence", () => {

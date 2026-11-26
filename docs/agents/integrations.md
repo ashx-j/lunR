@@ -17,6 +17,7 @@ Read before changing the Discord/Telegram gateway, ACP mode, PR watch or native 
 ## PR watch
 
 - See `packages/coding-agent/docs/pr-watch.md`. Watches run only in the owning session; deadlines keep running while closed, expiry wins before any read, and only a newly observed head resets the window. Admission uses promise-returning `ctx.sendMessage`; failed admission retries on the watch timer.
+- `pr-watches/<sha256(sessionId)>.json` exists only while the session has a watch; saving an empty list deletes it. The `<file>.owner` lease dir is taken for every open session regardless and is what enforces ownership.
 - Reservations consume events only after a persisted notification or tool-result receipt. A same-turn wait removes only its own queued custom message (matched by type and details object) and transfers the reservation. Conditional 304 responses can change pagination Link metadata.
 
 ## Computer use

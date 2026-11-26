@@ -1,24 +1,12 @@
 import { createInterface } from "node:readline";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Text } from "@earendil-works/pi-tui";
 import { spawn } from "child_process";
 import path from "path";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
-import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { CREDENTIAL_SKIP_NOTE, credentialWalkFilter } from "../credential-files.ts";
+import type { ToolDefinition } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
-import {
-	GroupedCallText,
-	getTextOutput,
-	invalidArgText,
-	renderCollapsedSearchPath,
-	shortenPath,
-	str,
-	toolGroupTree,
-	toolStatusDotFromContext,
-} from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
 
@@ -63,63 +51,6 @@ const defaultFindOperations: FindOperations = {
 export interface FindToolOptions {
 	/** Custom operations for find. Default: local filesystem plus fd */
 	operations?: FindOperations;
-}
-
-function formatFindCall(
-	args: { pattern: string; path?: string; limit?: number } | undefined,
-	theme: Theme,
-	cwd: string,
-	compact = false,
-): string {
-	const pattern = str(args?.pattern);
-	const rawPath = str(args?.path);
-	const limit = args?.limit;
-	const invalidArg = invalidArgText(theme);
-	let text = pattern === null ? invalidArg : theme.fg("accent", pattern || "");
-	if (compact) {
-		const collapsedPath = renderCollapsedSearchPath(rawPath, theme, cwd);
-		if (collapsedPath) text += theme.fg("toolOutput", " in ") + collapsedPath;
-	} else {
-		const path = rawPath !== null ? shortenPath(rawPath || ".") : null;
-		text += theme.fg("toolOutput", ` in ${path === null ? invalidArg : path}`);
-	}
-	if (limit !== undefined) {
-		text += theme.fg("toolOutput", ` (limit ${limit})`);
-	}
-	return text;
-}
-
-function formatFindResult(
-	result: {
-		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-		details?: FindToolDetails;
-	},
-	options: ToolRenderResultOptions,
-	theme: Theme,
-	showImages: boolean,
-): string {
-	const output = getTextOutput(result, showImages).trim();
-	let text = "";
-	if (output) {
-		const lines = output.split("\n");
-		const maxLines = options.expanded ? lines.length : 20;
-		const displayLines = lines.slice(0, maxLines);
-		const remaining = lines.length - maxLines;
-		text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
-		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
-		}
-	}
-
-	const resultLimit = result.details?.resultLimitReached;
-	const truncation = result.details?.truncation;
-	if (resultLimit || truncation?.truncated) {
-		const warnings: string[] = [];
-		if (resultLimit) warnings.push(`${resultLimit} results limit`);
-		if (truncation?.truncated) warnings.push(`${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit`);
-		text += `\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
-	}
-	return text;
 }
 
 export function createFindToolDefinition(
@@ -321,9 +252,16 @@ export function createFindToolDefinition(
 							}
 
 							const relativized: string[] = [];
+							// Same exclusion as lunR's other recursive tools, so the profile's logins never show up.
+							const isCredential = credentialWalkFilter(searchPath);
+							let skippedCredentials = false;
 							for (const rawLine of lines) {
 								const line = rawLine.replace(/\r$/, "").trim();
 								if (!line) continue;
+								if (isCredential?.(line.replace(/[/\\]$/, ""))) {
+									skippedCredentials = true;
+									continue;
+								}
 								const hadTrailingSlash = line.endsWith("/") || line.endsWith("\\");
 								let relativePath = line;
 								if (line.startsWith(searchPath)) {
@@ -354,6 +292,7 @@ export function createFindToolDefinition(
 							if (notices.length > 0) {
 								resultOutput += `\n\n[${notices.join(". ")}]`;
 							}
+							if (skippedCredentials) resultOutput += `\n\n${CREDENTIAL_SKIP_NOTE}`;
 							settle(() =>
 								resolve({
 									content: [{ type: "text", text: resultOutput }],
@@ -371,31 +310,6 @@ export function createFindToolDefinition(
 					}
 				})();
 			});
-		},
-		renderCall(args, theme, context) {
-			const text = (context.lastComponent as GroupedCallText | undefined) ?? new GroupedCallText("", 0, 0);
-			const compact = !context.isPartial && !context.expanded && !context.isError;
-			text.setCall({
-				role: context.groupRole ?? "singleton",
-				compact,
-				tree: toolGroupTree(context),
-				dot: toolStatusDotFromContext(context, theme),
-				title: theme.fg("toolTitle", theme.bold("find")),
-				detail: formatFindCall(args, theme, context.cwd, !context.expanded),
-			});
-			return text;
-		},
-		renderResult(result, options, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			// lunr: compact-by-default — finished, successful, non-expanded calls
-			// render header-only (ctrl+o reveals the full result). Notices stay in
-			// execute() output for the model, not in TUI chrome.
-			if (!options.isPartial && !options.expanded && !context.isError) {
-				text.setText("");
-				return text;
-			}
-			text.setText(formatFindResult(result as any, options, theme, context.showImages));
-			return text;
 		},
 	};
 }

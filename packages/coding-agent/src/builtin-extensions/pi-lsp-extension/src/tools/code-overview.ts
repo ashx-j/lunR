@@ -10,6 +10,7 @@
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { truncateHead, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from "../../../../core/tools/truncate.js";
+import { CREDENTIAL_SKIP_NOTE, credentialWalkFilter } from "../../../../core/credential-files.js";
 import { Text } from "@earendil-works/pi-tui";
 import { resolve, relative } from "node:path";
 import { readdir, readFile } from "node:fs/promises";
@@ -90,7 +91,11 @@ export function createCodeOverviewTool(
       }
 
       // 3. Key files with symbols
-      const keyFiles = await findKeyFiles(targetDir);
+      // Symbols come from file contents, so lunR's saved logins under the target stay out.
+      const isCredential = credentialWalkFilter(targetDir);
+      const foundKeyFiles = await findKeyFiles(targetDir);
+      const keyFiles = isCredential ? foundKeyFiles.filter((file) => !isCredential(file)) : foundKeyFiles;
+      if (keyFiles.length < foundKeyFiles.length) sections.push(CREDENTIAL_SKIP_NOTE);
       if (keyFiles.length > 0) {
         const symbolSections: string[] = [];
         for (const file of keyFiles.slice(0, 10)) {

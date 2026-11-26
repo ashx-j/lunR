@@ -42,6 +42,11 @@ export interface ClaudeCodeModelRoute {
 	route: string;
 	/** Context window of that route. Absent when it is not a `[1m]` route, so the catalog window applies. */
 	contextWindow?: number;
+	/**
+	 * Claude Code's picker text for the model, such as "Opus 5.5 · Best for everyday, complex tasks". Names a
+	 * model lunR's catalog lacks. Absent in records saved before lunR kept it.
+	 */
+	description?: string;
 }
 
 /**

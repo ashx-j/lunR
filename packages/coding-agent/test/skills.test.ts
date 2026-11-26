@@ -41,6 +41,17 @@ describe("skills", () => {
 			expect(diagnostics).toHaveLength(0);
 		});
 
+		it("reports a skills directory it cannot read", () => {
+			// A file in place of the directory fails readdir with ENOTDIR, as EACCES would.
+			const dir = join(fixturesDir, "valid-skill", "SKILL.md");
+			const { skills, diagnostics } = loadSkillsFromDir({ dir, source: "test" });
+
+			expect(skills).toHaveLength(0);
+			expect(diagnostics).toEqual([
+				expect.objectContaining({ type: "warning", path: dir, message: expect.stringContaining("ENOTDIR") }),
+			]);
+		});
+
 		it("should allow names that don't match parent directory", () => {
 			const { skills, diagnostics } = loadSkillsFromDir({
 				dir: join(fixturesDir, "name-mismatch"),

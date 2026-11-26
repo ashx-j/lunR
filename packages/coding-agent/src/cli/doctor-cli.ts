@@ -1,21 +1,26 @@
 /**
  * lunR: `lunr doctor` checks the local setup and prints one line per check, with a fix for
  * anything that needs attention. `lunr doctor keys` shows which shortcuts reach lunR from
- * the current terminal. Neither command prints credentials or changes any file.
+ * the current terminal. Neither command prints credentials or changes any file. `lunr doctor`
+ * makes one network request, to npm for the newest published version, and exits once the report is
+ * written so a stalled connection cannot hold it open.
  */
 
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { claudeModelsNewerThanLogin } from "@earendil-works/pi-ai";
 import { isKeyRelease, ProcessTerminal, parseKey } from "@earendil-works/pi-tui";
 import chalk from "chalk";
+import { gt } from "semver";
 import { LOCAL_SERVERS } from "../builtin-extensions/lunr-local-providers/local-servers.ts";
-import { getAgentDir, getDocsPath, isBunBinary, VERSION } from "../config.ts";
+import { getAgentDir, getDocsPath, isBunBinary, NPM_CLI_PACKAGE, VERSION } from "../config.ts";
 import { AuthStorage } from "../core/auth-storage.ts";
 import { hasGrokCliXaiAuth } from "../core/grok-cli-auth.ts";
 import { type AppKeybinding, KeybindingsManager } from "../core/keybindings.ts";
 import { ModelRuntime } from "../core/model-runtime.ts";
 import { officialCatalogCachePath } from "../core/official-catalog.ts";
 import { SettingsManager } from "../core/settings-manager.ts";
+import { isPublishedInstall, npmLatestUrl } from "../core/update-check.ts";
 
 export type DoctorStatus = "ok" | "warn" | "fail";
 
@@ -23,7 +28,10 @@ export interface DoctorCheck {
 	status: DoctorStatus;
 	label: string;
 	detail: string;
+	/** What to do about a warn or fail. */
 	fix?: string;
+	/** Information worth keeping that is not a fix, printed the same way. */
+	note?: string;
 }
 
 const MIN_NODE = [22, 19] as const;
@@ -36,12 +44,16 @@ export async function handleDoctorCli(args: string[]): Promise<boolean> {
 	if (sub === "keys") {
 		process.exitCode = await runKeyCheck();
 	} else if (sub === undefined) {
-		const checks = await collectDoctorChecks();
-		console.log(formatDoctorReport(checks));
-		process.exitCode = checks.some((check) => check.status === "fail") ? 1 : 0;
+		// The npm lookup runs beside the local checks, so its timeout adds no time unless npm is slow.
+		const [checks, latest] = await Promise.all([collectDoctorChecks(), fetchPublishedVersion(NPM_CLI_PACKAGE)]);
+		checks.unshift(checkVersion(VERSION, latest, isPublishedInstall(), NPM_CLI_PACKAGE));
+		const exitCode = checks.some((check) => check.status === "fail") ? 1 : 0;
+		// An aborted npm fetch keeps its socket until undici's own 10 s connect timeout on a network that
+		// drops packets. Exit once the report is flushed instead of waiting for it.
+		process.stdout.write(`${formatDoctorReport(checks)}\n`, () => process.exit(exitCode));
 	} else {
 		console.log(
-			"Usage: lunr doctor        check logins, models, browser, Claude Code and gateway\n       lunr doctor keys   test which shortcuts reach lunR in this terminal",
+			"Usage: lunr doctor        check version, logins, models, browser, Claude Code and gateway\n       lunr doctor keys   test which shortcuts reach lunR in this terminal",
 		);
 		process.exitCode = sub === "--help" || sub === "-h" || sub === "help" ? 0 : 2;
 	}
@@ -71,7 +83,7 @@ export async function collectDoctorChecks(agentDir: string = getAgentDir()): Pro
 		...checkProviders(ready),
 		checkDefaultModel(settings.getDefaultProvider(), settings.getDefaultModel(), ready, loginIds),
 		checkCatalog(officialCatalogCachePath(agentDir), Date.now()),
-		await checkClaudeCode(auth),
+		await checkClaudeCode(auth, runtime.getModels("anthropic")),
 		await checkBrowser(settings.getBrowserEnabled()),
 		await checkGateway(),
 		checkTerminal(process.env, getDocsPath()),
@@ -84,7 +96,8 @@ export function formatDoctorReport(checks: DoctorCheck[]): string {
 	const lines = [`lunR ${VERSION} doctor`, ""];
 	for (const check of checks) {
 		lines.push(`${mark[check.status]} ${chalk.bold(check.label)}: ${check.detail}`);
-		if (check.fix) lines.push(`  ${chalk.dim(check.fix)}`);
+		const hint = check.fix ?? check.note;
+		if (hint) lines.push(`  ${chalk.dim(hint)}`);
 	}
 	const problems = checks.filter((check) => check.status !== "ok").length;
 	lines.push(
@@ -92,6 +105,55 @@ export function formatDoctorReport(checks: DoctorCheck[]): string {
 		problems === 0 ? "Everything looks fine." : `${problems} item${problems === 1 ? " needs" : "s need"} attention.`,
 	);
 	return lines.join("\n");
+}
+
+const VERSION_CHECK_TIMEOUT_MS = 2000;
+
+/** The newest version published on this install's npm channel, or undefined when npm does not answer in time. */
+async function fetchPublishedVersion(packageName: string): Promise<string | undefined> {
+	if (process.env.PI_OFFLINE === "1") return undefined;
+	try {
+		const response = await fetch(npmLatestUrl(packageName), {
+			signal: AbortSignal.timeout(VERSION_CHECK_TIMEOUT_MS),
+		});
+		if (!response.ok) return undefined;
+		const body: unknown = await response.json();
+		return typeof body === "object" && body !== null && "version" in body && typeof body.version === "string"
+			? body.version
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Compares the running version with the newest one published for its channel. A workspace checkout
+ * gets its own wording: an old branch is expected, but its docs then describe an older release.
+ */
+export function checkVersion(
+	current: string,
+	latest: string | undefined,
+	published: boolean,
+	packageName: string,
+): DoctorCheck {
+	const label = "Version";
+	const running = published ? current : `${current} (workspace checkout)`;
+	if (latest === undefined) return { status: "ok", label, detail: `${running}; npm did not answer, so not compared` };
+	let behind = false;
+	try {
+		behind = gt(latest, current);
+	} catch {
+		return { status: "ok", label, detail: `${running}; npm reports ${latest}, which does not compare` };
+	}
+	if (!behind) return { status: "ok", label, detail: `${running}; newest ${packageName} is ${latest}` };
+	return published
+		? { status: "warn", label, detail: `${current}; ${packageName} ${latest} is published`, fix: "Run lunr update." }
+		: {
+				status: "warn",
+				label,
+				detail: `this checkout is ${current}; ${packageName} ${latest} is published`,
+				fix: "This branch and its docs predate that release. Pull, or switch to a newer branch.",
+			};
 }
 
 export function checkNode(version: string): DoctorCheck {
@@ -251,7 +313,10 @@ export function checkCatalog(cachePath: string, now: number): DoctorCheck {
 		: { status: "ok", label: "Model catalog", detail: `last refreshed ${age}` };
 }
 
-async function checkClaudeCode(auth: AuthStorage): Promise<DoctorCheck | undefined> {
+async function checkClaudeCode(
+	auth: AuthStorage,
+	catalog: readonly { id: string }[],
+): Promise<DoctorCheck | undefined> {
 	const credential = await auth.read("anthropic");
 	if (credential?.type !== "external_claude_code") return undefined;
 	const label = "Claude subscription";
@@ -271,7 +336,21 @@ async function checkClaudeCode(auth: AuthStorage): Promise<DoctorCheck | undefin
 			fix: "Run /login anthropic to install it again.",
 		};
 	}
-	return { status: "ok", label, detail: `Claude Code at ${credential.command}` };
+	const newer = claudeModelsNewerThanLogin(credential, catalog);
+	if (newer.length > 0) {
+		return {
+			status: "warn",
+			label,
+			detail: `the saved login predates ${newer.join(", ")}`,
+			fix: `Run /login anthropic to refresh the models it offers. Until then, pick one by id, for example /model ${newer[0]}.`,
+		};
+	}
+	return {
+		status: "ok",
+		label,
+		detail: `Claude Code at ${credential.command}`,
+		note: "Claude Code signs in to your Claude account. Check that account for usage and any extra charges.",
+	};
 }
 
 async function checkBrowser(enabled: boolean): Promise<DoctorCheck> {

@@ -95,7 +95,8 @@ export interface DynamicExpandSpec {
 	onEmpty?: "skip" | "fail";
 }
 
-export type DynamicParallelTemplate = Omit<ParallelTaskItem, "as" | "count">;
+// Async runner templates also carry childId (see RUNNER_DYNAMIC_PARALLEL_KEYS in dynamic-fanout.ts).
+export type DynamicParallelTemplate = Omit<ParallelTaskItem, "as" | "count"> & { childId?: string };
 
 export interface DynamicCollectSpec {
 	as: string;
@@ -152,9 +153,14 @@ export function getStepAgents(step: ChainStep): string[] {
 // Chain Directory Management
 // =============================================================================
 
+/** Where `createChainDir` puts a run's directory, without creating anything. */
+export function chainDirPath(runId: string, baseDir?: string): string {
+	return path.join(baseDir ? path.resolve(baseDir) : CHAIN_RUNS_DIR, runId);
+}
+
 export function createChainDir(runId: string, baseDir?: string): string {
-	const chainDir = path.join(baseDir ? path.resolve(baseDir) : CHAIN_RUNS_DIR, runId);
-	fs.mkdirSync(chainDir, { recursive: true });
+	const chainDir = chainDirPath(runId, baseDir);
+	fs.mkdirSync(chainDir, { recursive: true, mode: 0o700 });
 	return chainDir;
 }
 
@@ -294,8 +300,8 @@ function resolveChainPath(filePath: string, chainDir: string): string {
  * These are appended to the task to tell the agent what to read/write.
  */
 export function writeInitialProgressFile(progressDir: string): void {
-	fs.mkdirSync(progressDir, { recursive: true });
-	fs.writeFileSync(path.join(progressDir, "progress.md"), INITIAL_PROGRESS_CONTENT);
+	fs.mkdirSync(progressDir, { recursive: true, mode: 0o700 });
+	fs.writeFileSync(path.join(progressDir, "progress.md"), INITIAL_PROGRESS_CONTENT, { mode: 0o600 });
 }
 
 export function buildChainInstructions(
@@ -404,7 +410,7 @@ export function createParallelDirs(
 ): void {
 	for (let i = 0; i < taskCount; i++) {
 		const subdir = path.join(chainDir, `parallel-${stepIndex}`, String(i));
-		fs.mkdirSync(subdir, { recursive: true });
+		fs.mkdirSync(subdir, { recursive: true, mode: 0o700 });
 	}
 }
 

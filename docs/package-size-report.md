@@ -29,7 +29,69 @@ Unpacked, by type:
 | `examples` | 0.98 MB |
 | `CHANGELOG.md`, shrinkwrap, install-lock, other assets | about 0.8 MB |
 
-A global install is much larger than the tarball. `npm i -g @ashx-j/lunr@0.2.38 --ignore-scripts` (npm 11.19.1, Linux x64) writes 561 MB and 33,324 files. 211 MB of that is other platforms' optional packages: `recheck-macos-arm64`, `recheck-macos-x64`, `recheck-windows-x64` and the `lunr-computer-darwin-arm64`, `lunr-computer-win32-arm64` and `lunr-computer-win32-x64` payloads. Their `os`/`cpu` fields are correct in the published `npm-shrinkwrap.json`, but npm installs them anyway. I did not investigate the cause. Fixing it would save more than any `files` change below.
+A global install is much larger than the tarball. `npm i -g @ashx-j/lunr@0.2.38 --ignore-scripts` (npm 11.19.1, Linux x64) writes 561 MB and 33,324 files. 211 MB of that is other platforms' optional packages: `recheck-macos-arm64`, `recheck-macos-x64`, `recheck-windows-x64` and the `lunr-computer-darwin-arm64`, `lunr-computer-win32-arm64` and `lunr-computer-win32-x64` payloads. Their `os`/`cpu` fields are correct in the published `npm-shrinkwrap.json`, but npm installs them anyway. The cause is npm's handling of a dependency's shrinkwrap; see [Other platforms' packages](#other-platforms-packages-2026-11-15).
+
+## Other platforms' packages (2026-11-15)
+
+Measured with npm 11.19.1 on Linux x64, `--ignore-scripts`, into scratch prefixes:
+
+| Install | Packages | Size | Files | Other-platform packages |
+|---|---|---|---|---|
+| `npm i -g @ashx-j/lunr@0.2.40` (registry) | 302 | 612 MB | 32,093 | all |
+| `npm i -g ./ashx-j-lunr-0.2.40.tgz` (the same published tarball, from a file or an `http://` URL) | 280 | 376 MB | 29,663 | none |
+
+The other-platform packages in the registry install:
+
+| Package | Platform | Size |
+|---|---|---|
+| `@ashx-j/lunr-computer-darwin-arm64` | darwin arm64 | 68 MB |
+| `@ashx-j/lunr-computer-win32-x64` | win32 x64 | 28 MB |
+| `@ashx-j/lunr-computer-win32-arm64` | win32 arm64 | 26 MB |
+| `recheck-windows-x64` | win32 x64 | 28 MB |
+| `recheck-macos-x64` | darwin x64 | 27 MB |
+| `recheck-macos-arm64` | darwin arm64 | 26 MB |
+| 9 `@mariozechner/clipboard-*` builds for other platforms | various | about 7 MB |
+
+The published shrinkwrap is the same file as the one `npm run publish:dry` packs. Every entry above has `optional: true` and the right `os` and `cpu`.
+
+The cause is in npm's Arborist (`@npmcli/arborist` as bundled with npm 11.19.1):
+
+- `buildIdealTree` skips the dependencies of a node that has a shrinkwrap ("it's going to get its deps satisfied by whatever's in that file anyway"). Its `#checkEngineAndPlatform` step, which marks optional packages for another platform `inert`, therefore never sees them.
+- `reify` then fills that subtree in `[_loadShrinkwrapsAndUpdateTrees]` by calling `loadVirtual({ root: node, subtreeOnly: true })` on the shrinkwrap. Nothing on that path checks `os` or `cpu`. An optional package is dropped only if its extraction fails (`[_handleOptionalFailure]`).
+- A file or URL tarball install does not apply the dependency's shrinkwrap at all. It resolves fresh from `package.json`, so the platform check runs. It also picks different versions: `@smithy/types` 4.20.0 against the pinned 4.14.2, no `fast-xml-parser`, and an extra `html-escaper`. That is why the two installs differ by 22 packages, not only by the platform ones.
+
+So with a single cross-platform `npm-shrinkwrap.json`, every registry install gets every platform's optional packages. Changing the shrinkwrap cannot fix this from inside the package:
+
+- Dropping the other-platform entries is not possible, because the same file serves every platform.
+- Dropping all `os`/`cpu` entries would also remove the current platform's `recheck-linux-x64`, `clipboard-linux-x64-gnu` and the macOS and Windows computer-use payloads. Arborist does not resolve edges missing from a dependency's shrinkwrap.
+- Marking them `dev` would omit them on every platform, since global installs omit dev packages.
+- `overrides` in a dependency are ignored, so they cannot replace the shrinkwrap's transitive pins.
+
+Options for the owner:
+
+1. Stop publishing `npm-shrinkwrap.json`. A global install then behaves like the tarball row above: 376 MB, no other-platform packages, but transitive versions are no longer pinned. Pinning is why the shrinkwrap exists (see [build-and-release.md](agents/build-and-release.md)), and the fresh tree would need its own qualification, including the Zod 4 resolution the installer lock preserves.
+2. Remove `recheck` (Z2), which removes 81 MB of the other-platform packages and keeps the shrinkwrap. The 122 MB of computer-use payloads and about 7 MB of clipboard builds remain.
+3. Keep the current behavior and report the Arborist gap to npm.
+
+Not verified: npm 10 and Bun, and whether a dependency without a shrinkwrap of its own, placed inside lunR's shrinkwrapped tree, would be resolved at install time. Arborist's comments suggest it would not.
+
+## Tree-sitter grammars (2026-11-25)
+
+`tree-sitter-wasms` is a dev dependency now. The build copies the 18 grammars `parser-manager.ts` maps (19 language IDs, JavaScript and JSX share one) into `dist/builtin-extensions/pi-lsp-extension/src/tree-sitter/grammars`, and the parser manager loads from there, falling back to the workspace package for source runs. Its other 18 grammars (C#, Elixir, PHP, Vue, Zig and others) were never loaded: their extensions map to language IDs with no grammar entry. Measured with npm 11.19.1, `npm i -g --prefix <dir> --ignore-scripts` of locally packed tarballs through a local registry that sets `_hasShrinkwrap`:
+
+| | Before | After |
+|---|---|---|
+| Global install, Linux x64 | 475 MB, 32,082 files | 448 MB, 32,061 files |
+| `@ashx-j/lunr` tarball | 4.89 MB packed, 21.7 MB unpacked | 7.25 MB packed, 45.6 MB unpacked |
+
+## Computer-use payloads removed from the shrinkwrap (2026-11-25)
+
+The CLI no longer lists the three `@ashx-j/lunr-computer-*` packages as optional dependencies or in its shrinkwrap. They are still published, and the runtime downloads the host's package on first use and checks the archive against the pinned SHA-256. Measured on `dev/tui` with npm 11.19.1, `npm i -g --prefix <dir> --ignore-scripts` of locally packed tarballs through a local registry that sets `_hasShrinkwrap`:
+
+| Install | Size | Files | Computer-use payloads |
+|---|---|---|---|
+| Before, Linux x64 and `--os=darwin --cpu=arm64` | 475 MB | 32,082 | all 3 |
+| After, Linux x64, `--os=darwin --cpu=arm64` and `--os=win32 --cpu=x64` | 354 MB | 32,073 | none |
 
 ## What the entry points load
 

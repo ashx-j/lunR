@@ -254,7 +254,7 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
 				}
 			}
 		} catch {
-			// Ignore read failures
+			// An unreadable prompt path contributes no templates.
 		}
 	}
 

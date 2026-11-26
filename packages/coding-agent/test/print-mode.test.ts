@@ -2,6 +2,12 @@ import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionShutdownEvent } from "../src/index.ts";
 import { runPrintMode } from "../src/modes/print-mode.ts";
+import { killTrackedDetachedChildren } from "../src/utils/shell.ts";
+
+vi.mock("../src/utils/shell.ts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/utils/shell.ts")>()),
+	killTrackedDetachedChildren: vi.fn(),
+}));
 
 type EmitEvent = SessionShutdownEvent;
 
@@ -138,5 +144,29 @@ describe("runPrintMode", () => {
 		expect(errorSpy).toHaveBeenCalledWith("provider failure");
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+	});
+
+	it("kills detached tool shells and exits 130 on SIGINT", async () => {
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
+		let exited: (code: number) => void = () => {};
+		const exitCode = new Promise<number>((resolve) => {
+			exited = resolve;
+		});
+		vi.spyOn(process, "exit").mockImplementation(((code: number) => {
+			exited(code);
+		}) as typeof process.exit);
+		// The turn never finishes, as when a bash tool call is still running.
+		runtimeHost.session.prompt.mockImplementation(() => new Promise(() => {}));
+
+		void runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "run sleep",
+		});
+		await vi.waitFor(() => expect(runtimeHost.session.prompt).toHaveBeenCalled());
+		process.emit("SIGINT");
+
+		expect(await exitCode).toBe(130);
+		expect(killTrackedDetachedChildren).toHaveBeenCalled();
+		expect(runtimeHost.dispose).toHaveBeenCalled();
 	});
 });

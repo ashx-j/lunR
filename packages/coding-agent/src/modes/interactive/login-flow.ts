@@ -48,10 +48,13 @@ export interface LoginFlowHost {
 	showExtensionInput(title: string, placeholder?: string): Promise<string | undefined>;
 	requestRender(): void;
 	/** Warns when the given (or current) Anthropic model would use subscription auth it cannot. */
-	maybeWarnAboutAnthropicSubscriptionAuth(model?: Model<Api>): Promise<void>;
+	/** Shows the Claude subscription notice once per session after a login to `providerId`. */
+	maybeWarnAboutAnthropicSubscriptionAuth(providerId: string): Promise<void>;
 	updateAvailableProviderCount(): Promise<void>;
 	invalidateFooter(): void;
 	updateEditorBorderColor(): void;
+	/** Runs after every successful login, before /model: on first run it asks for the default permission mode. */
+	onLoginSucceeded(): Promise<void>;
 	/** Opens /model when the session still has no model and one is available to pick. */
 	openModelSelectorIfUnset(): Promise<void>;
 }
@@ -418,12 +421,14 @@ export async function showCustomProviderWizard(host: LoginFlowHost): Promise<voi
 			);
 			if (choice === "Skip") {
 				host.showStatus(`Custom provider '${name}' added (1 model). ${refineNote}`);
+				await host.onLoginSucceeded();
 				return;
 			}
 			if (choice === "Select model") {
 				try {
 					await host.session.setModel(model);
 					host.showStatus(`Custom provider '${name}' added (1 model). Selected ${model.id}. ${refineNote}`);
+					await host.onLoginSucceeded();
 					return;
 				} catch (error: unknown) {
 					host.showError(
@@ -436,6 +441,7 @@ export async function showCustomProviderWizard(host: LoginFlowHost): Promise<voi
 	host.showStatus(
 		`Custom provider '${name}' added (${modelCount} model${modelCount === 1 ? "" : "s"}). ${refineNote}`,
 	);
+	await host.onLoginSucceeded();
 	await host.openModelSelectorIfUnset();
 }
 
@@ -621,15 +627,13 @@ export async function completeProviderAuthentication(
 	host.updateEditorBorderColor();
 	if (selectedModel) {
 		host.showStatus(`${actionLabel}. Selected ${selectedModel.id}. ${savedNote}`);
-		void host.maybeWarnAboutAnthropicSubscriptionAuth(selectedModel);
 	} else {
 		host.showStatus(`${actionLabel}. ${savedNote}`);
-		if (selectionError) {
-			host.showError(selectionError);
-		} else {
-			void host.maybeWarnAboutAnthropicSubscriptionAuth();
-		}
+		if (selectionError) host.showError(selectionError);
 	}
+	// Whatever model the session is on: this login is the only place the notice shows.
+	void host.maybeWarnAboutAnthropicSubscriptionAuth(providerId);
+	await host.onLoginSucceeded();
 	await host.openModelSelectorIfUnset();
 }
 

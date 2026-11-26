@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { beforeAll, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { renderSubagentCall } from "../src/builtin-extensions/pi-subagents/src/extension/index.ts";
 import { renderSubagentResult } from "../src/builtin-extensions/pi-subagents/src/tui/render.ts";
 import { formatSearchDetail } from "../src/builtin-extensions/pi-web-access/render-search-chrome.ts";
@@ -13,10 +13,14 @@ import { createFindToolDefinition } from "../src/core/tools/find.ts";
 import { createGrepToolDefinition } from "../src/core/tools/grep.ts";
 import { createLsToolDefinition } from "../src/core/tools/ls.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
-import { formatGroupedCall, toolGroupTree } from "../src/core/tools/render-utils.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
-import { applySameToolGrouping, ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
+import {
+	applySameToolGrouping,
+	applyToolRunSpacing,
+	ToolExecutionComponent,
+} from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { formatGroupedCall, toolGroupTree } from "../src/modes/interactive/tool-renderers/render-utils.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 function createBaseToolDefinition(name = "custom_tool"): ToolDefinition {
@@ -999,9 +1003,10 @@ describe("ToolExecutionComponent parity", () => {
 		},
 		{
 			title: "outside AGENTS.md",
-			path: resolve(process.cwd(), "..", "AGENTS.md"),
+			// A fixed path outside the checkout, so the header cannot wrap when the checkout path is long.
+			path: resolve("/outside/AGENTS.md"),
 			content: "Hidden outside resource instructions",
-			compact: `read resource ${resolve(process.cwd(), "..", "AGENTS.md").replace(/\\/g, "/")}`,
+			compact: `read resource ${resolve("/outside/AGENTS.md").replace(/\\/g, "/")}`,
 			hidden: "Hidden outside resource instructions",
 			absent: undefined,
 		},
@@ -1127,6 +1132,16 @@ describe("ToolExecutionComponent density", () => {
 			compactRead("tool-read-c", "usage-service.ts"),
 		);
 		assertTreeGroup(lines, "read", ["resolve.ts", "model-runtime.ts", "usage-service.ts"]);
+	});
+
+	test("one-line bash calls from adjacent turns stack with no rows between them", () => {
+		const first = compactBash("tool-bash-run-1", "echo 1");
+		const second = compactBash("tool-bash-run-2", "echo 2");
+		applyToolRunSpacing(first, second);
+		const lines = [...first.render(80), ...second.render(80)].map((line) => stripAnsi(line).trim());
+
+		expect(lines.indexOf("● $ echo 2 — Took 0.0s")).toBe(lines.indexOf("● $ echo 1 — Took 0.0s") + 1);
+		expect(lines.filter((line) => line.startsWith("├─") || line.startsWith("└─"))).toEqual([]);
 	});
 
 	test("mixed read then bash keeps a blank line between headers", () => {
@@ -1512,5 +1527,71 @@ describe("ToolExecutionComponent density", () => {
 		expect(errorIdx).toBeGreaterThan(0);
 		expect(leafIdx).toBeGreaterThan(errorIdx);
 		expect(visible[leafIdx]?.trim().startsWith("└─")).toBe(true);
+	});
+});
+
+describe("ToolExecutionComponent ask-mode approval", () => {
+	beforeAll(() => {
+		initTheme("moon");
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	function askedBash(command: string): ToolExecutionComponent {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"call-1",
+			{ command },
+			{},
+			createBashToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.beginApproval();
+		return component;
+	}
+
+	test("the time the user spends deciding is not part of Took", () => {
+		vi.useFakeTimers({ now: 0 });
+		const component = askedBash("touch a.txt");
+		vi.setSystemTime(9_000);
+		component.endApproval(true);
+		vi.setSystemTime(9_200);
+		component.updateResult({ content: [{ type: "text", text: "" }], details: undefined, isError: false }, false);
+
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("$ touch a.txt — Took 0.2s");
+	});
+
+	test.each([
+		["bash", { command: "touch b.txt" }, createBashToolDefinition(process.cwd()), "$ touch b.txt — rejected"],
+		[
+			"edit",
+			{ path: "f.txt", edits: [{ oldText: "a", newText: "b" }] },
+			createEditToolDefinition(process.cwd()),
+			"edit f.txt — rejected",
+		],
+		["write", { path: "w.txt", content: "hi\n" }, createWriteToolDefinition(process.cwd()), "write w.txt — rejected"],
+	])("a rejected %s call says so on its header", (toolName, args, definition, header) => {
+		const component = new ToolExecutionComponent(
+			toolName,
+			"call-1",
+			args,
+			{},
+			definition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.beginApproval();
+		component.endApproval(false);
+		component.updateResult(
+			{ content: [{ type: "text", text: "The user rejected this call." }], details: undefined, isError: true },
+			false,
+		);
+
+		expect(stripAnsi(component.render(80).join("\n"))).toContain(header);
 	});
 });

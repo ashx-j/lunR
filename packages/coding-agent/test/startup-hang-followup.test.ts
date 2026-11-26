@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readPipedStdin } from "../src/cli/piped-stdin.ts";
 import { getExtensionAliasesForTest } from "../src/core/extensions/loader.ts";
-import { readPipedStdin } from "../src/main.ts";
 import { showDeprecationWarnings } from "../src/migrations.ts";
 
 class FakeStdin extends EventEmitter {
@@ -27,11 +27,22 @@ describe("startup hang follow-ups", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("readPipedStdin returns undefined when no first chunk arrives", async () => {
-		const stream = new FakeStdin() as unknown as NodeJS.ReadStream;
-		const started = Date.now();
-		await expect(readPipedStdin(stream, { firstChunkMs: 20, idleMs: 50 })).resolves.toBeUndefined();
-		expect(Date.now() - started).toBeLessThan(500);
+	it("readPipedStdin gives up and pauses stdin when no first byte arrives", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const stream = new FakeStdin();
+		const pause = vi.spyOn(stream, "pause");
+		const read = readPipedStdin(stream as unknown as NodeJS.ReadStream, { firstByteMs: 20, silenceMs: 1000 });
+		await expect(read).resolves.toBeUndefined();
+		expect(pause).toHaveBeenCalled();
+	});
+
+	it("readPipedStdin waits past the first-byte bound once a producer has started", async () => {
+		const stream = new FakeStdin();
+		const read = readPipedStdin(stream as unknown as NodeJS.ReadStream, { firstByteMs: 100, silenceMs: 300 });
+		setTimeout(() => stream.emit("data", "late "), 50);
+		setTimeout(() => stream.emit("data", "input"), 250);
+		setTimeout(() => stream.emit("end"), 450);
+		await expect(read).resolves.toBe("late input");
 	});
 
 	it("showDeprecationWarnings does not wait for a key when stdin is not a TTY", async () => {

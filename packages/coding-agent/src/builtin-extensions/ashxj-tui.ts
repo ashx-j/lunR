@@ -691,6 +691,36 @@ export class ChatboxEditor extends CustomEditor {
 // The stats line (footer) — slim, single line, BELOW the box
 // ---------------------------------------------------------------------------
 
+// Widest forms of the footer parts that change as a session runs (formatCount never exceeds 4 cells).
+const WIDEST_TOKENS = "\u2191999k \u2193999k";
+const WIDEST_PERCENT = "100%";
+const WIDEST_DIFFSTAT = " +9999 -9999";
+const WIDEST_CACHE = "cache 100.0%";
+// Statuses shown only while something runs. They are left out of the widest line; when they overflow
+// the footer, it truncates as it always has.
+const TRANSIENT_STATUS_KEYS = new Set(["tps", "bash-jobs", "mcp-auth"]);
+
+// Per session and terminal width: true once the `cache` label was chosen, false for `CH`.
+const cacheLabelDecisions = new WeakMap<object, Map<number, boolean>>();
+
+/**
+ * Chooses `cache 6.5%` or the short `CH6.5%` once per session and width, from the widest the line can
+ * get with this session's segments, so the label never flips as the numbers grow.
+ */
+function cacheLabelFits(session: object, width: number, widestLine: () => number): boolean {
+	let byWidth = cacheLabelDecisions.get(session);
+	if (!byWidth) {
+		byWidth = new Map();
+		cacheLabelDecisions.set(session, byWidth);
+	}
+	let fits = byWidth.get(width);
+	if (fits === undefined) {
+		fits = widestLine() <= width;
+		byWidth.set(width, fits);
+	}
+	return fits;
+}
+
 export function renderStatsLine(
 	width: number,
 	ctx: ExtensionContextLike,
@@ -699,6 +729,12 @@ export function renderStatsLine(
 ): string[] {
 	const sep = color(theme, "accent2", " | "); // lunr: theme-polish — separator uses subtle accent2 blue (was bright-black plain fallback)
 	const parts: string[] = [];
+	// For the cache label: cells the changing parts can still grow by, and cells of transient statuses.
+	let growth = 0;
+	let transientWidth = 0;
+	const reserve = (widest: string, actual: string) => {
+		growth += Math.max(0, displayWidth(widest) - displayWidth(actual));
+	};
 
 	// lunr: mode zone — permission mode + agent-mode statuses (plan/goal)
 	// render as ONE segment (dim middot-separated), not scattered across piped sections.
@@ -707,6 +743,7 @@ export function renderStatsLine(
 	// lunr: permission mode safety indicator — always shown (not toggle-gated).
 	const mode = lunrPermissionMode();
 	if (mode === "yolo" || mode === "auto") modeZone.push(color(theme, "warning", mode));
+	else if (mode === "ask") modeZone.push(color(theme, "white", "ask"));
 	else if (mode === "read-only") modeZone.push(color(theme, "white", "read"));
 
 	// lunr: footer element toggles from the customize bridge (read at render time).
@@ -727,14 +764,18 @@ export function renderStatsLine(
 			const v = statuses.get(key);
 			if (v) modeZone.push(color(theme, "white", stripAnsi(v)));
 		}
-		const pipedKeys: string[] = [];
+		// lunr: running bash background jobs (set by InteractiveMode); always shown, they stop at exit.
+		const pipedKeys: string[] = ["bash-jobs"];
 		if (footerToggles.tps) pipedKeys.push("tps");
 		if (footerToggles.mcp) pipedKeys.push("mcp", "mcp-auth");
 		if (footerToggles.lsp) pipedKeys.push("lsp");
 		for (const key of pipedKeys) {
 			const v = statuses.get(key);
+			if (!v) continue;
 			// lunr: unify footer status colors (white, was dim) so the whole stats line reads as one tone.
-			if (v) parts.push(color(theme, "white", stripAnsi(v))); // lunr: theme-polish — status segments white (was dim)
+			const seg = color(theme, "white", stripAnsi(v)); // lunr: theme-polish — status segments white (was dim)
+			parts.push(seg);
+			if (TRANSIENT_STATUS_KEYS.has(key)) transientWidth += displayWidth(seg) + displayWidth(sep);
 		}
 	}
 	if (modeZone.length > 0) {
@@ -747,10 +788,13 @@ export function renderStatsLine(
 		if (branch) {
 			const diff = footerData.getGitDiffstat?.();
 			let gitSeg = color(theme, "white", branch);
+			let diffText = "";
 			if (diff && (diff.added !== 0 || diff.removed !== 0)) {
+				diffText = ` +${diff.added} -${diff.removed}`;
 				gitSeg +=
 					` ${color(theme, "success", `+${diff.added}`)} ${color(theme, "error", `-${diff.removed}`)}`;
 			}
+			reserve(WIDEST_DIFFSTAT, diffText);
 			parts.push(gitSeg);
 		}
 	}
@@ -764,6 +808,7 @@ export function renderStatsLine(
 			const seg = usage?.pickForFooter?.(provider);
 			if (seg) {
 				const pct = `${Math.round(seg.usedPercent)}%`;
+				reserve(WIDEST_PERCENT, pct);
 				const barColor = seg.usedPercent > 90 ? "error" : seg.usedPercent > 70 ? "warning" : "success";
 				const bar = footerToggles.planBar ? `${compactPlanBar(seg.usedPercent, theme)} ` : "";
 				parts.push(color(theme, "white", seg.label) + " " + bar + color(theme, barColor, pct));
@@ -780,6 +825,7 @@ export function renderStatsLine(
 		const usage = ctx.getContextUsage();
 		const win = ctx.model?.contextWindow ?? usage?.contextWindow ?? 0;
 		const pct = usage?.percent == null ? "?" : `${Math.round(usage.percent)}%`;
+		reserve(WIDEST_PERCENT, pct);
 		const ctxSeg = `${pct}/${formatCount(win)}`;
 		const pv = usage?.percent ?? 0;
 		if (pv > 90) parts.push(color(theme, "error", ctxSeg));
@@ -791,12 +837,26 @@ export function renderStatsLine(
 
 	// 3) Token totals: ↑in ↓out (lunr: gated on footerTokens).
 	if (footerToggles.tokens) {
-		parts.push(color(theme, "white", `\u2191${formatCount(totals.input)} \u2193${formatCount(totals.output)}`)); // lunr: theme-polish — token totals white (was dim)
+		const tokens = `\u2191${formatCount(totals.input)} \u2193${formatCount(totals.output)}`;
+		reserve(WIDEST_TOKENS, tokens);
+		parts.push(color(theme, "white", tokens)); // lunr: theme-polish — token totals white (was dim)
 	}
 
-	// 4) Latest prompt cache hit rate (gated on footerCacheHitRate).
+	// 4) Latest prompt cache hit rate (gated on footerCacheHitRate). Labeled `cache`, or `CH` where the
+	// widest form of this session's line would not fit (cacheLabelFits).
 	if (footerToggles.cacheHitRate && totals.cacheActivity && totals.latestCacheHitRate !== undefined) {
-		parts.push(color(theme, "white", `CH${totals.latestCacheHitRate.toFixed(1)}%`));
+		const rate = `${totals.latestCacheHitRate.toFixed(1)}%`;
+		const labeled = cacheLabelFits(
+			ctx.sessionManager,
+			width,
+			() =>
+				displayWidth(parts.join(sep)) -
+				transientWidth +
+				growth +
+				(parts.length > 0 ? displayWidth(sep) : 0) +
+				displayWidth(WIDEST_CACHE),
+		);
+		parts.push(color(theme, "white", labeled ? `cache ${rate}` : `CH${rate}`));
 	}
 
 	// lunr: cost/usage counter segment removed entirely (both the $x.xxx dollar
