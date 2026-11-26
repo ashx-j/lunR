@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Rendering functions for subagent results
  */
@@ -137,6 +136,9 @@ function selectedSubagentSpinner() {
 		| undefined;
 	return getSubagentSpinnerDefinition(bridge?.getSubagentSpinner?.() ?? "braille");
 }
+
+// A widget row: an async step, or, for a job without step records, one row per agent carrying the job status.
+type WidgetStep = Omit<AsyncJobStep, "status"> & { status: AsyncJobStep["status"] | AsyncJobState["status"] };
 
 type ProgressSeedSource = Partial<Pick<AgentProgress, "index" | "toolCount" | "tokens" | "durationMs" | "lastActivityAt" | "currentToolStartedAt" | "turnCount">>;
 
@@ -467,7 +469,7 @@ function widgetActivity(job: AsyncJobState, now = Date.now()): string {
 	return "Done";
 }
 
-function widgetStepRunningSeed(step: NonNullable<AsyncJobState["steps"]>[number], fallbackIndex?: number): number | undefined {
+function widgetStepRunningSeed(step: WidgetStep, fallbackIndex?: number): number | undefined {
 	return runningSeed(fallbackIndex, step.index);
 }
 
@@ -495,7 +497,7 @@ function widgetStatusGlyph(job: AsyncJobState, theme: Theme, now = Date.now()): 
 	return theme.fg("error", "✗");
 }
 
-function widgetStepGlyph(status: AsyncJobStep["status"], theme: Theme, seed?: number): string {
+function widgetStepGlyph(status: WidgetStep["status"], theme: Theme, seed?: number): string {
 	if (status === "running") return theme.fg("accent", runningGlyph(seed));
 	if (status === "complete" || status === "completed") return theme.fg("success", "✓");
 	if (status === "failed") return theme.fg("error", "✗");
@@ -504,7 +506,7 @@ function widgetStepGlyph(status: AsyncJobStep["status"], theme: Theme, seed?: nu
 	return theme.fg("muted", "◦");
 }
 
-function widgetStepStatus(status: AsyncJobStep["status"], theme: Theme): string {
+function widgetStepStatus(status: WidgetStep["status"], theme: Theme): string {
 	if (status === "running") return theme.fg("accent", "running");
 	if (status === "complete" || status === "completed") return theme.fg("success", "complete");
 	if (status === "failed") return theme.fg("error", "failed");
@@ -889,7 +891,7 @@ function modelThinkingBadge(theme: Theme, model?: string, thinking?: string, sel
 	return label ? theme.fg("dim", ` (${label})`) : "";
 }
 
-function widgetStepActivityLine(step: NonNullable<AsyncJobState["steps"]>[number], width: number, expanded: boolean, snapshotNow?: number): string {
+function widgetStepActivityLine(step: WidgetStep, width: number, expanded: boolean, snapshotNow?: number): string {
 	const toolLine = formatCurrentToolLine(step, width, expanded, snapshotNow);
 	if (toolLine) return toolLine;
 	const activity = buildLiveStatusLine(step, snapshotNow);
@@ -1036,7 +1038,7 @@ function foregroundStyleWidgetDetails(job: AsyncJobState, theme: Theme, expanded
 }
 
 function compactTerminalStatus(
-	status: AsyncJobState["status"] | AsyncJobStep["status"],
+	status: AsyncJobState["status"] | AsyncJobStep["status"] | WorkflowNodeStatus,
 ): string | undefined {
 	if (status === "failed") return "failed";
 	if (status === "paused") return "paused";
@@ -1045,7 +1047,7 @@ function compactTerminalStatus(
 	return undefined;
 }
 
-function compactJobProgress(job: AsyncJobState, step?: NonNullable<AsyncJobState["steps"]>[number], now = Date.now()): { tokens: number; durationMs: number } {
+function compactJobProgress(job: AsyncJobState, step?: WidgetStep, now = Date.now()): { tokens: number; durationMs: number } {
 	const running = (step?.status ?? job.status) === "running";
 	const wholeJob = !step || (!job.steps?.length && job.agents?.length === 1);
 	const tokens = step?.tokens?.total ?? (wholeJob ? job.totalTokens?.total : undefined) ?? 0;
@@ -1061,14 +1063,14 @@ function compactJobProgress(job: AsyncJobState, step?: NonNullable<AsyncJobState
 	return { tokens, durationMs: Math.max(0, endedAt - startedAt) };
 }
 
-function compactJobLead(job: AsyncJobState, step?: NonNullable<AsyncJobState["steps"]>[number]): string {
+function compactJobLead(job: AsyncJobState, step?: WidgetStep): string {
 	return compactRowLead({
 		description: step?.description ?? step?.agent ?? job.agents?.[0],
 		task: step?.description ?? step?.agent,
 	}) || widgetJobName(job);
 }
 
-function compactJobLines(job: AsyncJobState, step: NonNullable<AsyncJobState["steps"]>[number] | undefined, theme: Theme, width: number, now = Date.now()): string[] {
+function compactJobLines(job: AsyncJobState, step: WidgetStep | undefined, theme: Theme, width: number, now = Date.now()): string[] {
 	const running = (step?.status ?? job.status) === "running";
 	const lead = compactJobLead(job, step);
 	const modelBadge = formatCompactModelBadge(step?.modelSelection, step?.model);
@@ -1179,7 +1181,7 @@ function fitAdaptiveWidgetLines(_jobs: AsyncJobState[], lines: string[], theme: 
 
 function widgetExpandedDiagnostics(
 	job: AsyncJobState,
-	step: AsyncJobStep | undefined,
+	step: WidgetStep | undefined,
 	index: number,
 	theme: Theme,
 	width: number,
@@ -1421,7 +1423,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	}), frame, isRunning);
 }
 
-function progressStatusGlyph(progress: AgentProgress | undefined, theme: Theme, frame?: number): string {
+function progressStatusGlyph(progress: (ProgressSeedSource & { status: AgentProgress["status"] | WorkflowNodeStatus }) | undefined, theme: Theme, frame?: number): string {
 	if (!progress || progress.status === "pending") return theme.fg("muted", "◦");
 	if (progress.status === "running") return theme.fg("accent", runningGlyph((progressRunningSeed(progress) ?? 0) + (frame ?? 0)));
 	if (progress.status === "completed") return theme.fg("success", "✓");
@@ -1460,7 +1462,7 @@ function compactForegroundEntries(d: Details): CompactForegroundEntry[] {
 		return Array.from({ length: count }, (_, flatIndex) => ({ flatIndex }));
 	}
 
-	const entries = workflowNodes.map((node) => ({ flatIndex: node.flatIndex, node }));
+	const entries: CompactForegroundEntry[] = workflowNodes.map((node) => ({ flatIndex: node.flatIndex, node }));
 	const seen = new Set(entries.flatMap((entry) => entry.flatIndex === undefined ? [] : [entry.flatIndex]));
 	const progressCount = d.progress?.reduce((count, entry) => Math.max(count, entry.index + 1), 0) ?? 0;
 	const dataCount = Math.max(d.results.length, progressCount, d.chainChildren?.length ?? 0);
@@ -1726,7 +1728,7 @@ export function renderSubagentResult(
 	c.addChild(animatedLine((_f, now) => {
 		const durations = d.results
 			.map((result) => result.progress ?? result.progressSummary)
-			.filter(Boolean)
+			.filter((progress) => progress !== undefined)
 			.map((progress) => liveDurationMs(progress, progress.status === "running", now));
 		const durationMs = d.mode === "chain" ? durations.reduce((sum, value) => sum + value, 0) : Math.max(0, ...durations);
 		const summaryParts = [
