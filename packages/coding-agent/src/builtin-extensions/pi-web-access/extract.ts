@@ -17,6 +17,7 @@ import {
 import { existsSync, readFileSync } from "node:fs";
 import { fetchRemoteUrl, validateRemoteUrl, type Lookup } from "./ssrf-protection.ts";
 import { formatSeconds, getWebSearchConfigPath } from "./utils.ts";
+import { withGeminiWebRemovedNotice } from "./gemini-web-removed.ts";
 
 const YOUTUBE_URL_RE =
 	/(?:(?:www\.|m\.)?youtube\.com\/(?:watch\?.*v=|shorts\/|live\/|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
@@ -447,7 +448,7 @@ export async function extractContent(
 			const { extractVideo } = await loadVideoExtract();
 			const result = await extractVideo(localVideo.info, signal, options);
 			if (signal?.aborted) return abortedResult(url);
-			return result ?? { url, title: "", content: "", error: `Video analysis requires Gemini access. Either:\n  1. Sign into gemini.google.com in Chrome (free, uses cookies)\n  2. Set GEMINI_API_KEY in ${WEB_SEARCH_CONFIG_PATH}` };
+			return result ?? { url, title: "", content: "", error: withGeminiWebRemovedNotice(`Video analysis requires Gemini access. Set GEMINI_API_KEY in ${WEB_SEARCH_CONFIG_PATH}`) };
 		} catch (err) {
 			if (isAbortError(err)) return abortedResult(url);
 			return { url, title: "", content: "", error: errorMessage(err) };
@@ -502,7 +503,7 @@ export async function extractContent(
 				url,
 				title: "",
 				content: "",
-				error: "Could not extract YouTube video content. Sign into Google in Chrome for automatic access, or set GEMINI_API_KEY.",
+				error: withGeminiWebRemovedNotice("Could not extract YouTube video content. Set GEMINI_API_KEY or PERPLEXITY_API_KEY."),
 			};
 		}
 	}
@@ -538,8 +539,7 @@ export async function extractContent(
 	let geminiResult: ExtractedContent | null = null;
 	try {
 		const geminiUrl = await loadGeminiUrlContext();
-		geminiResult = await geminiUrl.extractWithUrlContext(url, signal)
-			?? await geminiUrl.extractWithGeminiWeb(url, signal);
+		geminiResult = await geminiUrl.extractWithUrlContext(url, signal);
 	} catch (err) {
 		if (isAbortError(err)) return abortedResult(url);
 		if (isConfigParseError(err)) {
@@ -557,10 +557,9 @@ export async function extractContent(
 		"Fallback options:",
 		`  \u2022 Set PARALLEL_API_KEY in ${WEB_SEARCH_CONFIG_PATH}`,
 		`  \u2022 Set GEMINI_API_KEY in ${WEB_SEARCH_CONFIG_PATH}`,
-		"  \u2022 Sign into gemini.google.com in Chrome",
 		"  \u2022 Use web_search to find content about this topic",
 	].join("\n");
-	return { ...httpResult, error: guidance };
+	return { ...httpResult, error: withGeminiWebRemovedNotice(guidance) };
 }
 
 function isLikelyJSRendered(html: string): boolean {

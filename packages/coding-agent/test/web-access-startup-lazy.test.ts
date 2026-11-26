@@ -11,8 +11,6 @@ const HEAVY_STATIC_IMPORT_TARGETS = [
 	"./gemini-search.ts",
 	"./curator-server.ts",
 	"./summary-review.ts",
-	"./gemini-web.ts",
-	"./chrome-cookies.ts",
 	"./perplexity.ts",
 	"./exa.ts",
 	"./brave.ts",
@@ -58,9 +56,7 @@ describe("pi-web-access startup dependency reduction", () => {
 			"./parallel.ts",
 			"./tavily.ts",
 			"./perplexity.ts",
-			"./gemini-web.ts",
 			"./gemini-api.ts",
-			"./chrome-cookies.ts",
 		]) {
 			expect(specs, `gemini-search must not value-import ${heavy}`).not.toContain(heavy);
 		}
@@ -84,8 +80,6 @@ describe("pi-web-access startup dependency reduction", () => {
 			"./video-extract.ts",
 			"./gemini-url-context.ts",
 			"./parallel.ts",
-			"./gemini-web.ts",
-			"./chrome-cookies.ts",
 		]) {
 			expect(specs, `extract must not value-import ${heavy}`).not.toContain(heavy);
 		}
@@ -100,7 +94,6 @@ describe("pi-web-access lazy first-use runtime", () => {
 	const loadGeminiSearch = vi.fn();
 	const loadCuratorServer = vi.fn();
 	const loadSummaryReview = vi.fn();
-	const loadGeminiWeb = vi.fn();
 	const loadGeminiApi = vi.fn();
 	const loadOpenAISearch = vi.fn();
 	const loadBrave = vi.fn();
@@ -117,7 +110,6 @@ describe("pi-web-access lazy first-use runtime", () => {
 			loadGeminiSearch,
 			loadCuratorServer,
 			loadSummaryReview,
-			loadGeminiWeb,
 			loadGeminiApi,
 			loadOpenAISearch,
 			loadBrave,
@@ -194,7 +186,6 @@ describe("pi-web-access lazy first-use runtime", () => {
 		expect(tools.has("get_search_content")).toBe(true);
 		expect(commands.get("websearch")).toMatchObject({ hidden: true });
 		expect(commands.has("curator")).toBe(true);
-		expect(commands.has("google-account")).toBe(true);
 		expect(commands.has("search")).toBe(true);
 		expect(handlers.has("session_start")).toBe(true);
 		expect(handlers.has("session_shutdown")).toBe(true);
@@ -203,7 +194,6 @@ describe("pi-web-access lazy first-use runtime", () => {
 		expect(loadGeminiSearch).not.toHaveBeenCalled();
 		expect(loadCuratorServer).not.toHaveBeenCalled();
 		expect(loadSummaryReview).not.toHaveBeenCalled();
-		expect(loadGeminiWeb).not.toHaveBeenCalled();
 		expect(loadBrave).not.toHaveBeenCalled();
 		expect(loadOpenAISearch).not.toHaveBeenCalled();
 	});
@@ -557,7 +547,6 @@ describe("pi-web-access lazy first-use runtime", () => {
 		loadPerplexity.mockResolvedValue({ isPerplexityAvailable: () => false });
 		loadExa.mockResolvedValue({ isExaAvailable: () => false });
 		loadGeminiApi.mockResolvedValue({ isGeminiApiAvailable: () => false });
-		loadGeminiWeb.mockResolvedValue({ isGeminiWebAvailable: async () => null });
 		loadSummaryReview.mockResolvedValue({});
 		const startCuratorServer = vi.fn();
 		let release!: (module: { startCuratorServer: typeof startCuratorServer }) => void;
