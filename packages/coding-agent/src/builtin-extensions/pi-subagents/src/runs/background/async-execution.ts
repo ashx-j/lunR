@@ -560,7 +560,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			parentMode: snapshotParentPermissionMode(ctx.parentSessionId ?? ctx.currentSessionId),
 			runId: params.childIdRunId ?? id,
 			index: childIndex,
-			childId: s.childId ?? (s.agent?.trim() ? s.agent : undefined),
+			childId: s.agent?.trim() ? s.agent : undefined,
 			defaultTask: "{previous}",
 			fanoutAuthorized: false,
 		});
