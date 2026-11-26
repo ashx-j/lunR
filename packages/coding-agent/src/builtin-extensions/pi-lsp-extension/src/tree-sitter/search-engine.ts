@@ -8,10 +8,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import type Parser from "web-tree-sitter";
 import type { TreeSitterManager } from "./parser-manager.js";
+import { PARSE_TIMEOUT_SECONDS } from "../shared/timing.js";
 import type {
   CompiledPattern,
   PatternNode,
@@ -42,6 +43,27 @@ export interface SearchMatch {
   captures: Record<string, string>;
 }
 
+/** Files a search left out, so it can say so instead of reporting no matches for them. */
+export interface SkippedFiles {
+  /** Their parse stopped at PARSE_TIMEOUT_SECONDS. */
+  slow: string[];
+  /** Larger than MAX_FILE_SIZE, so never parsed. */
+  oversized: string[];
+}
+
+/** The note a tool appends for files a search left out. */
+export function skippedFilesNote({ slow, oversized }: SkippedFiles, rootDir: string): string {
+  const list = (files: string[]) =>
+    `${files.slice(0, 5).map((file) => relative(rootDir, file)).join(", ")}${files.length > 5 ? ` and ${files.length - 5} more` : ""}`;
+  const plural = (files: string[]) => `${files.length} file${files.length === 1 ? "" : "s"}`;
+  let note = "";
+  if (slow.length > 0)
+    note += `\n\nSkipped ${plural(slow)} that took over ${PARSE_TIMEOUT_SECONDS} s to parse, so they were not searched: ${list(slow)}.`;
+  if (oversized.length > 0)
+    note += `\n\nSkipped ${plural(oversized)} over ${MAX_FILE_SIZE / 1024} KB, so they were not searched: ${list(oversized)}. Pass one as path to search it.`;
+  return note;
+}
+
 // ── Directories to skip ─────────────────────────────────────────────────────
 
 // Shared constants imported from ../shared/constants.ts
@@ -60,6 +82,8 @@ export async function searchFiles(
     maxResults?: number;
     /** Called when lunR's saved logins under the search root were left out, so the tool can say so. */
     onSkippedCredentials?: () => void;
+    /** Called with files left out: over MAX_FILE_SIZE, or their parse stopped at the time bound. */
+    onSkippedFiles?: (skipped: SkippedFiles) => void;
   } = {},
 ): Promise<SearchMatch[]> {
   const searchRoot = options.path ? resolve(rootDir, options.path) : rootDir;
@@ -67,11 +91,12 @@ export async function searchFiles(
 
   // Determine if searchRoot is a file or directory
   const stats = await stat(searchRoot);
+  const oversized: string[] = [];
   let files: string[];
   if (stats.isFile()) {
     files = [searchRoot];
   } else {
-    files = await collectFilesByLanguage(searchRoot, pattern.languageId, treeSitter);
+    files = await collectFilesByLanguage(searchRoot, pattern.languageId, treeSitter, [], MAX_INDEX_FILES, oversized);
   }
   const isCredential = credentialWalkFilter(searchRoot);
   if (isCredential && files.some(isCredential)) {
@@ -80,6 +105,7 @@ export async function searchFiles(
   }
 
   const matches: SearchMatch[] = [];
+  const slow: string[] = [];
 
   for (const file of files) {
     if (matches.length >= maxResults) break;
@@ -87,7 +113,10 @@ export async function searchFiles(
     try {
       const content = await readFile(file, "utf-8");
       const tree = await treeSitter.parseWithLanguage(file, content, pattern.languageId);
-      if (!tree) continue;
+      if (!tree) {
+        if (treeSitter.parseTimedOut(file)) slow.push(file);
+        continue;
+      }
 
       const sourceHash = createHash("sha256").update(content).digest("hex");
       const fileMatches = findMatches(tree.rootNode, pattern.root);
@@ -109,13 +138,15 @@ export async function searchFiles(
     }
   }
 
+  if (slow.length > 0 || oversized.length > 0) options.onSkippedFiles?.({ slow, oversized });
   return matches;
 }
 
 // ── File collection ─────────────────────────────────────────────────────────
 
 /**
- * Collect all files matching a given language under a directory.
+ * Collect all files matching a given language under a directory. Files over MAX_FILE_SIZE go to
+ * `oversized` instead, so a search can say it left them out.
  */
 export async function collectFilesByLanguage(
   dir: string,
@@ -123,6 +154,7 @@ export async function collectFilesByLanguage(
   treeSitter: TreeSitterManager,
   collected: string[] = [],
   maxFiles: number = MAX_INDEX_FILES,
+  oversized: string[] = [],
 ): Promise<string[]> {
   if (collected.length >= maxFiles) return collected;
 
@@ -133,7 +165,7 @@ export async function collectFilesByLanguage(
 
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
-        await collectFilesByLanguage(resolve(dir, entry.name), languageId, treeSitter, collected, maxFiles);
+        await collectFilesByLanguage(resolve(dir, entry.name), languageId, treeSitter, collected, maxFiles, oversized);
       } else if (entry.isFile()) {
         const fileLang = treeSitter.getLanguageId(entry.name);
         if (fileLang === languageId) {
@@ -142,7 +174,7 @@ export async function collectFilesByLanguage(
             const s = await stat(filePath);
             if (s.size <= MAX_FILE_SIZE) {
               collected.push(filePath);
-            }
+            } else oversized.push(filePath);
           } catch {}
         }
       }
