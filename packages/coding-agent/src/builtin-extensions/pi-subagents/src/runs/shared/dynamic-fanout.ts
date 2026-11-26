@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { DynamicParallelStep, ParallelTaskItem } from "../../shared/settings.ts";
 import type { ArtifactPaths, ChainOutputMap, JsonSchemaObject, SingleResult } from "../../shared/types.ts";
 import { getSingleResultOutput } from "../../shared/utils.ts";
@@ -258,7 +257,8 @@ export function materializeDynamicParallelStep(step: DynamicParallelStep, output
 		let description: string;
 		try {
 			description = validateChildDescription(
-				resolveItemTemplate(step.parallel.description, itemName, entry.item),
+				// resolveDynamicFanoutItems validated that parallel.description is set.
+				resolveItemTemplate(step.parallel.description!, itemName, entry.item),
 				`Dynamic chain step ${stepIndex + 1} item '${entry.key}' description`,
 			);
 		} catch (error) {

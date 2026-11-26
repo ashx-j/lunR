@@ -127,6 +127,19 @@ describe("builtin prompt command routing", () => {
 		expect(harness.faux.callCount).toBe(0);
 	});
 
+	it("labels the /prompt-workflow list message", async () => {
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: profile,
+			agentDir: profile,
+			extensionFactories: [(pi) => registerPromptWorkflowCommands({ pi, run: vi.fn() })],
+		});
+		await resourceLoader.reload();
+		harness = await createHarnessWithExtensions({ resourceLoader });
+		await harness.session.prompt("/prompt-workflow list");
+		const listed = harness.session.messages.find((message) => message.role === "custom");
+		expect(listed).toMatchObject({ customType: "subagent-prompt-workflows", display: true });
+	});
+
 	it("routes /chain by argument shape without rerouting task chains named like workflows", () => {
 		const isWorkflow = (name: string) => ["analyze", "fix"].includes(name);
 		const isTemplateChain = vi.fn(() => true);

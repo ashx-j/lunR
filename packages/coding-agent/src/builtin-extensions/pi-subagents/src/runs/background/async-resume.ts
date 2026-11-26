@@ -1,7 +1,6 @@
-// @ts-nocheck
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ASYNC_DIR, RESULTS_DIR, isSupportedSubagentLifecycleVersion, UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE, type AsyncStatus, type ModelSelection, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
+import { ASYNC_DIR, RESULTS_DIR, isSupportedSubagentLifecycleVersion, UNSUPPORTED_SUBAGENT_LIFECYCLE_MESSAGE, type AsyncStatus, type ChildPermission, type ModelSelection, type SteeringRecoveryDescriptor, type SubagentState } from "../../shared/types.ts";
 import { validateChildDescription } from "../../shared/child-spec.ts";
 import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts";
 import { validatePersistedAcceptance } from "../shared/acceptance.ts";
@@ -98,7 +97,7 @@ interface AsyncResultFile {
 	sessionFile?: string;
 	model?: string;
 	thinking?: string;
-	results?: Array<{ agent?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; model?: string; thinking?: string }>;
+	results?: Array<{ childId?: string; description?: string; permissions?: ChildPermission; agent?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; model?: string; thinking?: string }>;
 }
 
 export interface AsyncRunLocation {
@@ -313,7 +312,7 @@ function validateStatusForResume(status: AsyncStatus | null, source: string): vo
 	}
 }
 
-export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): SteeringRecoveryDescriptor | undefined {
+export function readAsyncRecoveryDescriptor(asyncDir: string | null | undefined): SteeringRecoveryDescriptor | undefined {
 	if (!asyncDir) return undefined;
 	const descriptorPath = path.join(asyncDir, "recovery-descriptor.json");
 	if (!fs.existsSync(descriptorPath)) return undefined;
