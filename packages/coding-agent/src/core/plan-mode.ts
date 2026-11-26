@@ -219,8 +219,8 @@ function readBashCommand(input: unknown): string {
  * known read-only command used safely (no redirects, no command substitution,
  * no process substitution, no executing-interpreter flags).
  *
- * With `cwd`, the session's working directory, a `cd` to that same directory counts as no change
- * of directory. Models often start a line with `cd <project> &&`, and without this every
+ * With `cwd`, the session's working directory, a first `cd .` or `cd <cwd as an absolute path>`
+ * counts as no change of directory. Models often start a line with `cd <project> &&`, and without this every
  * `git status` after it was treated as running in an unknown directory.
  */
 export function isMutatingBashCommand(command: string, cwd?: string): boolean {
@@ -240,8 +240,8 @@ export function isMutatingBashCommand(command: string, cwd?: string): boolean {
 		const tokens = shellWords(segment);
 		if (tokens?.[0] === "cd") {
 			if (!isPlainCd(segment, tokens)) return true;
-			// Only the first directory change can be a no-op: after a real one, a relative target means something else.
-			if (changedDir || cwd === undefined || resolve(cwd, tokens[1]) !== resolve(cwd)) changedDir = true;
+			// Only the first directory change can be a no-op: after a real one, `.` means something else.
+			if (changedDir || !isCdToSessionDirectory(tokens[1], cwd)) changedDir = true;
 			continue;
 		}
 		if (isMutatingSegment(segment)) return true;
@@ -290,6 +290,19 @@ function joinLineContinuations(command: string): string {
 
 /** Allowed commands that load config, hooks or a program from the working directory. */
 const CWD_CONFIG_COMMANDS = new Set(["git", "gh", "npm", "pnpm", "bun"]);
+
+/**
+ * True when `cd <target>` stays in `cwd`: `.`, `./`, or `cwd` spelled as an absolute path. Other
+ * spellings are refused even when Node resolves them to `cwd`, because bash can read them
+ * differently: `~/..` expands first, a relative name is searched in `CDPATH`, and `..` after a
+ * symlink leaves the tree under `set -P`. Off on Windows, where Node and Git Bash disagree on `/`.
+ */
+function isCdToSessionDirectory(target: string, cwd: string | undefined): boolean {
+	if (cwd === undefined || process.platform === "win32") return false;
+	if (target === "." || target === "./") return true;
+	if (!target.startsWith("/") || target.split("/").includes("..")) return false;
+	return resolve(target) === resolve(cwd);
+}
 
 /** `cd <dir>` alone: one literal argument that isn't an option, `-` or a glob. */
 function isPlainCd(segment: string, tokens: string[]): boolean {

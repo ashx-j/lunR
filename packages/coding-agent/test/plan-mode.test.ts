@@ -614,7 +614,8 @@ describe("cd to the session directory", () => {
 		"cd '/work/project' && npm ls",
 		"cd /work/project/ && git status --short | head",
 		"cd . && git status",
-		"cd /work/project/src/.. && git status",
+		"cd ./ && git status",
+		"cd /work//project/. && git status",
 	])("allows %s", (command) => {
 		expect(isMutatingBashCommand(command, cwd)).toBe(false);
 	});
@@ -627,6 +628,14 @@ describe("cd to the session directory", () => {
 		"cd src && cd .. && git status",
 		"cd /work/project && cd src && git status",
 		"cd ~ && git status",
+		// Node resolves these to the session directory, bash does not: ~ expands first, CDPATH is
+		// searched for a relative name, and .. after a symlink leaves the tree under set -P.
+		"cd ~/.. && git status",
+		"cd ~+/.. && git status",
+		"cd x/.. && git status",
+		"cd src/.. && git status",
+		"cd /work/project/src/.. && git status",
+		"cd ../project && git status",
 		"cd /work/project && touch x",
 		"cd /work/project && git commit -m x",
 	])("still blocks %s", (command) => {
