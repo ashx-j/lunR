@@ -6,6 +6,7 @@ import { type Component, Container, type Focusable, TUI } from "../../tui/src/tu
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
+import { ExtensionDialogs, type ExtensionDialogsHost } from "../src/modes/interactive/extension-dialogs.ts";
 import { InteractiveMode, startInteractiveToolInstalls } from "../src/modes/interactive/interactive-mode.ts";
 import {
 	type LoadedResourcesHost,
@@ -234,7 +235,7 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 	});
 });
 
-describe("InteractiveMode.showExtensionCustom", () => {
+describe("ExtensionDialogs.custom", () => {
 	beforeAll(() => {
 		initTheme("moon");
 	});
@@ -259,11 +260,11 @@ describe("InteractiveMode.showExtensionCustom", () => {
 			keybindings: {},
 			ui,
 		};
+		const dialogs = new ExtensionDialogs(fakeThis as unknown as ExtensionDialogsHost);
 		const showExtensionCustom = <T>(
 			factory: (tui: TUI, theme: unknown, keybindings: unknown, done: (result: T) => void) => Component,
 			options?: { overlay?: boolean },
-		): Promise<T> =>
-			(InteractiveMode as any).prototype.showExtensionCustom.call(fakeThis, factory, options) as Promise<T>;
+		): Promise<T> => dialogs.custom<T>(factory as never, options);
 
 		editorContainer.addChild(editor);
 		ui.addChild(editorContainer);

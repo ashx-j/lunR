@@ -16,8 +16,6 @@ import type {
 	EditorComponent,
 	KeyId,
 	MarkdownTheme,
-	OverlayHandle,
-	OverlayOptions,
 	SlashCommand,
 } from "@earendil-works/pi-tui";
 import {
@@ -56,8 +54,6 @@ import type {
 	ExtensionContext,
 	ExtensionRunner,
 	ExtensionUIContext,
-	ExtensionUIDialogOptions,
-	ExtensionWidgetOptions,
 	InlineExtension,
 	ProjectTrustContext,
 	WorkingIndicatorOptions,
@@ -79,7 +75,6 @@ import {
 	beginTurn as rollbackBeginTurn,
 	setRollbackWarningHandler,
 } from "../../core/rollback.ts";
-import { formatMissingSessionCwdPrompt, type MissingSessionCwdError } from "../../core/session-cwd.ts";
 import {
 	cancelSessionHandoff,
 	markSessionHandoff,
@@ -115,8 +110,6 @@ import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
-import { ExtensionEditorComponent } from "./components/extension-editor.ts";
-import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { InjectedPromptMessageComponent } from "./components/injected-prompt-message.ts";
@@ -146,11 +139,8 @@ import { applySameToolGrouping, applyToolRunSpacing, ToolExecutionComponent } fr
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { ExitConfirmation } from "./exit-confirmation.ts";
-import {
-	orderedExtensionWidgets,
-	replaceExtensionWidget,
-	widgetSeparatorNeedsSpacer,
-} from "./extension-widget-order.ts";
+import { ExtensionDialogs, type ExtensionDialogsHost } from "./extension-dialogs.ts";
+import { ExtensionWidgets, type ExtensionWidgetsHost } from "./extension-widgets.ts";
 import { type HelpCommandHost, handleHelpCommand, handleHotkeysCommand } from "./help-commands.ts";
 import { type LoadedResourcesOptions, showLoadedResources } from "./loaded-resources.ts";
 import {
@@ -500,16 +490,11 @@ export class InteractiveMode {
 	private shutdownRequested = false;
 
 	// Extension UI state
-	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
-	private extensionInput: ExtensionInputComponent | undefined = undefined;
-	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
 	// Extension widgets (components rendered above/below the editor)
-	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
-	private extensionWidgetsBelow = new Map<string, Component & { dispose?(): void }>();
-	private widgetContainerAbove!: Container;
-	private widgetContainerBelow!: Container;
+	// The extension widget areas above and below the editor; see extension-widgets.ts.
+	private readonly widgets = new ExtensionWidgets(this.createExtensionWidgetsHost());
 
 	// Custom footer from extension (undefined = use built-in footer)
 	private customFooter: (Component & { dispose?(): void }) | undefined = undefined;
@@ -534,6 +519,8 @@ export class InteractiveMode {
 	private deferredBuiltinAttachPromise: Promise<void> | undefined;
 	// The hosts below are built in field initializers, before the constructor assigns `ui`,
 	// `chatContainer` and the editor, so every member that reads a field must be a getter.
+	// Owns the dialog shown in place of the editor; see extension-dialogs.ts.
+	private readonly dialogs = new ExtensionDialogs(this.createExtensionDialogsHost());
 	// Passed to the login-flow.ts functions so /login reaches this UI and the current session.
 	private readonly loginFlowHost: LoginFlowHost = this.createLoginFlowHost();
 	// Passed to the slash-dispatch.ts handlers when a builtin slash command is submitted.
@@ -619,8 +606,6 @@ export class InteractiveMode {
 		this.statusContainer = options.startupView?.statusContainer ?? new Container();
 		// Share the startup view's window so a Ctrl+D pressed just before hydration still counts.
 		this.exitConfirmation = options.startupView?.exitConfirmation ?? new ExitConfirmation();
-		this.widgetContainerAbove = new Container();
-		this.widgetContainerBelow = new Container();
 		this.keybindings = options.startupView?.keybindings ?? KeybindingsManager.create();
 		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
@@ -833,13 +818,13 @@ export class InteractiveMode {
 		this.ui.addChild(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
-		this.renderWidgets(); // Initialize with default spacer
-		this.ui.addChild(this.widgetContainerAbove);
+		this.widgets.render(); // Initialize with default spacer
+		this.ui.addChild(this.widgets.above);
 		this.ui.addChild(this.editorContainer);
-		this.ui.addChild(this.widgetContainerBelow);
+		this.ui.addChild(this.widgets.below);
 		this.ui.addChild(this.customFooter ?? this.footer);
 		this.ui.setFocus(this.editor);
-		this.ui.pinFrom(this.widgetContainerAbove);
+		this.ui.pinFrom(this.widgets.above);
 
 		this.setupKeyHandlers();
 		if (!this.options.startupView) this.setupEditorSubmitHandler();
@@ -1156,7 +1141,7 @@ export class InteractiveMode {
 	// Each onboarding choice hands off to the /login flow; a login then opens /model if no model is set.
 	private showOnboarding(): void {
 		const options = buildOnboardingOptions(getLoginProviderOptions(this.session.modelRuntime));
-		this.showSelector((done) => {
+		this.dialogs.showSelector((done) => {
 			const onboarding = new OnboardingComponent(options, WELCOME_TEXT, (choice) => {
 				done();
 				if (choice === "skip") {
@@ -1184,7 +1169,7 @@ export class InteractiveMode {
 		if (!shouldAskPermissionMode({ onboardingShown: this.onboardingShown, savedDefault })) return;
 		this.onboardingShown = false;
 		const choice = await new Promise<PermissionModeChoice>((resolve) => {
-			this.showSelector((done) => {
+			this.dialogs.showSelector((done) => {
 				const step = new OnboardingComponent<PermissionModeChoice>(
 					PERMISSION_MODE_OPTIONS,
 					permissionModeStepText(this.session.permissionMode),
@@ -1643,61 +1628,13 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	/**
-	 * Set an extension widget (string array or custom component).
-	 */
-	private setExtensionWidget(
-		key: string,
-		content: string[] | ((tui: TUI, thm: Theme) => Component & { dispose?(): void }) | undefined,
-		options?: ExtensionWidgetOptions,
-	): void {
-		const placement = options?.placement ?? "aboveEditor";
-		let component: (Component & { dispose?(): void }) | undefined;
-
-		if (Array.isArray(content)) {
-			const container = new Container();
-			for (const line of content.slice(0, InteractiveMode.MAX_WIDGET_LINES)) {
-				container.addChild(new Text(line, 1, 0));
-			}
-			if (content.length > InteractiveMode.MAX_WIDGET_LINES) {
-				container.addChild(new Text(theme.fg("muted", "... (widget truncated)"), 1, 0));
-			}
-			component = container;
-		} else if (content) {
-			component = content(this.ui, theme);
-		}
-
-		replaceExtensionWidget(this.extensionWidgetsAbove, this.extensionWidgetsBelow, key, component, placement);
-		this.renderWidgets();
-	}
-
-	private clearExtensionWidgets(): void {
-		for (const widget of this.extensionWidgetsAbove.values()) {
-			widget.dispose?.();
-		}
-		for (const widget of this.extensionWidgetsBelow.values()) {
-			widget.dispose?.();
-		}
-		this.extensionWidgetsAbove.clear();
-		this.extensionWidgetsBelow.clear();
-		this.renderWidgets();
-	}
-
 	private resetExtensionUI(): void {
-		if (this.extensionSelector) {
-			this.hideExtensionSelector();
-		}
-		if (this.extensionInput) {
-			this.hideExtensionInput();
-		}
-		if (this.extensionEditor) {
-			this.hideExtensionEditor();
-		}
+		this.dialogs.hideAll();
 		this.ui.hideOverlay();
 		this.clearExtensionTerminalInputListeners();
 		this.setExtensionFooter(undefined);
 		this.setExtensionHeader(undefined);
-		this.clearExtensionWidgets();
+		this.widgets.clear();
 		this.footerDataProvider.clearExtensionStatuses();
 		this.footer.invalidate();
 		this.autocompleteProviderWrappers = [];
@@ -1714,48 +1651,6 @@ export class InteractiveMode {
 			);
 		}
 		this.setHiddenThinkingLabel();
-	}
-
-	// Maximum total widget lines to prevent viewport overflow
-	private static readonly MAX_WIDGET_LINES = 10;
-
-	/**
-	 * Render all extension widgets to the widget container.
-	 */
-	private renderWidgets(): void {
-		if (!this.widgetContainerAbove || !this.widgetContainerBelow) return;
-		this.renderWidgetContainer(this.widgetContainerAbove, this.extensionWidgetsAbove, true, true);
-		this.renderWidgetContainer(this.widgetContainerBelow, this.extensionWidgetsBelow, false, false);
-		this.ui.requestRender();
-	}
-
-	private renderWidgetContainer(
-		container: Container,
-		widgets: Map<string, Component & { dispose?(): void }>,
-		spacerWhenEmpty: boolean,
-		leadingSpacer: boolean,
-	): void {
-		container.clear();
-
-		if (widgets.size === 0) {
-			if (spacerWhenEmpty) {
-				container.addChild(new Spacer(1));
-			}
-			return;
-		}
-
-		if (leadingSpacer) {
-			container.addChild(new Spacer(1));
-		}
-		let previousKey: string | undefined;
-		for (const [key, component] of orderedExtensionWidgets(widgets)) {
-			if (previousKey !== undefined) {
-				if (widgetSeparatorNeedsSpacer(previousKey, key)) container.addChild(new Spacer(1));
-				container.addChild(new DynamicBorder((s) => theme.fg("dim", s)));
-			}
-			previousKey = key;
-			container.addChild(component);
-		}
 	}
 
 	/**
@@ -1875,17 +1770,17 @@ export class InteractiveMode {
 		return {
 			select: (title, options, opts) => {
 				this.notifyAttentionIfRunning();
-				return this.showExtensionSelector(title, options, opts);
+				return this.dialogs.select(title, options, opts);
 			},
 			confirm: (title, message, opts) => {
 				this.notifyAttentionIfRunning();
-				return this.showExtensionConfirm(title, message, opts);
+				return this.dialogs.confirm(title, message, opts);
 			},
 			input: (title, placeholder, opts) => {
 				this.notifyAttentionIfRunning();
-				return this.showExtensionInput(title, placeholder, opts);
+				return this.dialogs.input(title, placeholder, opts);
 			},
-			notify: (message, type) => this.showExtensionNotify(message, type),
+			notify: (message, type) => this.dialogs.notify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
 			setWorkingMessage: (message) => {
@@ -1897,19 +1792,19 @@ export class InteractiveMode {
 			setWorkingVisible: (visible) => this.setWorkingVisible(visible),
 			setWorkingIndicator: (options) => this.setWorkingIndicator(options),
 			setHiddenThinkingLabel: (label) => this.setHiddenThinkingLabel(label),
-			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
+			setWidget: (key, content, options) => this.widgets.set(key, content, options),
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => {
 				if (!this.isShuttingDown) this.ui.terminal.setTitle(title);
 			},
-			custom: (factory, options) => this.showExtensionCustom(factory, options),
+			custom: (factory, options) => this.dialogs.custom(factory, options),
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
 			setEditorText: (text) => this.editor.setText(text),
 			getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),
 			editor: (title, prefill) => {
 				this.notifyAttentionIfRunning();
-				return this.showExtensionEditor(title, prefill);
+				return this.dialogs.editText(title, prefill);
 			},
 			addAutocompleteProvider: (factory) => {
 				this.autocompleteProviderWrappers.push(factory);
@@ -1937,177 +1832,6 @@ export class InteractiveMode {
 			getToolsExpanded: () => this.toolOutputExpanded,
 			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
 		};
-	}
-
-	/**
-	 * Show a selector for extensions.
-	 */
-	private showExtensionSelector(
-		title: string,
-		options: string[],
-		opts?: ExtensionUIDialogOptions,
-	): Promise<string | undefined> {
-		return new Promise((resolve) => {
-			if (opts?.signal?.aborted) {
-				resolve(undefined);
-				return;
-			}
-
-			const onAbort = () => {
-				this.hideExtensionSelector();
-				resolve(undefined);
-			};
-			opts?.signal?.addEventListener("abort", onAbort, { once: true });
-
-			this.extensionSelector = new ExtensionSelectorComponent(
-				title,
-				options,
-				(option) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(option);
-				},
-				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(undefined);
-				},
-				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
-			);
-			if (opts?.initialIndex !== undefined) this.extensionSelector.setSelectedIndex(opts.initialIndex);
-
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionSelector);
-			this.ui.setFocus(this.extensionSelector);
-			this.ui.requestRender();
-		});
-	}
-
-	/**
-	 * Hide the extension selector.
-	 */
-	private hideExtensionSelector(): void {
-		this.extensionSelector?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
-		this.extensionSelector = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
-	}
-
-	/**
-	 * Show a confirmation dialog for extensions.
-	 */
-	private async showExtensionConfirm(
-		title: string,
-		message: string,
-		opts?: ExtensionUIDialogOptions,
-	): Promise<boolean> {
-		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts);
-		return result === "Yes";
-	}
-
-	private async promptForMissingSessionCwd(error: MissingSessionCwdError): Promise<string | undefined> {
-		const confirmed = await this.showExtensionConfirm(
-			"Session cwd not found",
-			formatMissingSessionCwdPrompt(error.issue),
-		);
-		return confirmed ? error.issue.fallbackCwd : undefined;
-	}
-
-	/**
-	 * Show a text input for extensions.
-	 */
-	private showExtensionInput(
-		title: string,
-		placeholder?: string,
-		opts?: ExtensionUIDialogOptions,
-	): Promise<string | undefined> {
-		return new Promise((resolve) => {
-			if (opts?.signal?.aborted) {
-				resolve(undefined);
-				return;
-			}
-
-			const onAbort = () => {
-				this.hideExtensionInput();
-				resolve(undefined);
-			};
-			opts?.signal?.addEventListener("abort", onAbort, { once: true });
-
-			this.extensionInput = new ExtensionInputComponent(
-				title,
-				placeholder,
-				(value) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionInput();
-					resolve(value);
-				},
-				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionInput();
-					resolve(undefined);
-				},
-				{ tui: this.ui, timeout: opts?.timeout },
-			);
-
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionInput);
-			this.ui.setFocus(this.extensionInput);
-			this.ui.requestRender();
-		});
-	}
-
-	/**
-	 * Hide the extension input.
-	 */
-	private hideExtensionInput(): void {
-		this.extensionInput?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
-		this.extensionInput = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
-	}
-
-	/**
-	 * Show a multi-line editor for extensions (with Ctrl+G support).
-	 */
-	private showExtensionEditor(title: string, prefill?: string): Promise<string | undefined> {
-		return new Promise((resolve) => {
-			this.extensionEditor = new ExtensionEditorComponent(
-				this.ui,
-				this.keybindings,
-				title,
-				prefill,
-				(value) => {
-					this.hideExtensionEditor();
-					resolve(value);
-				},
-				() => {
-					this.hideExtensionEditor();
-					resolve(undefined);
-				},
-				undefined,
-				this.settingsManager.getExternalEditorCommand(),
-			);
-
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionEditor);
-			this.ui.setFocus(this.extensionEditor);
-			this.ui.requestRender();
-		});
-	}
-
-	/**
-	 * Hide the extension editor.
-	 */
-	private hideExtensionEditor(): void {
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
-		this.extensionEditor = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
 	}
 
 	/**
@@ -2186,98 +1910,6 @@ export class InteractiveMode {
 		this.editorContainer.addChild(this.editor as Component);
 		this.ui.setFocus(this.editor as Component);
 		this.ui.requestRender();
-	}
-
-	/**
-	 * Show a notification for extensions.
-	 */
-	private showExtensionNotify(message: string, type?: "info" | "warning" | "error"): void {
-		if (type === "error") {
-			this.showError(message);
-		} else if (type === "warning") {
-			this.showWarning(message);
-		} else {
-			this.showStatus(message);
-		}
-	}
-
-	/** Show a custom component with keyboard focus. Overlay mode renders on top of existing content. */
-	private async showExtensionCustom<T>(
-		factory: (
-			tui: TUI,
-			theme: Theme,
-			keybindings: KeybindingsManager,
-			done: (result: T) => void,
-		) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
-		options?: {
-			overlay?: boolean;
-			overlayOptions?: OverlayOptions | (() => OverlayOptions);
-			onHandle?: (handle: OverlayHandle) => void;
-		},
-	): Promise<T> {
-		const savedText = this.editor.getText();
-		const isOverlay = options?.overlay ?? false;
-
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.editor.setText(savedText);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
-		return new Promise((resolve, reject) => {
-			let component: Component & { dispose?(): void };
-			let closed = false;
-
-			const close = (result: T) => {
-				if (closed) return;
-				closed = true;
-				if (isOverlay) this.ui.hideOverlay();
-				else restoreEditor();
-				// Note: both branches above already call requestRender
-				resolve(result);
-				try {
-					component?.dispose?.();
-				} catch {
-					/* ignore dispose errors */
-				}
-			};
-
-			Promise.resolve(factory(this.ui, theme, this.keybindings, close))
-				.then((c) => {
-					if (closed) return;
-					component = c;
-					if (isOverlay) {
-						// Resolve overlay options - can be static or dynamic function
-						const resolveOptions = (): OverlayOptions | undefined => {
-							if (options?.overlayOptions) {
-								const opts =
-									typeof options.overlayOptions === "function"
-										? options.overlayOptions()
-										: options.overlayOptions;
-								return opts;
-							}
-							// Fallback: use component's width property if available
-							const w = (component as { width?: number }).width;
-							return w ? { width: w } : undefined;
-						};
-						const handle = this.ui.showOverlay(component, resolveOptions());
-						// Expose handle to caller for visibility control
-						options?.onHandle?.(handle);
-					} else {
-						this.editorContainer.clear();
-						this.editorContainer.addChild(component);
-						this.ui.setFocus(component);
-						this.ui.requestRender();
-					}
-				})
-				.catch((err) => {
-					if (closed) return;
-					if (!isOverlay) restoreEditor();
-					reject(err);
-				});
-		});
 	}
 
 	/** The TUI for a launch without a startup view, which already made its own the same way. */
@@ -4382,23 +4014,6 @@ export class InteractiveMode {
 	// Selectors
 	// =========================================================================
 
-	/**
-	 * Shows a selector component in place of the editor.
-	 * @param create Factory that receives a `done` callback and returns the component and focus target
-	 */
-	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
-		const done = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-		};
-		const { component, focus } = create(done);
-		this.editorContainer.clear();
-		this.editorContainer.addChild(component);
-		this.ui.setFocus(focus);
-		this.ui.requestRender();
-	}
-
 	/** Resolve a "provider/model" settings string to a runtime model, if it still exists. */
 	private resolveModelReference(reference: string | undefined): Model<Api> | undefined {
 		if (!reference) return undefined;
@@ -4468,7 +4083,7 @@ export class InteractiveMode {
 		const cwd = this.sessionManager.getCwd();
 		const trustStore = new ProjectTrustStore(this.runtimeHost.services.agentDir);
 		const savedDecision = trustStore.getEntry(cwd);
-		this.showSelector((done) => {
+		this.dialogs.showSelector((done) => {
 			const selector = new TrustSelectorComponent({
 				cwd,
 				savedDecision,
@@ -4506,12 +4121,12 @@ export class InteractiveMode {
 			get editor() {
 				return mode.editor;
 			},
-			showSelector: (create) => this.showSelector(create),
+			showSelector: (create) => this.dialogs.showSelector(create),
 			showStatus: (message) => this.showStatus(message),
 			showError: (message) => this.showError(message),
 			confirmDisclaimer: (title, message) => this.confirmDisclaimer(title, message),
-			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
-			showExtensionInput: (title, placeholder) => this.showExtensionInput(title, placeholder),
+			showExtensionSelector: (title, options) => this.dialogs.select(title, options),
+			showExtensionInput: (title, placeholder) => this.dialogs.input(title, placeholder),
 			requestRender: () => this.ui.requestRender(),
 			maybeWarnAboutAnthropicSubscriptionAuth: (providerId) =>
 				this.maybeWarnAboutAnthropicSubscriptionAuth(providerId),
@@ -4536,7 +4151,7 @@ export class InteractiveMode {
 			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
 			showStatus: (message) => this.showStatus(message),
 			showError: (message) => this.showError(message),
-			showSelector: (create) => this.showSelector(create),
+			showSelector: (create) => this.dialogs.showSelector(create),
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
@@ -4607,9 +4222,9 @@ export class InteractiveMode {
 			showStatus: (message) => this.showStatus(message),
 			showWarning: (message) => this.showWarning(message),
 			showError: (message) => this.showError(message),
-			showSelector: (create) => this.showSelector(create),
-			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
-			showExtensionEditor: (title, prefill) => this.showExtensionEditor(title, prefill),
+			showSelector: (create) => this.dialogs.showSelector(create),
+			showExtensionSelector: (title, options) => this.dialogs.select(title, options),
+			showExtensionEditor: (title, prefill) => this.dialogs.editText(title, prefill),
 			showStatusIndicator: (indicator) => this.showStatusIndicator(indicator),
 			clearStatusIndicator: (kind) => this.clearStatusIndicator(kind),
 			clearChatContainer: () => this.clearChatContainer(),
@@ -4617,7 +4232,7 @@ export class InteractiveMode {
 			restoreEditorFromTreeResult: (result) => this.restoreEditorFromTreeResult(result),
 			flushCompactionQueue: (options) => this.flushCompactionQueue(options),
 			createProjectTrustContext: (cwd) => this.createProjectTrustContext(cwd),
-			promptForMissingSessionCwd: (error) => this.promptForMissingSessionCwd(error),
+			promptForMissingSessionCwd: (error) => this.dialogs.promptForMissingSessionCwd(error),
 			handleFatalRuntimeError: (prefix, error) => this.handleFatalRuntimeError(prefix, error),
 			shutdown: () => this.shutdown(),
 		};
@@ -4649,9 +4264,9 @@ export class InteractiveMode {
 			showStatus: (message) => this.showStatus(message),
 			showWarning: (message) => this.showWarning(message),
 			showError: (message) => this.showError(message),
-			showExtensionConfirm: (title, message) => this.showExtensionConfirm(title, message),
+			showExtensionConfirm: (title, message) => this.dialogs.confirm(title, message),
 			clearStatusIndicator: () => this.clearStatusIndicator(),
-			promptForMissingSessionCwd: (error) => this.promptForMissingSessionCwd(error),
+			promptForMissingSessionCwd: (error) => this.dialogs.promptForMissingSessionCwd(error),
 			handleFatalRuntimeError: (prefix, error) => this.handleFatalRuntimeError(prefix, error),
 			get isShuttingDown() {
 				return mode.isShuttingDown;
@@ -4678,8 +4293,8 @@ export class InteractiveMode {
 				return mode.outputPad;
 			},
 			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
-			showSelector: (create) => this.showSelector(create),
-			showExtensionInput: (title, placeholder) => this.showExtensionInput(title, placeholder),
+			showSelector: (create) => this.dialogs.showSelector(create),
+			showExtensionInput: (title, placeholder) => this.dialogs.input(title, placeholder),
 		};
 	}
 
@@ -4770,13 +4385,49 @@ export class InteractiveMode {
 			},
 			showStatus: (message) => this.showStatus(message),
 			showError: (message) => this.showError(message),
-			showSelector: (create) => this.showSelector(create),
+			showSelector: (create) => this.dialogs.showSelector(create),
 			rebuildChatFromMessages: () => this.rebuildChatFromMessages(),
 			setupAutocompleteProvider: () => this.setupAutocompleteProvider(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
 			applySmoothStreamingSettingChange: (enabled) => this.applySmoothStreamingSettingChange(enabled),
 			resolveModelReference: (reference) => this.resolveModelReference(reference),
 			showAutoReviewModelPicker: () => this.permissions.showAutoReviewModelPicker(),
+		};
+	}
+
+	// Builds the ExtensionDialogsHost. Every field member is a getter (see the note above the host fields).
+	private createExtensionDialogsHost(): ExtensionDialogsHost {
+		const mode = this;
+		return {
+			get ui() {
+				return mode.ui;
+			},
+			get editorContainer() {
+				return mode.editorContainer;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get keybindings() {
+				return mode.keybindings;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			toggleToolOutputExpansion: () => this.toggleToolOutputExpansion(),
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+		};
+	}
+
+	// Builds the ExtensionWidgetsHost. `ui` is a getter (see the note above the host fields).
+	private createExtensionWidgetsHost(): ExtensionWidgetsHost {
+		const mode = this;
+		return {
+			get ui() {
+				return mode.ui;
+			},
 		};
 	}
 
@@ -4794,8 +4445,8 @@ export class InteractiveMode {
 			recordActivity: () => recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir),
 			showStatus: (message) => this.showStatus(message),
 			showWarning: (message) => this.showWarning(message),
-			showSelector: (create) => this.showSelector(create),
-			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
+			showSelector: (create) => this.dialogs.showSelector(create),
+			showExtensionSelector: (title, options) => this.dialogs.select(title, options),
 			resolveModelReference: (reference) => this.resolveModelReference(reference),
 			sendUserMessageAfterDeferredBuiltins: (text) => this.sendUserMessageAfterDeferredBuiltins(text),
 		};
@@ -4851,7 +4502,7 @@ export class InteractiveMode {
 	/** lunr: show a Yes/No disclaimer dialog using the existing selector pattern. */
 	private confirmDisclaimer(title: string, message: string): Promise<boolean> {
 		return new Promise<boolean>((resolve) => {
-			this.showSelector((done) => {
+			this.dialogs.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
 					title,
 					["Continue", "Cancel"],
@@ -4881,7 +4532,7 @@ export class InteractiveMode {
 		const labels = opts?.labels ?? (["Kill all", "Leave running"] as [string, string]);
 		const defaultIndex = opts?.defaultIndex ?? 1;
 		return new Promise<boolean>((resolve) => {
-			this.showSelector((done) => {
+			this.dialogs.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
 					title,
 					labels,
@@ -4914,7 +4565,7 @@ export class InteractiveMode {
 		let prompt = INIT_PROMPT;
 		const agentsMdPath = path.join(this.sessionManager.getCwd(), "AGENTS.md");
 		if (fs.existsSync(agentsMdPath)) {
-			const choice = await this.showExtensionSelector("AGENTS.md already exists in this project.", [
+			const choice = await this.dialogs.select("AGENTS.md already exists in this project.", [
 				"Cancel",
 				"Overwrite",
 				"Append",
@@ -5093,7 +4744,7 @@ export class InteractiveMode {
 
 	// lunr: /processes — view and manage background processes.
 	private showProcessesSelector(): void {
-		this.showSelector((done) => {
+		this.dialogs.showSelector((done) => {
 			const component = new ProcessesSelectorComponent(() => {
 				done();
 			});
