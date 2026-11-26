@@ -775,7 +775,8 @@ async function runSingleAttempt(
 					current: childWatchdogState,
 					event: evt,
 					runId: options.runId,
-					agent: spec.description,
+					// The child tags its events with the agent it was configured with (spec.childId, see resolveChildWatchdogConfig above).
+					agent: spec.childId,
 					childIndex: options.index ?? 0,
 				});
 				if (!next) return;

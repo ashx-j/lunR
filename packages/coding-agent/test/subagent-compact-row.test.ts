@@ -510,9 +510,8 @@ describe("widget component timer", () => {
 						mounted = undefined;
 						return;
 					}
-					mounted = factory(null, stubTheme);
+					mounted = factory({ requestRender() {} }, stubTheme);
 				},
-				requestRender() {},
 				getToolsExpanded() {
 					return false;
 				},
@@ -529,20 +528,56 @@ describe("widget component timer", () => {
 			renderWidget(ctx as never, []);
 		}
 	});
+
+	it("repaints through the TUI from the widget factory when a job changes", () => {
+		const job = (status: string) => ({
+			asyncId: "repaint",
+			asyncDir: "Z:/missing/repaint",
+			status,
+			mode: "single",
+			agents: ["R"],
+			startedAt: 0,
+			updatedAt: 0,
+			steps: [{ agent: "R", description: "R", status, startedAt: 0 }],
+		});
+		const tui = { requestRender: vi.fn() };
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setWidget(_key: string, factory: ((tui: unknown, theme: unknown) => unknown) | undefined) {
+					factory?.(tui, stubTheme);
+				},
+				getToolsExpanded() {
+					return false;
+				},
+			},
+		};
+		try {
+			renderWidget(ctx as never, [job("queued")] as never);
+			expect(tui.requestRender).not.toHaveBeenCalled();
+			renderWidget(ctx as never, [job("complete")] as never);
+			expect(tui.requestRender).toHaveBeenCalledOnce();
+		} finally {
+			renderWidget(ctx as never, []);
+		}
+	});
 });
 
 describe("async widget ownership", () => {
 	it("keeps the other owner's animation when one UI closes or a headless session resets", async () => {
 		vi.useFakeTimers();
 		const job = { asyncId: "widget-owner", status: "running", startedAt: Date.now(), updatedAt: Date.now() };
-		const makeContext = () => ({
-			hasUI: true,
-			ui: {
-				setWidget: vi.fn(),
-				requestRender: vi.fn(),
-				getToolsExpanded: () => false,
-			},
-		});
+		const makeContext = () => {
+			const tui = { requestRender: vi.fn() };
+			return {
+				tui,
+				hasUI: true,
+				ui: {
+					setWidget: vi.fn((_key: string, factory?: (tui: unknown, theme: unknown) => unknown) => factory?.(tui, stubTheme)),
+					getToolsExpanded: () => false,
+				},
+			};
+		};
 		const a = makeContext();
 		const b = makeContext();
 		renderWidget(a as never, [job] as never);
@@ -551,9 +586,9 @@ describe("async widget ownership", () => {
 		expect(b.ui.setWidget).toHaveBeenCalledOnce();
 		renderWidget({ hasUI: false, ui: {} } as never, []);
 		renderWidget(a as never, []);
-		b.ui.requestRender.mockClear();
+		b.tui.requestRender.mockClear();
 		await vi.advanceTimersByTimeAsync(160);
-		expect(b.ui.requestRender).toHaveBeenCalled();
+		expect(b.tui.requestRender).toHaveBeenCalled();
 	});
 });
 

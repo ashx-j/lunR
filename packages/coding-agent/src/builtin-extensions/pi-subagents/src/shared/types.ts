@@ -491,11 +491,9 @@ export interface ToolCallSummary {
 	expandedText: string;
 }
 
-interface ProgressSummary {
-	toolCount: number;
-	tokens: number;
-	durationMs: number;
-}
+// The counters kept after a run. execution.ts writes only these, but summaries rendered from
+// other sources can carry more progress fields (index, status), so the rest stay optional.
+type ProgressSummary = Pick<AgentProgress, "toolCount" | "tokens" | "durationMs"> & Partial<AgentProgress>;
 
 // ============================================================================
 // Results
