@@ -49,7 +49,9 @@ function createMode() {
 		sessionManager: { getCwd: () => "/inert", getSessionId: () => "inert" },
 		themeController: { getTerminalTheme: () => undefined, disableAutoSync: vi.fn() },
 		countSubscriptions: async () => 0,
-		showSelector: (create: (done: () => void) => { component: Component; focus: Component }) => create(() => {}),
+		dialogs: {
+			showSelector: (create: (done: () => void) => { component: Component; focus: Component }) => create(() => {}),
+		},
 		pendingTools: new Map(),
 		defaultEditor: {},
 		clearStatusIndicator: vi.fn(),

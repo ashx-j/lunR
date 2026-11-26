@@ -79,8 +79,10 @@ describe("the permission mode step after a login", () => {
 					opts.onSettled(options.applied ?? true),
 			},
 			showWarning: (message: string) => warnings.push(message),
-			showSelector: (create: (done: () => void) => { component: OnboardingComponent<PermissionModeChoice> }) => {
-				shown = create(() => {}).component;
+			dialogs: {
+				showSelector: (create: (done: () => void) => { component: OnboardingComponent<PermissionModeChoice> }) => {
+					shown = create(() => {}).component;
+				},
 			},
 		};
 		const step = Reflect.get(InteractiveMode.prototype, "askDefaultPermissionModeAfterFirstLogin") as (
