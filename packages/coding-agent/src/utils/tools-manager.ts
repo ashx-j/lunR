@@ -97,10 +97,27 @@ export function getToolPath(tool: "fd" | "rg"): string | null {
 	return null;
 }
 
-// Fetch latest release version from GitHub
-async function getLatestVersion(repo: string): Promise<string> {
+/**
+ * Latest release version of a GitHub repo. Reads the tag from the redirect of the release page,
+ * because the REST API allows 60 unauthenticated calls per hour per address and a shared address
+ * (CI, an office, several agents on one machine) runs out. The API is only the fallback.
+ */
+export async function getLatestVersion(repo: string): Promise<string> {
+	const headers = { "User-Agent": `${APP_NAME}-coding-agent` };
+	try {
+		const page = await fetch(`https://github.com/${repo}/releases/latest`, {
+			headers,
+			redirect: "manual",
+			signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
+		});
+		const tag = page.headers.get("location")?.match(/\/releases\/tag\/([^/?#]+)$/)?.[1];
+		if (tag) return decodeURIComponent(tag).replace(/^v/, "");
+	} catch {
+		// Fall through to the API.
+	}
+
 	const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-		headers: { "User-Agent": `${APP_NAME}-coding-agent` },
+		headers,
 		signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
 	});
 

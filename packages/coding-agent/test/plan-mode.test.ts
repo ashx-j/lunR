@@ -568,4 +568,37 @@ describe("shell expansion and redirection tricks", () => {
 	])("allows %s", (command) => {
 		expect(isMutatingBashCommand(command)).toBe(false);
 	});
+
+	// Options of read-only commands that run a program or write a file (review of #366, B4).
+	it.each([
+		"sort --compress-program=sh -S 1 big.txt",
+		"sort --com=sh big.txt",
+		"sort --compress-program sh big.txt",
+		"sort -T /tmp big.txt",
+		"sort -nT /tmp big.txt",
+		"sort --temporary-directory=/tmp big.txt",
+		"sort --tem=/tmp big.txt",
+		"sort -o out.txt big.txt",
+		"sort --outp=out.txt big.txt",
+		"rg --hostname-bin=./hb.sh --hyperlink-format=default x",
+		"rg --hostname-bin ./hb.sh x",
+		"rg --pre=./pre.sh x",
+		"hostname newname",
+		"hostname -F name.txt",
+		"hostname --file=name.txt",
+		"hostname -b",
+	])("blocks %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(true);
+	});
+
+	it.each([
+		"sort -n big.txt",
+		"sort -k2,2 -t, big.txt",
+		"sort --reverse big.txt",
+		"rg x src",
+		"hostname",
+		"hostname -s",
+	])("still allows %s", (command) => {
+		expect(isMutatingBashCommand(command)).toBe(false);
+	});
 });

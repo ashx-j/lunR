@@ -390,7 +390,9 @@ async function ensureExtensionHost(): Promise<CreateJiti> {
 	if (isBunBinary && bunExtensionHost) {
 		return bunExtensionHost.createJiti;
 	}
-	const { createJiti } = await import("jiti/static");
+	// jiti's default entry loads babel (1.5 MB, about 200 ms) only when a file misses jiti's disk
+	// cache. jiti/static imports it at once; only the Bun binary needs that (host-static.ts).
+	const { createJiti } = await import("jiti");
 	createJitiFn = createJiti;
 	return createJiti;
 }

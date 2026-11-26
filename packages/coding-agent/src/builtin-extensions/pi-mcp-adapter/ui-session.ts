@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import { UrlElicitationRequiredError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpExtensionState } from "./state.ts";
@@ -265,7 +264,9 @@ export async function maybeStartUiSession(
         active = false;
         cleanupStreamListener();
 
-        if (state.uiServer === handle) {
+        // handle is null only if the server completes before startUiServer returns. That used to
+        // crash on handle.getSessionMessages(); it now skips the summary.
+        if (handle && state.uiServer === handle) {
           const messages = handle.getSessionMessages();
           const stream = handle.getStreamSummary();
           const hasContent =

@@ -2,7 +2,7 @@
 
 Read before adding features, extensions or bridges, or before syncing from upstream pi.
 
-- **Features = baked-in extensions + bridges.** `builtin-extensions/` (factories registered in `builtin-extensions/index.ts`; hidden; vendored; 31 files still `// @ts-nocheck`: pi-subagents 10, pi-mcp-adapter 9, pi-web-access 7, pi-prompt-template-model 3, pi-intercom 2; biome-excluded).
+- **Features = baked-in extensions + bridges.** `builtin-extensions/` (factories registered in `builtin-extensions/index.ts`; hidden; vendored; 16 files still `// @ts-nocheck`: pi-subagents 10, pi-web-access 3, pi-mcp-adapter 2, pi-intercom 1; biome-excluded).
   - Light roster: simple-pi-memory, pi-tps, ashxj-tui, ashxj-spinners, ashxj-thinking, lunr-local-providers, lunr-todos, lunr-plan-tools, lunr-tool-loader, lunr-skill-creator.
   - Deferred (interactive after paint; print/RPC/gateway before first turn): pi-ollama-cloud, narumiruna-pi-goal, lunr-cron, lunr-pr-watch, pi-intercom, pi-prompt-template-model, pi-subagents, pi-web-access, lunr-browser, pi-lsp-extension, pi-mcp-adapter, lunr-computer-use.
   - pi-web-access has no Gemini Web route: lunR never reads browser cookies or profiles, because Google bans accounts used from automated tools. Do not bring back upstream's `gemini-web.ts` or `chrome-cookies.ts`. Gemini search uses an API key only. `gemini-web-removed.ts` gives users with the old `allowBrowserCookies` setting one notice and leaves the setting on disk.

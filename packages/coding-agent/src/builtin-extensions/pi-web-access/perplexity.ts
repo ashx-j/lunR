@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { existsSync, readFileSync } from "node:fs";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
@@ -166,7 +165,8 @@ export async function searchWithPerplexity(query: string, options: SearchOptions
 
 	let data: Record<string, unknown>;
 	try {
-		data = await response.json();
+		// A JSON object; the fields below are read with type checks.
+		data = (await response.json()) as Record<string, unknown>;
 	} catch (err) {
 		activityMonitor.logComplete(activityId, response.status);
 		const message = err instanceof Error ? err.message : String(err);

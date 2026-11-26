@@ -32,8 +32,10 @@ The expensive implementations load when needed:
   retain their background behavior.
 - Subagents keep restoration and watchers at startup, but load the executor on
   first use.
-- Third-party extensions load jiti when needed. Bun's static extension host keeps
-  its embedded modules. Package-management commands and HTML export load their
+- Third-party extensions load jiti when needed. On Node, lunR imports jiti's
+  default entry, which loads babel (1.5 MB, about 200 ms) only when a file misses
+  jiti's disk cache; `jiti/static` loads it at once. Bun's static extension host
+  keeps `jiti/static` and its embedded modules. Package-management commands and HTML export load their
   implementations only when invoked.
 
 Session replacement invalidates pending initialization. MCP cancels initialization
