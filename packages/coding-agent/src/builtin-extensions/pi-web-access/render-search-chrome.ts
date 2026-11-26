@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Pure collapsed/expanded chrome for web_search and fetch_content.
  *
@@ -61,7 +60,24 @@ export function formatFetchCallTitle(urls: string[]): { title: string; empty: bo
 	return { title: `fetch ${urls.length} URLs`, empty: false };
 }
 
-export function formatSearchStatusLine(details) {
+// The web_search result details this status line reads.
+interface SearchStatusDetails {
+	queryCount?: number;
+	successfulQueries?: number;
+	totalResults?: number;
+	curated?: boolean;
+	curatedFrom?: number;
+	fetchId?: string;
+	fetchUrls?: string[];
+}
+
+// The fetch_content result details this status line reads.
+interface FetchStatusDetails {
+	urlCount?: number;
+	successful?: number;
+}
+
+export function formatSearchStatusLine(details: SearchStatusDetails | undefined): string {
 	const queryInfo = details?.queryCount === 1 ? "" : `${details?.successfulQueries}/${details?.queryCount} queries, `;
 	let statusLine = `${queryInfo}${details?.totalResults ?? 0} sources`;
 	if (details?.curated && details?.curatedFrom) {
@@ -75,27 +91,27 @@ export function formatSearchStatusLine(details) {
 	return statusLine;
 }
 
-export function formatFetchStatusLine(details) {
+export function formatFetchStatusLine(details: FetchStatusDetails | undefined): string {
 	const urlCount = details?.urlCount ?? 0;
 	const successful = details?.successful ?? (urlCount === 1 ? 1 : 0);
 	return `${successful}/${urlCount} URLs`;
 }
 
-export function formatSearchDetail(queries, details) {
+export function formatSearchDetail(queries: string[], details: SearchStatusDetails | undefined): string {
 	const call = formatSearchCallTitle(queries);
 	const rest = call.title.replace(/^search\s+/, "");
 	const status = details ? formatSearchStatusLine(details) : "";
 	return status ? `${rest} · ${status}` : rest;
 }
 
-export function formatFetchDetail(urls, details) {
+export function formatFetchDetail(urls: string[], details: FetchStatusDetails | undefined): string {
 	const call = formatFetchCallTitle(urls);
 	const rest = call.title.replace(/^fetch\s+/, "");
 	const status = details ? formatFetchStatusLine(details) : "";
 	return status ? `${rest} · ${status}` : rest;
 }
 
-export function formatSearchChrome(options) {
+export function formatSearchChrome(options: { queries: string[]; expanded?: boolean; details?: SearchStatusDetails }): { call: string; result: string[] } {
 	const call = formatSearchCallTitle(options.queries);
 	if (options.expanded) {
 		return { call: call.title, result: options.queries.slice() };
@@ -104,7 +120,7 @@ export function formatSearchChrome(options) {
 	return { call: status ? `${call.title} · ${status}` : call.title, result: [] };
 }
 
-export function formatFetchChrome(options) {
+export function formatFetchChrome(options: { urls: string[]; expanded?: boolean; details?: FetchStatusDetails }): { call: string; result: string[] } {
 	const call = formatFetchCallTitle(options.urls);
 	if (options.expanded) {
 		return { call: call.title, result: options.urls.slice() };
