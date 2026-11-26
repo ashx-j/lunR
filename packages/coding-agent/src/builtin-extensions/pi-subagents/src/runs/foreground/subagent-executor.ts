@@ -33,6 +33,7 @@ import {
 	suppressProgressForReadOnlyTask,
 	taskDisallowsFileUpdates,
 	type ChainStep,
+	type Materialized,
 	type ResolvedStepBehavior,
 	type SequentialStep,
 	type StepOverrides,
@@ -1641,7 +1642,7 @@ function internalizePromptDrivenChildren(
 ): { params: SubagentParamsLike; agents: ChildRuntimeConfig[] } {
 	const agents: ChildRuntimeConfig[] = [];
 	let flatIndex = 0;
-	const normalize = (input: TaskParam | SequentialStep, defaultTask?: string): { input: typeof input; spec: ChildSpec } => {
+	const normalize = (input: TaskParam | SequentialStep, defaultTask?: string): { input: Materialized<typeof input>; spec: ChildSpec } => {
 		const spec = normalizeChildSpec(input, {
 			parentMode: options.parentMode,
 			runId: options.runId,
