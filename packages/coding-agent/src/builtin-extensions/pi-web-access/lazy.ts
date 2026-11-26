@@ -3,7 +3,6 @@ export const loadExtract = () => import("./extract.ts");
 export const loadGeminiSearch = () => import("./gemini-search.ts");
 export const loadCuratorServer = () => import("./curator-server.ts");
 export const loadSummaryReview = () => import("./summary-review.ts");
-export const loadGeminiWeb = () => import("./gemini-web.ts");
 export const loadGeminiApi = () => import("./gemini-api.ts");
 export const loadOpenAISearch = () => import("./openai-search.ts");
 export const loadBrave = () => import("./brave.ts");

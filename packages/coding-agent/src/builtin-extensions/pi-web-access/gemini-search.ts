@@ -6,13 +6,13 @@ import {
 	loadBrave,
 	loadExa,
 	loadGeminiApi,
-	loadGeminiWeb,
 	loadOpenAISearch,
 	loadParallel,
 	loadPerplexity,
 	loadTavily,
 } from "./lazy.ts";
 import { getWebSearchConfigPath } from "./utils.ts";
+import { withGeminiWebRemovedNotice } from "./gemini-web-removed.ts";
 
 export type SearchProvider = "auto" | "openai" | "brave" | "parallel" | "tavily" | "perplexity" | "gemini" | "exa";
 export type ResolvedSearchProvider = Exclude<SearchProvider, "auto">;
@@ -95,29 +95,13 @@ async function searchWithGemini(
 	options: SearchOptions,
 	strictErrors: boolean,
 ): Promise<SearchResponse | null> {
-	const errors: string[] = [];
-
 	try {
-		const apiResult = await searchWithGeminiApi(query, options);
-		if (apiResult) return apiResult;
+		return await searchWithGeminiApi(query, options);
 	} catch (err) {
 		if (isAbortError(err)) throw err;
-		errors.push(`Gemini API: ${errorMessage(err)}`);
+		if (strictErrors) throw new Error(`Gemini search failed:\n  - Gemini API: ${errorMessage(err)}`);
+		return null;
 	}
-
-	try {
-		const webResult = await searchWithGeminiWeb(query, options);
-		if (webResult) return webResult;
-	} catch (err) {
-		if (isAbortError(err)) throw err;
-		errors.push(`Gemini Web: ${errorMessage(err)}`);
-	}
-
-	if (strictErrors && errors.length > 0) {
-		throw new Error(`Gemini search failed:\n  - ${errors.join("\n  - ")}`);
-	}
-
-	return null;
 }
 
 export async function search(query: string, options: FullSearchOptions = {}): Promise<AttributedSearchResponse> {
@@ -157,12 +141,11 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 	if (provider === "gemini") {
 		const result = await searchWithGemini(query, options, true);
 		if (result) return { ...result, provider: "gemini" };
-		throw new Error(
+		throw new Error(withGeminiWebRemovedNotice(
 			"Gemini search unavailable. Either:\n" +
 			`  1. Set GEMINI_API_KEY in ${CONFIG_PATH}\n` +
-			"  2. Set GOOGLE_GEMINI_BASE_URL + CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing\n" +
-			"  3. Sign into gemini.google.com in a supported Chromium-based browser"
-		);
+			"  2. Set GOOGLE_GEMINI_BASE_URL + CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing"
+		));
 	}
 
 	if (provider === "exa") {
@@ -271,17 +254,16 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 	}
 
 	if (fallbackErrors.length > 0) {
-		throw new Error(`Auto provider search failed:\n  - ${fallbackErrors.join("\n  - ")}`);
+		throw new Error(withGeminiWebRemovedNotice(`Auto provider search failed:\n  - ${fallbackErrors.join("\n  - ")}`));
 	}
 
-	throw new Error(
+	throw new Error(withGeminiWebRemovedNotice(
 		"No search provider available. Either:\n" +
 		"  1. Use /login to sign in with a Codex subscription for OpenAI web search\n" +
 		`  2. Set openaiApiKey, braveApiKey, parallelApiKey, tavilyApiKey, perplexityApiKey, exaApiKey, geminiApiKey, or cloudflareApiKey in ${CONFIG_PATH}\n` +
 		"  3. Set OPENAI_API_KEY, BRAVE_API_KEY, PARALLEL_API_KEY, TAVILY_API_KEY, EXA_API_KEY, PERPLEXITY_API_KEY, GEMINI_API_KEY, or CLOUDFLARE_API_KEY env vars\n" +
-		"  4. Set GOOGLE_GEMINI_BASE_URL with CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing\n" +
-		"  5. Sign into gemini.google.com in a supported Chromium-based browser"
-	);
+		"  4. Set GOOGLE_GEMINI_BASE_URL with CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing"
+	));
 }
 
 async function searchWithGeminiApi(query: string, options: SearchOptions = {}): Promise<SearchResponse | null> {
@@ -333,72 +315,6 @@ async function searchWithGeminiApi(query: string, options: SearchOptions = {}): 
 		}
 		throw err;
 	}
-}
-
-async function searchWithGeminiWeb(query: string, options: SearchOptions = {}): Promise<SearchResponse | null> {
-	const geminiWeb = await loadGeminiWeb();
-	const cookies = await geminiWeb.isGeminiWebAvailable();
-	if (!cookies) return null;
-
-	const prompt = buildSearchPrompt(query, options);
-	const activityId = activityMonitor.logStart({ type: "api", query });
-
-	try {
-		const text = await geminiWeb.queryWithCookies(prompt, cookies, {
-			model: "gemini-3-flash-preview",
-			signal: options.signal,
-			timeoutMs: 60000,
-		});
-
-		activityMonitor.logComplete(activityId, 200);
-
-		const results = extractSourceUrls(text);
-		return { answer: text, results };
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		if (message.toLowerCase().includes("abort")) {
-			activityMonitor.logComplete(activityId, 0);
-		} else {
-			activityMonitor.logError(activityId, message);
-		}
-		throw err;
-	}
-}
-
-function buildSearchPrompt(query: string, options: SearchOptions): string {
-	let prompt = `Search the web and answer the following question. Include source URLs for your claims.\nFormat your response as:\n1. A direct answer to the question\n2. Cited sources as markdown links\n\nQuestion: ${query}`;
-
-	if (options.recencyFilter) {
-		const labels: Record<string, string> = {
-			day: "past 24 hours",
-			week: "past week",
-			month: "past month",
-			year: "past year",
-		};
-		prompt += `\n\nOnly include results from the ${labels[options.recencyFilter]}.`;
-	}
-
-	if (options.domainFilter?.length) {
-		const includes = options.domainFilter.filter(d => !d.startsWith("-"));
-		const excludes = options.domainFilter.filter(d => d.startsWith("-")).map(d => d.slice(1));
-		if (includes.length) prompt += `\n\nOnly cite sources from: ${includes.join(", ")}`;
-		if (excludes.length) prompt += `\n\nDo not cite sources from: ${excludes.join(", ")}`;
-	}
-
-	return prompt;
-}
-
-function extractSourceUrls(markdown: string): SearchResult[] {
-	const results: SearchResult[] = [];
-	const seen = new Set<string>();
-	const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
-	for (const match of markdown.matchAll(linkRegex)) {
-		const url = match[2];
-		if (seen.has(url)) continue;
-		seen.add(url);
-		results.push({ title: match[1], url, snippet: "" });
-	}
-	return results;
 }
 
 async function resolveGroundingChunks(

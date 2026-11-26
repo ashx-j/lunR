@@ -22,7 +22,6 @@ import { createRequire } from "node:module";
 import { platform } from "node:os";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { isBrowserCookieAccessAllowed } from "./gemini-web-config.ts";
 import {
 	loadBrave,
 	loadCuratorServer,
@@ -30,7 +29,6 @@ import {
 	loadExtract,
 	loadGeminiApi,
 	loadGeminiSearch,
-	loadGeminiWeb,
 	loadOpenAISearch,
 	loadParallel,
 	loadPerplexity,
@@ -204,12 +202,6 @@ async function getProviderAvailability(ctx: ExtensionContext): Promise<ProviderA
 		loadGeminiApi(),
 	]);
 
-	let geminiWebAvail: Awaited<ReturnType<Awaited<ReturnType<typeof loadGeminiWeb>>["isGeminiWebAvailable"]>> = null;
-	if (isBrowserCookieAccessAllowed()) {
-		const geminiWebMod = await loadGeminiWeb();
-		geminiWebAvail = await geminiWebMod.isGeminiWebAvailable();
-	}
-
 	return {
 		openai: await openaiMod.isOpenAISearchAvailable(ctx),
 		brave: braveMod.isBraveAvailable(),
@@ -217,7 +209,7 @@ async function getProviderAvailability(ctx: ExtensionContext): Promise<ProviderA
 		tavily: tavilyMod.isTavilyAvailable(),
 		perplexity: perplexityMod.isPerplexityAvailable(),
 		exa: exaMod.isExaAvailable(),
-		gemini: geminiApiMod.isGeminiApiAvailable() || !!geminiWebAvail,
+		gemini: geminiApiMod.isGeminiApiAvailable(),
 	};
 }
 
@@ -2402,45 +2394,6 @@ export default function (pi: ExtensionAPI) {
 				display: true,
 				details: { workflow: newWorkflow },
 			}, { triggerTurn: false, deliverAs: "followUp" });
-		},
-	});
-
-	pi.registerCommand("google-account", {
-		description: "Show the active Google account for Gemini Web",
-		handler: async () => {
-			if (!isBrowserCookieAccessAllowed()) {
-				pi.sendMessage({
-					customType: "google-account",
-					content: [{ type: "text", text: `Gemini Web browser cookie access is disabled. Set allowBrowserCookies: true in ${WEB_SEARCH_CONFIG_PATH} to enable it.` }],
-					display: true,
-					details: { available: false, cookieAccessAllowed: false },
-				}, { triggerTurn: true, deliverAs: "followUp" });
-				return;
-			}
-
-			const geminiWeb = await loadGeminiWeb();
-			const cookies = await geminiWeb.isGeminiWebAvailable();
-			if (!cookies) {
-				pi.sendMessage({
-					customType: "google-account",
-					content: [{ type: "text", text: "Gemini Web is unavailable. Sign into gemini.google.com in a supported Chromium-based browser." }],
-					display: true,
-					details: { available: false, cookieAccessAllowed: true },
-				}, { triggerTurn: true, deliverAs: "followUp" });
-				return;
-			}
-
-			const email = await geminiWeb.getActiveGoogleEmail(cookies);
-			const text = email
-				? `Active Google account: ${email}`
-				: "Gemini Web is available, but the active Google account could not be determined.";
-
-			pi.sendMessage({
-				customType: "google-account",
-				content: [{ type: "text", text }],
-				display: true,
-				details: { available: true, email: email ?? null },
-			}, { triggerTurn: true, deliverAs: "followUp" });
 		},
 	});
 
