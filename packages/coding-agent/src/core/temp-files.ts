@@ -26,8 +26,9 @@ export function removeOnExit(path: string): void {
 }
 
 /**
- * Deletes lunR temp entries older than a day, which a killed process (SIGKILL, SIGINT in print mode)
- * never removed. Interactive mode calls it once after startup; it never blocks and ignores errors.
+ * Deletes lunR temp entries that a killed process (SIGKILL, SIGINT in print mode) never removed: those older
+ * than a day, and Claude Code process dirs (`lunr-claude-code-<owner pid>-*`) whose owner is gone. Interactive
+ * mode calls it once after startup; it never blocks and ignores errors.
  */
 export async function sweepStaleTempFiles(dir: string = tmpdir(), now: number = Date.now()): Promise<void> {
 	try {
@@ -35,12 +36,26 @@ export async function sweepStaleTempFiles(dir: string = tmpdir(), now: number = 
 			if (!LUNR_TEMP_NAME.test(name)) continue;
 			const path = join(dir, name);
 			try {
-				if (now - (await stat(path)).mtimeMs > STALE_AFTER_MS) await rm(path, { recursive: true, force: true });
+				if (ownerGone(name) || now - (await stat(path)).mtimeMs > STALE_AFTER_MS)
+					await rm(path, { recursive: true, force: true });
 			} catch {
 				// Another lunR may have removed it first.
 			}
 		}
 	} catch {
 		// An unreadable temp dir leaves nothing to sweep.
+	}
+}
+
+/** Whether `name` is a Claude Code process dir whose owning lunR no longer runs. */
+function ownerGone(name: string): boolean {
+	const owner = Number(/^lunr-claude-code-(\d+)-/.exec(name)?.[1]);
+	if (!owner || owner === process.pid) return false;
+	try {
+		process.kill(owner, 0);
+		return false;
+	} catch (error) {
+		// EPERM: the pid belongs to another user's live process.
+		return (error as NodeJS.ErrnoException).code === "ESRCH";
 	}
 }

@@ -12,8 +12,10 @@ export const CLAUDE_CODE_UPDATE_REQUIRED =
 
 /**
  * Claude Code release that lunR downloads and runs for Anthropic subscriptions. History replay and
- * request-body overrides are version-sensitive, so a version change needs a fresh live qualification.
- * `utils/claude-code-release.ts` holds the matching download hashes; this module stays browser-safe.
+ * request-body overrides are version-sensitive, so a version change needs a fresh live qualification and
+ * a passing `node scripts/check-claude-code-spare.mjs <binary>` (spare processes take their body through
+ * `apply_flag_settings`). `utils/claude-code-release.ts` holds the matching download hashes; this module
+ * stays browser-safe.
  */
 export const CLAUDE_CODE_VERSION = "2.1.310";
 
