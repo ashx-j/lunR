@@ -9,7 +9,7 @@ import type { Agent } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model } from "@earendil-works/pi-ai/compat";
 import { collectEntriesForBranchSummary, generateBranchSummary } from "./compaction/index.ts";
 import type { ExtensionRunner, SessionBeforeTreeResult, TreePreparation } from "./extensions/index.ts";
-import type { BranchSummaryEntry, SessionManager } from "./session-manager.ts";
+import type { BranchSummaryEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
 /** What tree navigation needs from AgentSession. AgentSession builds one in `createTreeNavigationHost`. */
@@ -118,87 +118,26 @@ export async function runTreeNavigation(
 		let summaryText: string | undefined;
 		let summaryDetails: unknown;
 		if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
-			const model = host.model!;
-			const { apiKey, headers, env } = await host.getSummarizationRequestAuth(model);
-			const branchSummarySettings = host.settingsManager.getBranchSummarySettings();
-			const result = await generateBranchSummary(entriesToSummarize, {
-				model,
-				apiKey,
-				headers,
-				env,
-				signal: host.branchSummaryAbortController.signal,
+			const generated = await summarizeBranch(
+				host,
+				entriesToSummarize,
+				host.branchSummaryAbortController.signal,
 				customInstructions,
 				replaceInstructions,
-				reserveTokens: branchSummarySettings.reserveTokens,
-				streamFn: host.agent.streamFn,
-				onUsage: (response) => host.sessionManager.appendRequestUsage("branch-summary", response),
-			});
-			if (result.aborted) {
+			);
+			if (generated.aborted) {
 				return { cancelled: true, aborted: true };
 			}
-			if (result.error) {
-				throw new Error(result.error);
-			}
-			summaryText = result.summary;
-			summaryDetails = {
-				readFiles: result.readFiles || [],
-				modifiedFiles: result.modifiedFiles || [],
-			};
+			summaryText = generated.summary;
+			summaryDetails = generated.details;
 		} else if (extensionSummary) {
 			summaryText = extensionSummary.summary;
 			summaryDetails = extensionSummary.details;
 		}
 
 		if (host.branchSummaryAbortController.signal.aborted) return { cancelled: true, aborted: true };
-		// Determine the new leaf position based on target type
-		let newLeafId: string | null;
-		let editorText: string | undefined;
-		let editorImages: ImageContent[] | undefined;
-
-		if (targetEntry.type === "message" && targetEntry.message.role === "user") {
-			// User message: leaf = parent (null if root), text goes to editor
-			newLeafId = targetEntry.parentId;
-			editorText = extractUserMessageText(targetEntry.message.content);
-			editorImages = extractUserMessageImages(targetEntry.message.content);
-		} else if (targetEntry.type === "custom_message") {
-			// Custom message: leaf = parent (null if root), text goes to editor
-			newLeafId = targetEntry.parentId;
-			editorText =
-				typeof targetEntry.content === "string"
-					? targetEntry.content
-					: targetEntry.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
-							.map((c) => c.text)
-							.join("");
-		} else {
-			// Non-user message: leaf = selected node
-			newLeafId = targetId;
-		}
-
-		// Switch leaf (with or without summary)
-		// Summary is attached at the navigation target position (newLeafId), not the old branch
-		let summaryEntry: BranchSummaryEntry | undefined;
-		if (summaryText) {
-			// Create summary at target position (can be null for root)
-			const summaryId = host.sessionManager.branchWithSummary(newLeafId, summaryText, summaryDetails, fromExtension);
-			summaryEntry = host.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
-
-			// Attach label to the summary entry
-			if (label) {
-				host.sessionManager.appendLabelChange(summaryId, label);
-			}
-		} else if (newLeafId === null) {
-			// No summary, navigating to root - reset leaf
-			host.sessionManager.resetLeaf();
-		} else {
-			// No summary, navigating to non-root
-			host.sessionManager.branch(newLeafId);
-		}
-
-		// Attach label to target entry when not summarizing (no summary entry to label)
-		if (label && !summaryText) {
-			host.sessionManager.appendLabelChange(targetId, label);
-		}
+		const { newLeafId, editorText, editorImages } = leafForTarget(targetEntry, targetId);
+		const summaryEntry = moveLeaf(host, newLeafId, targetId, summaryText, summaryDetails, fromExtension, label);
 
 		// Update agent state
 		const sessionContext = host.sessionManager.buildSessionContext();
@@ -217,6 +156,119 @@ export async function runTreeNavigation(
 	} finally {
 		host.branchSummaryAbortController = undefined;
 	}
+}
+
+/** Generates the default branch summary with the session model. `aborted` when the user cancels it. */
+async function summarizeBranch(
+	host: TreeNavigationHost,
+	entriesToSummarize: Parameters<typeof generateBranchSummary>[0],
+	signal: AbortSignal,
+	customInstructions: string | undefined,
+	replaceInstructions: boolean | undefined,
+): Promise<{ aborted: true } | { aborted: false; summary: string | undefined; details: unknown }> {
+	const model = host.model!;
+	const { apiKey, headers, env } = await host.getSummarizationRequestAuth(model);
+	const branchSummarySettings = host.settingsManager.getBranchSummarySettings();
+	const result = await generateBranchSummary(entriesToSummarize, {
+		model,
+		apiKey,
+		headers,
+		env,
+		signal,
+		customInstructions,
+		replaceInstructions,
+		reserveTokens: branchSummarySettings.reserveTokens,
+		streamFn: host.agent.streamFn,
+		onUsage: (response) => host.sessionManager.appendRequestUsage("branch-summary", response),
+	});
+	if (result.aborted) {
+		return { aborted: true };
+	}
+	if (result.error) {
+		throw new Error(result.error);
+	}
+	return {
+		aborted: false,
+		summary: result.summary,
+		details: {
+			readFiles: result.readFiles || [],
+			modifiedFiles: result.modifiedFiles || [],
+		},
+	};
+}
+
+/**
+ * Where the leaf goes for a navigation target: a user or custom message moves to its parent and
+ * puts its text back in the editor; any other entry becomes the leaf itself.
+ */
+function leafForTarget(
+	targetEntry: SessionEntry,
+	targetId: string,
+): { newLeafId: string | null; editorText?: string; editorImages?: ImageContent[] } {
+	let newLeafId: string | null;
+	let editorText: string | undefined;
+	let editorImages: ImageContent[] | undefined;
+
+	if (targetEntry.type === "message" && targetEntry.message.role === "user") {
+		// User message: leaf = parent (null if root), text goes to editor
+		newLeafId = targetEntry.parentId;
+		editorText = extractUserMessageText(targetEntry.message.content);
+		editorImages = extractUserMessageImages(targetEntry.message.content);
+	} else if (targetEntry.type === "custom_message") {
+		// Custom message: leaf = parent (null if root), text goes to editor
+		newLeafId = targetEntry.parentId;
+		editorText =
+			typeof targetEntry.content === "string"
+				? targetEntry.content
+				: targetEntry.content
+						.filter((c): c is { type: "text"; text: string } => c.type === "text")
+						.map((c) => c.text)
+						.join("");
+	} else {
+		// Non-user message: leaf = selected node
+		newLeafId = targetId;
+	}
+	return { newLeafId, editorText, editorImages };
+}
+
+/**
+ * Moves the session leaf to `newLeafId`, with a branch summary entry there when there is summary
+ * text, and attaches the label to the summary entry or, without one, to the target.
+ */
+function moveLeaf(
+	host: TreeNavigationHost,
+	newLeafId: string | null,
+	targetId: string,
+	summaryText: string | undefined,
+	summaryDetails: unknown,
+	fromExtension: boolean,
+	label: string | undefined,
+): BranchSummaryEntry | undefined {
+	// Switch leaf (with or without summary)
+	// Summary is attached at the navigation target position (newLeafId), not the old branch
+	let summaryEntry: BranchSummaryEntry | undefined;
+	if (summaryText) {
+		// Create summary at target position (can be null for root)
+		const summaryId = host.sessionManager.branchWithSummary(newLeafId, summaryText, summaryDetails, fromExtension);
+		summaryEntry = host.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
+
+		// Attach label to the summary entry
+		if (label) {
+			host.sessionManager.appendLabelChange(summaryId, label);
+		}
+	} else if (newLeafId === null) {
+		// No summary, navigating to root - reset leaf
+		host.sessionManager.resetLeaf();
+	} else {
+		// No summary, navigating to non-root
+		host.sessionManager.branch(newLeafId);
+	}
+
+	// Attach label to target entry when not summarizing (no summary entry to label)
+	if (label && !summaryText) {
+		host.sessionManager.appendLabelChange(targetId, label);
+	}
+	return summaryEntry;
 }
 
 /**
