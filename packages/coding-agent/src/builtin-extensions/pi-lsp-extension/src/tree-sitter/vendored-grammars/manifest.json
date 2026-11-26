@@ -1,0 +1,32 @@
+{
+	"tree-sitter-typescript.wasm": {
+		"package": "tree-sitter-typescript",
+		"version": "0.23.2",
+		"sha256": "778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d"
+	},
+	"tree-sitter-tsx.wasm": {
+		"package": "tree-sitter-typescript",
+		"version": "0.23.2",
+		"sha256": "79e5da75ea62855a0cd67177685f0164eac87d5f630b3cbe1e0a099751ad30f8"
+	},
+	"tree-sitter-javascript.wasm": {
+		"package": "tree-sitter-javascript",
+		"version": "0.23.1",
+		"sha256": "4a378293fe7853cbee2836023be072dafa0e53b3b5edb245920838ca834ed121"
+	},
+	"tree-sitter-bash.wasm": {
+		"package": "tree-sitter-bash",
+		"version": "0.23.3",
+		"sha256": "d1844429a58620f306b6f42aebe92298243ca8120cd833a3ab5d87c7a2e7b9fd"
+	},
+	"tree-sitter-cpp.wasm": {
+		"package": "tree-sitter-cpp",
+		"version": "0.23.4",
+		"sha256": "174eb0deb75b2ec7881bcacda9f995648d8e683956e5c2267e69ab6dc503fcbf"
+	},
+	"tree-sitter-lua.wasm": {
+		"package": "@tree-sitter-grammars/tree-sitter-lua",
+		"version": "0.2.0",
+		"sha256": "9caa79569dcd8e4be6d1a8ac7747885509e7c5650f8a5ffc6c2f2c5cba91fc5f"
+	}
+}

@@ -26,3 +26,10 @@ export const DAEMON_MAX_RETRIES = 60;
 
 /** Delay (ms) to let LSP process a synthetic didChange before requesting completions */
 export const SYNTHETIC_DOT_SETTLE_DELAY_MS = 100;
+
+/**
+ * Bounds one tree-sitter parse. A grammar bug that loops would otherwise grow wasm memory to its
+ * 2 GB limit and abort the shared runtime, failing every later tree-sitter call in the session.
+ * Normal files parse in milliseconds; a 50,000-line TypeScript file takes about 1.4 s.
+ */
+export const PARSE_TIMEOUT_SECONDS = 5;

@@ -133,6 +133,15 @@ export async function compilePattern(
   treeSitter: TreeSitterManager,
 ): Promise<CompiledPattern> {
   await treeSitter.init();
+  if (!treeSitter.hasGrammar(languageId)) {
+    throw new Error(
+      `No tree-sitter grammar for ${languageId}. Supported: ${treeSitter.getSupportedLanguages().join(", ")}.`,
+    );
+  }
+
+  if (!(await treeSitter.getLanguage(languageId))) {
+    throw new Error(`${treeSitter.grammarFailure(languageId) ?? `The ${languageId} grammar did not load`}.`);
+  }
 
   const { preprocessed, placeholders } = preprocessMetavars(source);
 
@@ -141,22 +150,22 @@ export async function compilePattern(
 
   for (const { wrap, unwrap } of wrappers) {
     const wrapped = wrap(preprocessed);
-    const tree = await treeSitter.parseWithLanguage(
-      `__pattern__${Date.now()}`,
-      wrapped,
-      languageId,
-    );
+    // Pattern trees are not cached: each one is freed once it is copied into PatternNode data.
+    const tree = await treeSitter.parseDetached(wrapped, languageId);
     if (!tree) continue;
+    try {
+      const root = tree.rootNode;
+      if (hasErrors(root)) continue;
 
-    const root = tree.rootNode;
-    if (hasErrors(root)) continue;
+      const unwrapped = unwrap(root);
+      if (!unwrapped) continue;
 
-    const unwrapped = unwrap(root);
-    if (!unwrapped) continue;
-
-    const metavars: string[] = [];
-    const patternNode = buildPatternNode(unwrapped, metavars, undefined, placeholders);
-    return { root: patternNode, metavars: [...new Set(metavars)], languageId };
+      const metavars: string[] = [];
+      const patternNode = buildPatternNode(unwrapped, metavars, undefined, placeholders);
+      return { root: patternNode, metavars: [...new Set(metavars)], languageId };
+    } finally {
+      tree.delete();
+    }
   }
 
   throw new Error(

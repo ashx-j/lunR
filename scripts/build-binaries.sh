@@ -175,6 +175,9 @@ for platform in "${PLATFORMS[@]}"; do
     cp README.md "$OUTPUT_DIR/$platform/"
     cp CHANGELOG.md "$OUTPUT_DIR/$platform/"
     cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm "$OUTPUT_DIR/$platform/"
+    # Tree-sitter runtime and grammars: the binary has no node_modules to resolve them from.
+    cp ../../node_modules/web-tree-sitter/tree-sitter.wasm "$OUTPUT_DIR/$platform/"
+    node ../../scripts/copy-tree-sitter-grammars.mjs "$OUTPUT_DIR/$platform/grammars"
     mkdir -p "$OUTPUT_DIR/$platform/theme"
     cp dist/modes/interactive/theme/*.json "$OUTPUT_DIR/$platform/theme/"
     cp -r dist/core/export-html "$OUTPUT_DIR/$platform/"
