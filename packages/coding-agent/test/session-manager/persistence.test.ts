@@ -4,6 +4,11 @@ import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CURRENT_SESSION_VERSION, loadEntriesFromFile, SessionManager } from "../../src/core/session-manager.ts";
 
+// Windows: SessionOwnership writes through a lowercased session path (a product bug listed in PR #320), so
+// the injected failures compare paths case-insensitively there to keep testing the failure handling.
+const samePath = (a: unknown, b: string) =>
+	process.platform === "win32" ? String(a).toLowerCase() === b.toLowerCase() : String(a) === b;
+
 vi.mock("fs", async (importOriginal) => {
 	const original = await importOriginal<typeof import("fs")>();
 	return {
@@ -66,7 +71,7 @@ describe("session persistence failure boundaries", () => {
 				});
 			} else {
 				vi.mocked(fs.renameSync).mockImplementation((source, destination) => {
-					if (destination === file) throw new Error("injected rename failure");
+					if (samePath(destination, file)) throw new Error("injected rename failure");
 					return realFs.renameSync(source, destination);
 				});
 			}
@@ -96,7 +101,7 @@ describe("session persistence failure boundaries", () => {
 			const leaf = active.getLeafId();
 			const original = fs.readFileSync(file);
 			vi.mocked(fs.renameSync).mockImplementation((source, destination) => {
-				if (destination === file) throw new Error("rejected navigation");
+				if (samePath(destination, file)) throw new Error("rejected navigation");
 				return realFs.renameSync(source, destination);
 			});
 			expect(() => (operation === "branch" ? active.branch("original") : active.resetLeaf())).toThrow(
@@ -148,13 +153,13 @@ describe("session persistence failure boundaries", () => {
 				});
 			} else if (failure === "rename") {
 				vi.mocked(fs.renameSync).mockImplementation((source, destination) => {
-					if (String(destination).endsWith(".jsonl") && destination !== file)
+					if (String(destination).endsWith(".jsonl") && !samePath(destination, file))
 						throw new Error("fork rename rejected");
 					return realFs.renameSync(source, destination);
 				});
 			} else {
 				vi.mocked(fs.renameSync).mockImplementation((source, destination) => {
-					if (source === `${file}.owner`) throw new Error("fork release rejected");
+					if (samePath(source, `${file}.owner`)) throw new Error("fork release rejected");
 					return realFs.renameSync(source, destination);
 				});
 			}
