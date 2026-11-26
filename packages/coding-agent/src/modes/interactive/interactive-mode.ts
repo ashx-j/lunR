@@ -1,4 +1,3 @@
-import { collectUsageRequests, usageTokens } from "../../core/usage-accounting.ts";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -22,7 +21,6 @@ import type {
 	AutocompleteItem,
 	AutocompleteProvider,
 	EditorComponent,
-	Keybinding,
 	KeyId,
 	MarkdownTheme,
 	OverlayHandle,
@@ -38,7 +36,6 @@ import {
 	formatImageMarker,
 	fuzzyFilter,
 	isFocusable,
-	Markdown,
 	matchesKey,
 	ProcessTerminal,
 	Spacer,
@@ -49,40 +46,20 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { spawn } from "child_process";
-import {
-	APP_NAME,
-	APP_TITLE,
-	appendDebugLog,
-	CONFIG_DIR_NAME,
-	getAgentDir,
-	getDebugLogPath,
-	VERSION,
-} from "../../config.ts";
+import { APP_NAME, APP_TITLE, CONFIG_DIR_NAME, getAgentDir, getDebugLogPath, VERSION } from "../../config.ts";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
 	NothingToCompactError,
 	parseSkillBlock,
 } from "../../core/agent-session.ts";
-import {
-	type AgentSessionRuntime,
-	SessionImportFileNotFoundError,
-	SIGNAL_DISPOSE_LIMIT_MS,
-} from "../../core/agent-session-runtime.ts";
+import { type AgentSessionRuntime, SIGNAL_DISPOSE_LIMIT_MS } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
-import {
-	CACHE_TTL_MS,
-	type CacheMiss,
-	collectCacheMisses,
-	computeCacheWaste,
-	detectCacheMiss,
-} from "../../core/cache-stats.ts";
+import { CACHE_TTL_MS, type CacheMiss, collectCacheMisses, detectCacheMiss } from "../../core/cache-stats.ts";
 import { startCatalogRefreshPolling } from "../../core/catalog-refresh-polling.ts";
-import { computeContextBreakdown } from "../../core/context-breakdown.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
-	ExtensionCommandContext,
 	ExtensionContext,
 	ExtensionRunner,
 	ExtensionUIContext,
@@ -102,26 +79,18 @@ import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
-import { type ApprovalRequest, type ApprovalResponse, registerApprovalHandler } from "../../core/permissions.ts";
+import { registerApprovalHandler } from "../../core/permissions.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import {
 	captureTreeChanges,
 	clearRollback,
-	commitRollbackTurn,
-	getRollbackRecoveryBlockReason,
-	getRollbackTargetUserId,
 	initRollback,
-	isRollbackEnabled,
 	isRollbackSessionForceEnabled,
-	migrateRollbackSession,
-	peekRollbackTurnsConsumed,
-	type RollbackResult,
 	beginTurn as rollbackBeginTurn,
-	rollbackLastTurn,
 	setRollbackWarningHandler,
 } from "../../core/rollback.ts";
 import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
-import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
+import { formatMissingSessionCwdPrompt, type MissingSessionCwdError } from "../../core/session-cwd.ts";
 import {
 	cancelSessionHandoff,
 	markSessionHandoff,
@@ -129,7 +98,7 @@ import {
 	registerTransferHandler,
 	requestSessionTransfer,
 } from "../../core/session-handoff.ts";
-import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+import { type SessionEntry, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/subagent-cancellation.ts";
@@ -139,7 +108,7 @@ import { notifyTodosEnabledChanged } from "../../core/todo-settings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
-import { getAllPlanUsageResults, getUsageServiceBridge } from "../../core/usage-service.ts";
+import { getUsageServiceBridge } from "../../core/usage-service.ts";
 import type { InteractiveView } from "../../startup/interactive-view.ts";
 import { markStartupMilestone } from "../../startup/startup-milestones.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
@@ -148,12 +117,12 @@ import { parseGitUrl } from "../../utils/git.ts";
 import { processImage } from "../../utils/image-process.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool, getToolPath } from "../../utils/tools-manager.ts";
+import { type ApprovalDialogHost, showPlanApprovalDialog, showToolApprovalDialog } from "./approval-dialogs.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BootScreenComponent, type BootScreenRow } from "./components/boot-screen.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
-import { renderContextBox } from "./components/context-view.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
@@ -176,13 +145,10 @@ import {
 	shouldShowOnboarding,
 	WELCOME_TEXT,
 } from "./components/onboarding.ts";
-import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
-import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
-	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
 	IdleStatus,
 	RetryStatusIndicator,
@@ -191,17 +157,15 @@ import {
 } from "./components/status-indicator.ts";
 import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/thinking-summary.ts";
 import { applySameToolGrouping, applyToolRunSpacing, ToolExecutionComponent } from "./components/tool-execution.ts";
-import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
-import { renderUsageBox } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
-import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { ExitConfirmation } from "./exit-confirmation.ts";
 import {
 	orderedExtensionWidgets,
 	replaceExtensionWidget,
 	widgetSeparatorNeedsSpacer,
 } from "./extension-widget-order.ts";
+import { type HelpCommandHost, handleHelpCommand, handleHotkeysCommand } from "./help-commands.ts";
 import { type LoadedResourcesOptions, showLoadedResources } from "./loaded-resources.ts";
 import {
 	getLoginProviderOptions,
@@ -223,6 +187,25 @@ import {
 } from "./model-commands.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { type PermissionControllerHost, PermissionModeController } from "./permission-controller.ts";
+import { handleRollbackCommand, type RollbackCommandHost } from "./rollback-command.ts";
+import { handleExportCommand, handleImportCommand, type SessionFileCommandHost } from "./session-files.ts";
+import {
+	handleNameCommand,
+	SessionAutoNamer,
+	type SessionAutoNamerHost,
+	type SessionNameHost,
+} from "./session-naming.ts";
+import {
+	handleCloneCommand,
+	handleEditCommand,
+	handleRedoCommand,
+	handleResumeSession,
+	handleUndoCommand,
+	type SessionNavigationHost,
+	showSessionSelector,
+	showTreeSelector,
+	showUserMessageSelector,
+} from "./session-navigation.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
 import {
 	findArgumentlessSlashCommand,
@@ -231,7 +214,6 @@ import {
 	type SlashCommandHost,
 } from "./slash-dispatch.ts";
 import {
-	buildHelpLines,
 	findUnknownSlashCommand,
 	formatArgumentlessSlashCommandStatus,
 	formatUnknownSlashCommandStatus,
@@ -260,6 +242,12 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
+import {
+	handleContextCommand,
+	handleSessionCommand,
+	handleUsageCommand,
+	type UsageCommandHost,
+} from "./usage-commands.ts";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
@@ -508,9 +496,6 @@ export class InteractiveMode {
 	// new user message, never persisted — undone turns reappear after restart)
 	private redoStack: string[] = [];
 
-	// lunr: one-shot guard for the session auto-name LLM call (first assistant response)
-	private autoNameTriggered = false;
-
 	// Track current bash execution component
 	private bashComponent: BashExecutionComponent | undefined = undefined;
 
@@ -563,6 +548,8 @@ export class InteractiveMode {
 	private startupReadyPromise?: Promise<void>;
 	private startupFeatureError?: Error;
 	private deferredBuiltinAttachPromise: Promise<void> | undefined;
+	// The hosts below are built in field initializers, before the constructor assigns `ui`,
+	// `chatContainer` and the editor, so every member that reads a field must be a getter.
 	// Passed to the login-flow.ts functions so /login reaches this UI and the current session.
 	private readonly loginFlowHost: LoginFlowHost = this.createLoginFlowHost();
 	// Passed to the slash-dispatch.ts handlers when a builtin slash command is submitted.
@@ -570,6 +557,18 @@ export class InteractiveMode {
 	// Owns permission mode changes and their history; see permission-controller.ts.
 	private readonly permissions = new PermissionModeController(this.createPermissionControllerHost());
 	private readonly modelCommandHost: ModelCommandHost = this.createModelCommandHost();
+	// Passed to the usage-commands.ts and help-commands.ts views.
+	private readonly chatViewHost: UsageCommandHost & HelpCommandHost = this.createChatViewHost();
+	// Passed to the session-navigation.ts functions for /tree, /fork, /clone, /resume, /undo, /edit and /redo.
+	private readonly sessionNavigationHost: SessionNavigationHost = this.createSessionNavigationHost();
+	// Passed to the session-files.ts and session-naming.ts functions for /export, /import and /name.
+	private readonly sessionCommandHost: SessionFileCommandHost & SessionNameHost & SessionAutoNamerHost =
+		this.createSessionCommandHost();
+	private readonly autoNamer = new SessionAutoNamer(this.sessionCommandHost);
+	// Passed to the approval-dialogs.ts questions the approval handler in `init` asks.
+	private readonly approvalDialogHost: ApprovalDialogHost = this.createApprovalDialogHost();
+	// Passed to rollback-command.ts for /rollback.
+	private readonly rollbackCommandHost: RollbackCommandHost = this.createRollbackCommandHost();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -872,11 +871,11 @@ export class InteractiveMode {
 		registerApprovalHandler(async (req) => {
 			this.notifyAttention("input");
 			if (req.kind === "large-subagent-launch" || req.kind === "tool") {
-				return this.showToolApprovalDialog(req);
+				return showToolApprovalDialog(this.approvalDialogHost, req);
 			}
 			// Approval restores writing access before the model's next tool call.
 			if (req.kind === "plan") {
-				const resp = await this.showPlanApprovalDialog(req.detail);
+				const resp = await showPlanApprovalDialog(this.approvalDialogHost, req.detail);
 				const decision = typeof resp === "string" ? resp : resp.decision;
 				if (decision !== "reject") {
 					const target = this.permissions.restoreTargetAfterPlan();
@@ -1399,7 +1398,7 @@ export class InteractiveMode {
 					return { cancelled: false };
 				},
 				switchSession: async (sessionPath, options) => {
-					return this.handleResumeSession(sessionPath, options);
+					return handleResumeSession(this.sessionNavigationHost, sessionPath, options);
 				},
 				reload: async () => {
 					await this.handleReloadCommand();
@@ -2370,9 +2369,9 @@ export class InteractiveMode {
 					const now = Date.now();
 					if (now - this.lastEscapeTime < 500) {
 						if (action === "tree") {
-							this.showTreeSelector();
+							showTreeSelector(this.sessionNavigationHost);
 						} else {
-							this.showUserMessageSelector();
+							showUserMessageSelector(this.sessionNavigationHost);
 						}
 						this.lastEscapeTime = 0;
 					} else {
@@ -2402,9 +2401,9 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
-		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
-		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
-		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
+		this.defaultEditor.onAction("app.session.tree", () => showTreeSelector(this.sessionNavigationHost));
+		this.defaultEditor.onAction("app.session.fork", () => showUserMessageSelector(this.sessionNavigationHost));
+		this.defaultEditor.onAction("app.session.resume", () => showSessionSelector(this.sessionNavigationHost));
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -3095,7 +3094,7 @@ export class InteractiveMode {
 				this.pendingTools.clear();
 				this.browserActivityComponent = undefined;
 
-				this.maybeAutoNameSession();
+				this.autoNamer.maybeAutoNameSession();
 
 				// lunr: capture tree-scope changes at turn boundary (bash side-effects).
 				captureTreeChanges(this.sessionManager.getCwd(), this.sessionManager.getSessionId());
@@ -4969,289 +4968,6 @@ export class InteractiveMode {
 		});
 	}
 
-	private showUserMessageSelector(): void {
-		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		const userMessages = this.session.getUserMessagesForForking();
-
-		if (userMessages.length === 0) {
-			this.showStatus("No messages to fork from");
-			return;
-		}
-
-		const initialSelectedId = userMessages[userMessages.length - 1]?.entryId;
-
-		this.showSelector((done) => {
-			const selector = new UserMessageSelectorComponent(
-				userMessages.map((m) => ({ id: m.entryId, text: m.text })),
-				async (entryId) => {
-					done();
-					try {
-						const result = await this.runtimeHost.fork(entryId);
-						if (result.cancelled) {
-							this.ui.requestRender();
-							return;
-						}
-
-						this.editor.setText(result.selectedText ?? "");
-						this.showStatus("Forked to new session");
-					} catch (error: unknown) {
-						this.showError(error instanceof Error ? error.message : String(error));
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				initialSelectedId,
-			);
-			return { component: selector, focus: selector.getMessageList() };
-		});
-	}
-
-	private async handleCloneCommand(): Promise<void> {
-		const leafId = this.sessionManager.getLeafId();
-		if (!leafId) {
-			this.showStatus("Nothing to clone yet");
-			return;
-		}
-
-		try {
-			const result = await this.runtimeHost.fork(leafId, { position: "at" });
-			if (result.cancelled) {
-				this.ui.requestRender();
-				return;
-			}
-
-			this.editor.setText("");
-			this.showStatus("Cloned to new session");
-		} catch (error: unknown) {
-			this.showError(error instanceof Error ? error.message : String(error));
-		}
-	}
-
-	private showTreeSelector(initialSelectedId?: string): void {
-		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /tree.");
-			return;
-		}
-		const tree = this.sessionManager.getTree();
-		const realLeafId = this.sessionManager.getLeafId();
-		const initialFilterMode = this.settingsManager.getTreeFilterMode();
-
-		if (tree.length === 0) {
-			this.showStatus("No entries in session");
-			return;
-		}
-
-		this.showSelector((done) => {
-			const selector = new TreeSelectorComponent(
-				tree,
-				realLeafId,
-				this.ui.terminal.rows,
-				async (entryId) => {
-					// Selecting the current leaf is a no-op (already there)
-					if (entryId === realLeafId) {
-						done();
-						this.showStatus("Already at this point");
-						return;
-					}
-
-					// Ask about summarization
-					done(); // Close selector first
-
-					// Loop until user makes a complete choice or cancels to tree
-					let wantsSummary = false;
-					let customInstructions: string | undefined;
-
-					// Check if we should skip the prompt (user preference to always default to no summary)
-					if (!this.settingsManager.getBranchSummarySkipPrompt()) {
-						while (true) {
-							const summaryChoice = await this.showExtensionSelector("Summarize branch?", [
-								"No summary",
-								"Summarize",
-								"Summarize with custom prompt",
-							]);
-
-							if (summaryChoice === undefined) {
-								// User pressed escape - re-show tree selector with same selection
-								this.showTreeSelector(entryId);
-								return;
-							}
-
-							wantsSummary = summaryChoice !== "No summary";
-
-							if (summaryChoice === "Summarize with custom prompt") {
-								customInstructions = await this.showExtensionEditor("Custom summarization instructions");
-								if (customInstructions === undefined) {
-									// User cancelled - loop back to summary selector
-									continue;
-								}
-							}
-
-							// User made a complete choice
-							break;
-						}
-					}
-
-					// Set up escape handler and status indicator if summarizing
-					let showingSummaryIndicator = false;
-					const originalOnEscape = this.defaultEditor.onEscape;
-
-					if (wantsSummary) {
-						this.defaultEditor.onEscape = () => {
-							this.session.abortBranchSummary();
-						};
-						this.chatContainer.addChild(new Spacer(1));
-						this.showStatusIndicator(new BranchSummaryStatusIndicator(this.ui));
-						showingSummaryIndicator = true;
-						this.ui.requestRender();
-					}
-
-					try {
-						const result = await this.session.navigateTree(entryId, {
-							summarize: wantsSummary,
-							customInstructions,
-						});
-
-						if (result.aborted) {
-							// Summarization aborted - re-show tree selector with same selection
-							this.showStatus("Branch summarization cancelled");
-							this.showTreeSelector(entryId);
-							return;
-						}
-						if (result.cancelled) {
-							this.showStatus("Navigation cancelled");
-							return;
-						}
-
-						// Update UI
-						this.clearChatContainer();
-						this.renderInitialMessages();
-						if (result.editorText && !this.editor.getText().trim()) {
-							this.restoreEditorFromTreeResult(result);
-						}
-						this.showStatus("Navigated to selected point");
-						void this.flushCompactionQueue({ willRetry: false });
-					} catch (error) {
-						this.showError(error instanceof Error ? error.message : String(error));
-					} finally {
-						if (showingSummaryIndicator) {
-							this.clearStatusIndicator("branchSummary");
-						}
-						this.defaultEditor.onEscape = originalOnEscape;
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				(entryId, label) => {
-					this.sessionManager.appendLabelChange(entryId, label);
-					this.ui.requestRender();
-				},
-				initialSelectedId,
-				initialFilterMode,
-			);
-			selector.onCopy = async (text) => {
-				if (!text) {
-					this.showError("Selected entry has no text to copy");
-					return;
-				}
-				try {
-					await copyToClipboard(text);
-					this.showStatus("Copied selected message to clipboard");
-				} catch (error) {
-					this.showError(error instanceof Error ? error.message : String(error));
-				}
-			};
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private showSessionSelector(): void {
-		this.showSelector((done) => {
-			const selector = new SessionSelectorComponent(
-				(onProgress) =>
-					SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir(), onProgress),
-				(onProgress) =>
-					this.sessionManager.usesDefaultSessionDir()
-						? SessionManager.listAll(onProgress)
-						: SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress),
-				async (sessionPath) => {
-					done();
-					await this.handleResumeSession(sessionPath);
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				() => {
-					void this.shutdown();
-				},
-				() => this.ui.requestRender(),
-				{
-					renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
-						const next = (nextName ?? "").trim();
-						if (!next) return;
-						if (sessionFilePath === this.sessionManager.getSessionFile() && !this.runtimeHost.isDetached) {
-							this.sessionManager.appendSessionInfo(next);
-							return;
-						}
-						const mgr = SessionManager.open(sessionFilePath);
-						try {
-							mgr.appendSessionInfo(next);
-						} finally {
-							mgr.dispose();
-						}
-					},
-					showRenameHint: true,
-					keybindings: this.keybindings,
-				},
-
-				this.sessionManager.getSessionFile(),
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private async handleResumeSession(
-		sessionPath: string,
-		options?: Parameters<ExtensionCommandContext["switchSession"]>[1],
-	): Promise<{ cancelled: boolean }> {
-		this.clearStatusIndicator();
-		try {
-			const result = await this.runtimeHost.switchSession(sessionPath, {
-				withSession: options?.withSession,
-				projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
-			});
-			if (result.cancelled) {
-				return result;
-			}
-			this.showStatus("Resumed session");
-			return result;
-		} catch (error: unknown) {
-			if (error instanceof MissingSessionCwdError) {
-				const selectedCwd = await this.promptForMissingSessionCwd(error);
-				if (!selectedCwd) {
-					this.showStatus("Resume cancelled");
-					return { cancelled: true };
-				}
-				const result = await this.runtimeHost.switchSession(sessionPath, {
-					cwdOverride: selectedCwd,
-					withSession: options?.withSession,
-					projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
-				});
-				if (result.cancelled) {
-					return result;
-				}
-				this.showStatus("Resumed session in current cwd");
-				return result;
-			}
-			return this.handleFatalRuntimeError("Failed to resume session", error);
-		}
-	}
-
 	// Builds the LoginFlowHost without making InteractiveMode members public. `session` and `editor`
 	// stay getters because /new, /resume and /fork replace the session and extensions can replace the editor.
 	private createLoginFlowHost(): LoginFlowHost {
@@ -5306,6 +5022,172 @@ export class InteractiveMode {
 		};
 	}
 
+	// Builds the host for /usage, /context, /session, /help and /hotkeys. `session` stays a getter because
+	// /new, /resume and /fork replace it.
+	private createChatViewHost(): UsageCommandHost & HelpCommandHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get keybindings() {
+				return mode.keybindings;
+			},
+			showStatus: (message) => this.showStatus(message),
+			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
+		};
+	}
+
+	// Builds the SessionNavigationHost. `session`, `editor` and `chatContainer` stay getters because
+	// /new, /resume and /fork replace the session and extensions can replace the editor.
+	private createSessionNavigationHost(): SessionNavigationHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			get runtimeHost() {
+				return mode.runtimeHost;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get keybindings() {
+				return mode.keybindings;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get defaultEditor() {
+				return mode.defaultEditor;
+			},
+			get redoStack() {
+				return mode.redoStack;
+			},
+			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+			showSelector: (create) => this.showSelector(create),
+			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
+			showExtensionEditor: (title, prefill) => this.showExtensionEditor(title, prefill),
+			showStatusIndicator: (indicator) => this.showStatusIndicator(indicator),
+			clearStatusIndicator: (kind) => this.clearStatusIndicator(kind),
+			clearChatContainer: () => this.clearChatContainer(),
+			renderInitialMessages: () => this.renderInitialMessages(),
+			restoreEditorFromTreeResult: (result) => this.restoreEditorFromTreeResult(result),
+			flushCompactionQueue: (options) => this.flushCompactionQueue(options),
+			createProjectTrustContext: (cwd) => this.createProjectTrustContext(cwd),
+			promptForMissingSessionCwd: (error) => this.promptForMissingSessionCwd(error),
+			handleFatalRuntimeError: (prefix, error) => this.handleFatalRuntimeError(prefix, error),
+			shutdown: () => this.shutdown(),
+		};
+	}
+
+	// Builds the host for /export, /import, /name and auto-naming. `session` stays a getter because
+	// /new, /resume and /fork replace it.
+	private createSessionCommandHost(): SessionFileCommandHost & SessionNameHost & SessionAutoNamerHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			get runtimeHost() {
+				return mode.runtimeHost;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+			showExtensionConfirm: (title, message) => this.showExtensionConfirm(title, message),
+			clearStatusIndicator: () => this.clearStatusIndicator(),
+			promptForMissingSessionCwd: (error) => this.promptForMissingSessionCwd(error),
+			handleFatalRuntimeError: (prefix, error) => this.handleFatalRuntimeError(prefix, error),
+			get isShuttingDown() {
+				return mode.isShuttingDown;
+			},
+			resolveModelReference: (reference) => this.resolveModelReference(reference),
+		};
+	}
+
+	// Builds the ApprovalDialogHost. `lastStartedTool` and `outputPad` stay getters because each
+	// tool start and each settings reload changes them.
+	private createApprovalDialogHost(): ApprovalDialogHost {
+		const mode = this;
+		return {
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get lastStartedTool() {
+				return mode.lastStartedTool;
+			},
+			get outputPad() {
+				return mode.outputPad;
+			},
+			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
+			showSelector: (create) => this.showSelector(create),
+			showExtensionInput: (title, placeholder) => this.showExtensionInput(title, placeholder),
+		};
+	}
+
+	// Builds the RollbackCommandHost. `session` and `editor` stay getters because /new, /resume and
+	// /fork replace the session and extensions can replace the editor.
+	private createRollbackCommandHost(): RollbackCommandHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get runtimeHost() {
+				return mode.runtimeHost;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get redoStack() {
+				return mode.redoStack;
+			},
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+		};
+	}
+
 	// Builds the PermissionControllerHost. `session` stays a getter because /new, /resume and /fork replace it.
 	private createPermissionControllerHost(): PermissionControllerHost {
 		const mode = this;
@@ -5341,27 +5223,27 @@ export class InteractiveMode {
 			showModelsSelector: () => showModelsSelector(this.modelCommandHost),
 			handleModelCommand: (searchTerm) => handleModelCommand(this.modelCommandHost, searchTerm),
 			handleRefreshCommand: () => handleRefreshCommand(this.modelCommandHost),
-			handleExportCommand: (text) => this.handleExportCommand(text),
-			handleImportCommand: (text) => this.handleImportCommand(text),
+			handleExportCommand: (text) => handleExportCommand(this.sessionCommandHost, text),
+			handleImportCommand: (text) => handleImportCommand(this.sessionCommandHost, text),
 			handleCopyCommand: () => this.handleCopyCommand(),
-			handleNameCommand: (text) => this.handleNameCommand(text),
-			handleSessionCommand: () => this.handleSessionCommand(),
-			handleUsageCommand: () => this.handleUsageCommand(),
+			handleNameCommand: (text) => handleNameCommand(this.sessionCommandHost, text),
+			handleSessionCommand: () => handleSessionCommand(this.chatViewHost),
+			handleUsageCommand: () => handleUsageCommand(this.chatViewHost),
 			handleFastCommand: (arg) => this.handleFastCommand(arg),
-			handleContextCommand: () => this.handleContextCommand(),
+			handleContextCommand: () => handleContextCommand(this.chatViewHost),
 			handlePlanCommand: (args) => this.permissions.handlePlanCommand(args),
-			handleHotkeysCommand: () => this.handleHotkeysCommand(),
-			handleHelpCommand: () => this.handleHelpCommand(),
-			showUserMessageSelector: () => this.showUserMessageSelector(),
-			handleCloneCommand: () => this.handleCloneCommand(),
-			showTreeSelector: () => this.showTreeSelector(),
-			handleUndoCommand: () => this.handleUndoCommand(),
-			handleEditCommand: () => this.handleEditCommand(),
-			handleRedoCommand: () => this.handleRedoCommand(),
+			handleHotkeysCommand: () => handleHotkeysCommand(this.chatViewHost),
+			handleHelpCommand: () => handleHelpCommand(this.chatViewHost),
+			showUserMessageSelector: () => showUserMessageSelector(this.sessionNavigationHost),
+			handleCloneCommand: () => handleCloneCommand(this.sessionNavigationHost),
+			showTreeSelector: () => showTreeSelector(this.sessionNavigationHost),
+			handleUndoCommand: () => handleUndoCommand(this.sessionNavigationHost),
+			handleEditCommand: () => handleEditCommand(this.sessionNavigationHost),
+			handleRedoCommand: () => handleRedoCommand(this.sessionNavigationHost),
 			handleModeCommand: (args) => this.permissions.handleModeCommand(args),
 			applyPermissionMode: (permissionMode) => this.permissions.applyPermissionMode(permissionMode),
 			showProcessesSelector: () => this.showProcessesSelector(),
-			handleRollbackCommand: () => this.handleRollbackCommand(),
+			handleRollbackCommand: () => handleRollbackCommand(this.rollbackCommandHost),
 			showTrustSelector: () => this.showTrustSelector(),
 			showOAuthSelector: (oauthMode) => showOAuthSelector(this.loginFlowHost, oauthMode),
 			handleClearCommand: () => this.handleClearCommand(),
@@ -5369,7 +5251,7 @@ export class InteractiveMode {
 			handleReloadCommand: () => this.handleReloadCommand(),
 			handleInitCommand: () => this.handleInitCommand(),
 			handleDebugCommand: () => this.handleDebugCommand(),
-			showSessionSelector: () => this.showSessionSelector(),
+			showSessionSelector: () => showSessionSelector(this.sessionNavigationHost),
 			shutdown: () => this.shutdown(),
 		};
 	}
@@ -5457,111 +5339,6 @@ export class InteractiveMode {
 
 		await this.sendUserMessageAfterDeferredBuiltins(prompt);
 		this.showStatus("AGENTS.md is being generated — run /reload when it finishes to load it into context.");
-	}
-
-	// lunr: /undo and /edit rewind the same session via navigateTree (no fork).
-	// /undo leaves the editor alone; /edit pastes the undone user text. /redo
-	// pops the previous leaf and navigates back.
-	private async rewindLastTurn(
-		command: "undo" | "edit",
-	): Promise<{ editorText?: string; editorImages?: ImageContent[] } | undefined> {
-		if (this.session.isStreaming) {
-			this.showWarning(`Wait for the current response to finish before running /${command}.`);
-			return undefined;
-		}
-
-		const nothingLabel = command === "undo" ? "Nothing to undo" : "Nothing to edit";
-		const branch = this.sessionManager.getBranch();
-		let lastUserIndex = -1;
-		for (let i = branch.length - 1; i >= 0; i--) {
-			const entry = branch[i];
-			if (entry.type === "message" && entry.message.role === "user") {
-				lastUserIndex = i;
-				break;
-			}
-		}
-		if (lastUserIndex === -1) {
-			this.showStatus(nothingLabel);
-			return undefined;
-		}
-
-		const lastUser = branch[lastUserIndex];
-		const leafId = this.sessionManager.getLeafId();
-		let targetId: string;
-		if (lastUser.id === leafId) {
-			if (!lastUser.parentId) {
-				this.showStatus(nothingLabel);
-				return undefined;
-			}
-			targetId = lastUser.parentId;
-		} else {
-			targetId = lastUser.id;
-		}
-
-		try {
-			const result = await this.session.navigateTree(targetId, {});
-			if (result.cancelled) {
-				this.showStatus(command === "undo" ? "Undo cancelled" : "Edit cancelled");
-				return undefined;
-			}
-			if (leafId) {
-				this.redoStack.push(leafId);
-			}
-			this.clearChatContainer();
-			this.renderInitialMessages();
-			void this.flushCompactionQueue({ willRetry: false });
-			return { editorText: result.editorText, editorImages: result.editorImages };
-		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
-			return undefined;
-		}
-	}
-
-	private async handleUndoCommand(): Promise<void> {
-		const result = await this.rewindLastTurn("undo");
-		if (!result) return;
-		this.showStatus("Conversation rewound. Files are unchanged; /rollback restores them. /redo to restore the turn.");
-	}
-
-	private async handleEditCommand(): Promise<void> {
-		const result = await this.rewindLastTurn("edit");
-		if (!result) return;
-		this.restoreEditorFromTreeResult({
-			editorText: result.editorText ?? "",
-			editorImages: result.editorImages,
-		});
-		this.showStatus("Editing last message. /redo to restore.");
-	}
-
-	private async handleRedoCommand(): Promise<void> {
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /redo.");
-			return;
-		}
-
-		const targetId = this.redoStack.pop();
-		if (!targetId) {
-			this.showStatus("Nothing to redo");
-			return;
-		}
-
-		try {
-			const result = await this.session.navigateTree(targetId, {});
-			if (result.cancelled) {
-				this.redoStack.push(targetId);
-				this.showStatus("Navigation cancelled");
-				return;
-			}
-			this.clearChatContainer();
-			this.renderInitialMessages();
-			if (result.editorText && !this.editor.getText().trim()) {
-				this.restoreEditorFromTreeResult(result);
-			}
-			this.showStatus("Redone");
-			void this.flushCompactionQueue({ willRetry: false });
-		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
-		}
 	}
 
 	private async handleReloadCommand(): Promise<void> {
@@ -5670,95 +5447,6 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleExportCommand(text: string): Promise<void> {
-		const outputPath = this.getPathCommandArgument(text, "/export");
-
-		try {
-			if (outputPath?.endsWith(".jsonl")) {
-				const filePath = this.session.exportToJsonl(outputPath);
-				this.showStatus(`Session exported to: ${filePath}`);
-			} else {
-				const filePath = await this.session.exportToHtml(outputPath);
-				this.showStatus(`Session exported to: ${filePath}`);
-			}
-		} catch (error: unknown) {
-			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
-		}
-	}
-
-	private getPathCommandArgument(text: string, command: "/export" | "/import"): string | undefined {
-		if (text === command) {
-			return undefined;
-		}
-		if (!text.startsWith(`${command} `)) {
-			return undefined;
-		}
-
-		const argsString = text.slice(command.length + 1).trimStart();
-		if (!argsString) {
-			return undefined;
-		}
-
-		const firstChar = argsString[0];
-		if (firstChar === '"' || firstChar === "'") {
-			const closingQuoteIndex = argsString.indexOf(firstChar, 1);
-			if (closingQuoteIndex < 0) {
-				return undefined;
-			}
-			return argsString.slice(1, closingQuoteIndex);
-		}
-
-		const firstWhitespaceIndex = argsString.search(/\s/);
-		if (firstWhitespaceIndex < 0) {
-			return argsString;
-		}
-		return argsString.slice(0, firstWhitespaceIndex);
-	}
-
-	private async handleImportCommand(text: string): Promise<void> {
-		const inputPath = this.getPathCommandArgument(text, "/import");
-		if (!inputPath) {
-			this.showError("Usage: /import <path.jsonl>");
-			return;
-		}
-
-		const confirmed = await this.showExtensionConfirm("Import session", `Replace current session with ${inputPath}?`);
-		if (!confirmed) {
-			this.showStatus("Import cancelled");
-			return;
-		}
-
-		try {
-			this.clearStatusIndicator();
-			const result = await this.runtimeHost.importFromJsonl(inputPath);
-			if (result.cancelled) {
-				this.showStatus("Import cancelled");
-				return;
-			}
-			this.showStatus(`Session imported from: ${inputPath}`);
-		} catch (error: unknown) {
-			if (error instanceof MissingSessionCwdError) {
-				const selectedCwd = await this.promptForMissingSessionCwd(error);
-				if (!selectedCwd) {
-					this.showStatus("Import cancelled");
-					return;
-				}
-				const result = await this.runtimeHost.importFromJsonl(inputPath, selectedCwd);
-				if (result.cancelled) {
-					this.showStatus("Import cancelled");
-					return;
-				}
-				this.showStatus(`Session imported from: ${inputPath}`);
-				return;
-			}
-			if (error instanceof SessionImportFileNotFoundError) {
-				this.showError(`Failed to import session: ${error.message}`);
-				return;
-			}
-			await this.handleFatalRuntimeError("Failed to import session", error);
-		}
-	}
-
 	private async handleCopyCommand(): Promise<void> {
 		const text = this.session.getLastAssistantText();
 		if (!text) {
@@ -5772,199 +5460,6 @@ export class InteractiveMode {
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
-	}
-
-	private handleNameCommand(text: string): void {
-		const name = text.replace(/^\/(?:name|title)\s*/, "").trim();
-		if (!name) {
-			const currentName = this.sessionManager.getSessionName();
-			if (currentName) {
-				this.chatContainer.addChild(new Spacer(1));
-				this.chatContainer.addChild(new Text(theme.fg("dim", `Session name: ${currentName}`), 1, 0));
-			} else {
-				this.showWarning("Usage: /name <name>");
-			}
-			this.ui.requestRender();
-			return;
-		}
-
-		this.session.setSessionName(name);
-		const sessionName = this.sessionManager.getSessionName();
-		if (sessionName !== name) {
-			this.showWarning(`Session name was normalized from ${JSON.stringify(name)} to ${JSON.stringify(sessionName)}`);
-		}
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
-		this.ui.requestRender();
-	}
-
-	/**
-	 * lunr: fire-and-forget session auto-naming. After the FIRST assistant response in an
-	 * unnamed session, asks the model for a short title derived from the first user message.
-	 * Uses the light tier model when model tiers are enabled; otherwise the session model.
-	 * Never blocks the UI; failures are swallowed to the debug log. Skipped entirely when
-	 * the user has already named the session (via /name, /title, or --name), and during shutdown,
-	 * whose abort of a running first turn also ends in agent_end.
-	 */
-	private maybeAutoNameSession(): void {
-		if (this.autoNameTriggered || this.isShuttingDown) return;
-		if (this.sessionManager.getSessionName()) return;
-		const userMessages = this.session.getUserMessagesForForking();
-		if (userMessages.length === 0) return; // No real turn yet; try again on the next agent_end.
-		if (userMessages.length > 1) {
-			// Resumed/older unnamed session — only auto-name fresh sessions.
-			this.autoNameTriggered = true;
-			return;
-		}
-		this.autoNameTriggered = true;
-		void this.generateSessionTitle(userMessages[0].text);
-	}
-
-	private async generateSessionTitle(firstUserText: string): Promise<void> {
-		try {
-			let model = this.session.model;
-			if (this.settingsManager.getModelTiersEnabled()) {
-				const tierModel = this.resolveModelReference(this.settingsManager.getTierModel("light"));
-				if (tierModel) {
-					model = tierModel;
-				}
-			}
-			if (!model) return;
-			const prompt =
-				"Generate a title of at most 6 words summarizing this request. " +
-				"Reply with the title only — no quotes, no trailing punctuation, no prefix.\n\n" +
-				`Request:\n${firstUserText.slice(0, 2000)}`;
-			const requestSessionId = this.sessionManager.getSessionId();
-			const requestSessionFile = this.sessionManager.getSessionFile();
-			const response = await this.session.modelRuntime.complete(model, {
-				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
-			});
-			if (this.sessionManager.getSessionId() !== requestSessionId) {
-				if (requestSessionFile) {
-					const target = SessionManager.open(requestSessionFile);
-					try {
-						target.appendRequestUsage("title", response);
-					} finally {
-						target.dispose();
-					}
-				}
-				return;
-			}
-			this.sessionManager.appendRequestUsage("title", response);
-			let title = response.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join(" ")
-				.replace(/\s+/g, " ")
-				.trim();
-			title = title.replace(/^["'`]+|["'`.!?]+$/g, "").trim();
-			if (!title) return;
-			if (this.sessionManager.getSessionName()) return; // User named it while the request was in flight.
-			this.session.setSessionName(title);
-		} catch (error) {
-			appendDebugLog(
-				`auto-name: title generation failed: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
-
-	private handleSessionCommand(): void {
-		const stats = this.session.getSessionStats();
-		const sessionName = this.sessionManager.getSessionName();
-		const entries = this.sessionManager.getEntries();
-		const cacheWaste = computeCacheWaste(entries, this.session.modelRuntime);
-
-		// Cost/token totals per provider/model actually used (e.g. OpenRouter `auto`
-		// resolves to a concrete responseModel), sorted by cost descending.
-		const perModelMap = new Map<string, { key: string; cost: number; tokens: number }>();
-		for (const request of collectUsageRequests(entries)) {
-			const key = `${request.provider}/${request.model}`;
-			const bucket = perModelMap.get(key) ?? { key, cost: 0, tokens: 0 };
-			bucket.cost += request.usage.cost.total;
-			bucket.tokens += usageTokens(request.usage);
-			perModelMap.set(key, bucket);
-		}
-		const perModel = Array.from(perModelMap.values()).sort((a, b) => b.cost - a.cost);
-
-		let info = `${theme.bold("Session Info")}\n\n`;
-		if (sessionName) {
-			info += `${theme.fg("dim", "Name:")} ${sessionName}\n`;
-		}
-		info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? "In-memory"}\n`;
-		info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n\n`;
-		info += `${theme.bold("Messages")}\n`;
-		info += `${theme.fg("dim", "Total:")} ${stats.totalMessages}\n`;
-		info += `${theme.fg("dim", "User:")} ${stats.userMessages}\n`;
-		info += `${theme.fg("dim", "Assistant:")} ${stats.assistantMessages}\n`;
-		info += `${theme.fg("dim", "Tools:")} ${stats.toolCalls} calls, ${stats.toolResults} results\n\n`;
-		info += `${theme.bold("Parent tokens including auxiliary requests")}\n`;
-		// "Input" is the full prompt volume. With cache activity, split it into
-		// cached (served from cache) vs uncached (everything else) - the only
-		// provider-independent split. Cache writes, where reported, are a detail
-		// of the uncached portion.
-		const { input, cacheRead, cacheWrite } = stats.tokens;
-		const promptTokens = input + cacheRead + cacheWrite;
-		info += `${theme.fg("dim", "Input:")} ${promptTokens.toLocaleString()}\n`;
-		if (promptTokens > 0 && (cacheRead > 0 || cacheWrite > 0)) {
-			const hitRate = theme.fg("dim", `(${((cacheRead / promptTokens) * 100).toFixed(1)}%)`);
-			info += `  ${theme.fg("dim", "Cached:")} ${cacheRead.toLocaleString()} ${hitRate}\n`;
-			const written =
-				cacheWrite > 0 ? ` ${theme.fg("dim", `(${cacheWrite.toLocaleString()} written to cache)`)}` : "";
-			info += `  ${theme.fg("dim", "Uncached:")} ${(input + cacheWrite).toLocaleString()}${written}\n`;
-		}
-		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
-		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
-		if (stats.childUsage?.total) {
-			info += `Children: ${stats.childUsage.total.toLocaleString()} tokens, $${stats.childUsage.cost.toFixed(3)}\n`;
-			info += `Combined: ${stats.combinedUsage?.total.toLocaleString()} tokens, $${stats.combinedUsage?.cost.toFixed(3)}\n`;
-		}
-		if (stats.parentUsage?.unknownRequests)
-			info += `Usage unavailable for ${stats.parentUsage.unknownRequests} request(s).\n`;
-		if (stats.parentUsage?.partialRequests)
-			info += `Usage incomplete for ${stats.parentUsage.partialRequests} request(s).\n`;
-		if (stats.parentUsage?.unknownCosts)
-			info += `Pricing unavailable for ${stats.parentUsage.unknownCosts} request(s).\n`;
-		info += "Costs use catalog estimates unless the provider reports its account charge.\n";
-
-		if (stats.cost > 0 || cacheWaste.missedTokens > 0) {
-			info += `\n${theme.bold("Cost")}\n`;
-			info += `${theme.fg("dim", "Total:")} $${stats.cost.toFixed(3)}`;
-			if (perModel.length > 1) {
-				for (const entry of perModel) {
-					info += `\n  ${theme.fg("dim", `${entry.key}:`)} $${entry.cost.toFixed(3)} ${theme.fg("dim", `(${formatTokens(entry.tokens)} tokens)`)}`;
-				}
-			}
-			if (cacheWaste.missedTokens > 0) {
-				const missLabel = cacheWaste.missCount === 1 ? "1 miss" : `${cacheWaste.missCount} misses`;
-				const detail = `${cacheWaste.missedTokens.toLocaleString()} tokens, ${missLabel}`;
-				info +=
-					cacheWaste.missedCost >= 0.0001
-						? `\n${theme.fg("dim", "Estimated cache misses:")} $${cacheWaste.missedCost.toFixed(3)} ${theme.fg("dim", `(${detail})`)}`
-						: `\n${theme.fg("dim", "Estimated cache misses:")} ${detail}`;
-			}
-		}
-
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(info, 1, 0));
-		this.ui.requestRender();
-	}
-
-	private collectUsageBreakdown(): ReturnType<typeof computeContextBreakdown> | undefined {
-		const model = this.session.model;
-		const contextWindow = model?.contextWindow ?? 0;
-		if (!model || contextWindow <= 0) return undefined;
-		const tools = this.session
-			.getActiveToolNames()
-			.map((name) => this.session.getToolDefinition(name))
-			.filter((definition) => definition !== undefined);
-		return computeContextBreakdown({
-			systemPrompt: this.session.systemPrompt,
-			tools,
-			messages: this.session.messages,
-			contextWindow,
-			globalAgentsPath: getGlobalInstructionsPath(getAgentDir()),
-			modelAgentsPath: getModelInstructionsPath(getAgentDir(), model.id),
-		});
 	}
 
 	private handleFastCommand(arg: string): void {
@@ -5989,85 +5484,6 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	// lunr: /usage — current session only: token totals, live context split,
-	// context-window bar, and subscription plan usage.
-	private async handleUsageCommand(): Promise<void> {
-		const stats = this.session.getSessionStats();
-		const sessionTotals =
-			stats.tokens.total > 0 ||
-			stats.parentUsage?.requests ||
-			stats.parentUsage?.unknownRequests ||
-			stats.parentUsage?.partialRequests
-				? {
-						input: stats.tokens.input,
-						output: stats.tokens.output,
-						cacheRead: stats.tokens.cacheRead,
-						cacheWrite: stats.tokens.cacheWrite,
-						total: stats.tokens.total,
-						requests: stats.parentUsage?.requests,
-						unknownRequests: stats.parentUsage?.unknownRequests,
-						partialRequests: stats.parentUsage?.partialRequests,
-					}
-				: undefined;
-
-		const context = this.session.getContextUsage();
-		const provider = this.session.model?.provider;
-		const planResult = await getAllPlanUsageResults(provider, this.session.modelRuntime);
-		const breakdown = this.collectUsageBreakdown();
-
-		const lines = renderUsageBox(
-			{
-				sessionTotals,
-				childTotals: stats.childUsage,
-				combinedTotals: stats.combinedUsage,
-				context,
-				plan: planResult.usages,
-				breakdown,
-			},
-			this.ui.terminal.columns,
-		);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
-		if (planResult.errors.length > 0) this.showStatus(planResult.errors.join("\n"));
-		this.ui.requestRender();
-	}
-
-	// lunr: /context — estimated breakdown of what consumes the context window
-	// (system prompt incl. project context files, tool definitions, and the live
-	// session messages). Uses session.messages, so post-compaction renders match
-	// the context the model actually sees.
-	private handleContextCommand(): void {
-		const model = this.session.model;
-		const contextWindow = model?.contextWindow ?? 0;
-		if (!model || contextWindow <= 0) {
-			this.showStatus("No model selected or context window unknown.");
-			return;
-		}
-
-		const breakdown = this.collectUsageBreakdown();
-		if (!breakdown) {
-			this.showStatus("No model selected or context window unknown.");
-			return;
-		}
-
-		const lastReply = [...this.session.messages].reverse().find((message) => message.role === "assistant");
-		const lines = renderContextBox(
-			{
-				breakdown,
-				model: `${model.provider}/${model.id}`,
-				compactionCeiling: this.session.getCompactionCeiling(),
-				notice:
-					lastReply?.role === "assistant" && claudeCodeHistoryReplayed(lastReply)
-						? CLAUDE_CODE_HISTORY_REPLAYED_NOTE
-						: undefined,
-			},
-			this.ui.terminal.columns,
-		);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
-		this.ui.requestRender();
-	}
-
 	/**
 	 * Rings the bell or sends a desktop notice, per the Notifications setting, when a run
 	 * finishes or waits for the user. Skipped while the terminal reports it has focus.
@@ -6083,106 +5499,6 @@ export class InteractiveMode {
 		if (this.session.isStreaming) this.notifyAttention("input");
 	}
 
-	// Approval dialog for one subagent call launching more than two children, and for ask mode's
-	// question before one call (`title`; no session answer when `allowSession` is false; "Always
-	// allow" when the request carries a `rule`). "Reject with feedback" collects a one-line
-	// reason that becomes the block reason the model sees, so it can adjust the plan.
-	private async showToolApprovalDialog(req: ApprovalRequest): Promise<ApprovalResponse> {
-		// Ask mode's question belongs to the call that started last. Its card leaves the time spent
-		// deciding out of "Took" and says "rejected" in words.
-		const card = req.kind === "tool" ? this.lastStartedTool : undefined;
-		card?.beginApproval();
-		const response = await this.askToolApproval(req);
-		card?.endApproval((typeof response === "string" ? response : response.decision) !== "reject");
-		return response;
-	}
-
-	private askToolApproval(req: ApprovalRequest): Promise<ApprovalResponse> {
-		const always = req.rule ? `Always allow in every project (saves ${req.rule} to global settings)` : undefined;
-		return new Promise((resolve) => {
-			this.showSelector((done) => {
-				const selector = new ExtensionSelectorComponent(
-					req.title ?? "Approve large subagent launch?",
-					[
-						"Approve once",
-						...(req.allowSession === false ? [] : ["Approve for this session"]),
-						...(always ? [always] : []),
-						"Reject",
-						"Reject with feedback",
-					],
-					(option) => {
-						done();
-						if (option === "Approve once") resolve("once");
-						else if (option === "Approve for this session") resolve("session");
-						else if (option === always) resolve("always");
-						else if (option === "Reject with feedback") {
-							void this.showExtensionInput(
-								req.kind === "tool" ? `Reject ${req.toolName}` : "Reject large subagent launch",
-								"feedback for the agent (optional)",
-							).then((feedback) => {
-								const trimmed = feedback?.trim();
-								resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
-							});
-						} else resolve("reject");
-					},
-					() => {
-						done();
-						resolve("reject");
-					},
-					{ message: req.detail.slice(0, 500) },
-				);
-				return { component: selector, focus: selector };
-			});
-		});
-	}
-
-	// Approval dialog for present_plan (read-only mode). The "with feedback"
-	// options collect a one-line note via showExtensionInput that becomes part of
-	// the result text the model sees. Esc/close counts as Decline.
-	private showPlanInChat(summary: string): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(
-			new PlanMessageComponent(summary, this.getMarkdownThemeWithSettings(), this.outputPad),
-		);
-		this.ui.requestRender();
-	}
-
-	private async showPlanApprovalDialog(summary: string): Promise<ApprovalResponse> {
-		this.showPlanInChat(summary);
-		return new Promise((resolve) => {
-			this.showSelector((done) => {
-				const selector = new ExtensionSelectorComponent(
-					"▶ Approve plan?",
-					["Approve", "Approve with feedback", "Decline", "Decline with feedback"],
-					(option) => {
-						done();
-						if (option === "Approve") resolve({ decision: "approve" });
-						else if (option === "Approve with feedback") {
-							void this.showExtensionInput("Approve plan", "feedback for the agent (optional)").then(
-								(feedback) => {
-									const trimmed = feedback?.trim();
-									resolve(trimmed ? { decision: "approve", feedback: trimmed } : { decision: "approve" });
-								},
-							);
-						} else if (option === "Decline with feedback") {
-							void this.showExtensionInput("Decline plan", "feedback for the agent (optional)").then(
-								(feedback) => {
-									const trimmed = feedback?.trim();
-									resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
-								},
-							);
-						} else resolve("reject");
-					},
-					() => {
-						done();
-						resolve("reject");
-					},
-				);
-				return { component: selector, focus: selector };
-			});
-		});
-	}
-
 	// lunr: /processes — view and manage background processes.
 	private showProcessesSelector(): void {
 		this.showSelector((done) => {
@@ -6193,266 +5509,11 @@ export class InteractiveMode {
 		});
 	}
 
-	// lunr: /rollback — restore last turn's file changes + persistently rewind the conversation.
-	private async handleRollbackCommand(): Promise<void> {
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /rollback.");
-			return;
-		}
-		if (!isRollbackEnabled(this.sessionManager.getSessionId())) {
-			this.showStatus("Rollback is disabled — enable it in /settings → Rollback");
-			return;
-		}
-		const recoveryBlocked = getRollbackRecoveryBlockReason(this.sessionManager.getSessionId());
-		if (recoveryBlocked) {
-			this.showWarning(recoveryBlocked);
-			return;
-		}
-
-		// lunr: how many turns the rollback will consume — the newest non-empty turn
-		// plus any empty (chat-only) turns on top of it. The conversation must rewind
-		// past the same number of user messages or files and messages desync.
-		// Defaults to 1 so /rollback still rewinds one exchange when there's nothing to restore.
-		const turnsToConsume = Math.max(1, peekRollbackTurnsConsumed(this.sessionManager.getSessionId()));
-
-		// Find the rewind target (the turnsToConsume-th user message from the end of
-		// the current branch) BEFORE mutating anything — forking to it is what makes
-		// the rewind persistent.
-		const branch = this.sessionManager.getBranch();
-		let targetUserId = getRollbackTargetUserId(this.sessionManager.getSessionId());
-		if (targetUserId && !branch.some((entry) => entry.id === targetUserId)) {
-			this.showWarning("Rollback recovery belongs to another chat branch. Return to that branch to retry.");
-			return;
-		}
-		let userMessagesSeen = 0;
-		let fallbackUserId: string | undefined;
-		for (let i = branch.length - 1; !targetUserId && i >= 0; i--) {
-			const entry = branch[i];
-			if (entry.type === "message" && entry.message.role === "user") {
-				userMessagesSeen++;
-				fallbackUserId = entry.id;
-				if (userMessagesSeen >= turnsToConsume) break;
-			}
-		}
-		targetUserId ??= fallbackUserId;
-		if (!targetUserId) {
-			this.showStatus("Nothing to roll back");
-			return;
-		}
-
-		let result: RollbackResult;
-		try {
-			result = rollbackLastTurn(this.sessionManager.getSessionId(), { deferCommit: true, targetUserId });
-		} catch (error) {
-			this.showError(
-				`Rollback could not prepare recovery: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			return;
-		}
-		if (!result.complete) {
-			const failures = result.failed
-				.slice(0, 3)
-				.map(({ path: file, error }) => `${path.basename(file)}: ${error}`)
-				.join("; ");
-			this.showWarning(
-				`Rollback incomplete. ${result.restored.length} file(s) restored, ${result.deleted.length} deleted, ${result.failed.length} failed. ${failures}. Chat unchanged. /rollback retries this turn's unfinished recovery.`,
-			);
-			return;
-		}
-
-		let chatRewound = false;
-		try {
-			// Restore first, but keep snapshots and completed-path receipts until
-			// the fork succeeds. A veto or exception retries only this chat rewind.
-			const oldSid = this.sessionManager.getSessionId();
-			const forkResult = await this.runtimeHost.fork(targetUserId, { position: "before" });
-			if (forkResult.cancelled) {
-				this.showWarning(
-					"File recovery complete. Chat rewind cancelled. /rollback retries the same turn without restoring completed files again.",
-				);
-				return;
-			}
-			chatRewound = true;
-			migrateRollbackSession(oldSid, this.sessionManager.getSessionId());
-			if (result.turnIndex !== undefined) commitRollbackTurn(this.sessionManager.getSessionId(), result.turnIndex);
-			// /redo cannot cross a fork because the branched session has new entry ids.
-			this.redoStack.length = 0;
-			if (forkResult.selectedText && !this.editor.getText().trim()) {
-				this.editor.setText(forkResult.selectedText);
-			}
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			this.showError(
-				chatRewound
-					? `Chat rewound, but finishing rollback failed: ${message}`
-					: `File recovery complete; chat rewind failed: ${message}. /rollback retries the same turn.`,
-			);
-			return;
-		}
-
-		const names = (paths: string[]): string => {
-			const base = paths
-				.slice(0, 3)
-				.map((p) => path.basename(p))
-				.join(", ");
-			return paths.length > 3 ? `${base}, …` : base;
-		};
-		const parts: string[] = [];
-		if (result.restored.length > 0)
-			parts.push(`${result.restored.length} file(s) restored (${names(result.restored)})`);
-		if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted (${names(result.deleted)})`);
-		if (parts.length === 0)
-			parts.push(result.turnIndex === undefined ? "no file changes to restore" : "file recovery complete");
-		this.showStatus(`Rollback complete — ${parts.join("; ")}.`);
-	}
-
 	/**
 	 * Get capitalized display string for an app keybinding action.
 	 */
 	private getAppKeyDisplay(action: AppKeybinding): string {
 		return keyDisplayText(action);
-	}
-
-	/**
-	 * Get capitalized display string for an editor keybinding action.
-	 */
-	private getEditorKeyDisplay(action: Keybinding): string {
-		return keyDisplayText(action);
-	}
-
-	/** Prints the short /help block: the commands and keys a new user needs first. */
-	private handleHelpCommand(): void {
-		const lines = buildHelpLines(
-			{
-				cyclePermissionMode: this.getAppKeyDisplay("app.mode.cycle"),
-				interrupt: this.getAppKeyDisplay("app.interrupt"),
-			},
-			(title) => theme.bold(theme.fg("accent", title)),
-		);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.ui.requestRender();
-	}
-
-	private handleHotkeysCommand(): void {
-		// Navigation keybindings
-		const cursorUp = this.getEditorKeyDisplay("tui.editor.cursorUp");
-		const cursorDown = this.getEditorKeyDisplay("tui.editor.cursorDown");
-		const cursorLeft = this.getEditorKeyDisplay("tui.editor.cursorLeft");
-		const cursorRight = this.getEditorKeyDisplay("tui.editor.cursorRight");
-		const cursorWordLeft = this.getEditorKeyDisplay("tui.editor.cursorWordLeft");
-		const cursorWordRight = this.getEditorKeyDisplay("tui.editor.cursorWordRight");
-		const cursorLineStart = this.getEditorKeyDisplay("tui.editor.cursorLineStart");
-		const cursorLineEnd = this.getEditorKeyDisplay("tui.editor.cursorLineEnd");
-		const jumpForward = this.getEditorKeyDisplay("tui.editor.jumpForward");
-		const jumpBackward = this.getEditorKeyDisplay("tui.editor.jumpBackward");
-		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
-		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
-
-		// Editing keybindings
-		const submit = this.getEditorKeyDisplay("tui.input.submit");
-		const newLine = this.getEditorKeyDisplay("tui.input.newLine");
-		const deleteWordBackward = this.getEditorKeyDisplay("tui.editor.deleteWordBackward");
-		const deleteWordForward = this.getEditorKeyDisplay("tui.editor.deleteWordForward");
-		const deleteToLineStart = this.getEditorKeyDisplay("tui.editor.deleteToLineStart");
-		const deleteToLineEnd = this.getEditorKeyDisplay("tui.editor.deleteToLineEnd");
-		const yank = this.getEditorKeyDisplay("tui.editor.yank");
-		const yankPop = this.getEditorKeyDisplay("tui.editor.yankPop");
-		const undo = this.getEditorKeyDisplay("tui.editor.undo");
-		const tab = this.getEditorKeyDisplay("tui.input.tab");
-
-		// App keybindings
-		const interrupt = this.getAppKeyDisplay("app.interrupt");
-		const clear = this.getAppKeyDisplay("app.clear");
-		const exit = this.getAppKeyDisplay("app.exit");
-		const suspend = this.getAppKeyDisplay("app.suspend");
-		const cycleThinkingLevel = this.getAppKeyDisplay("app.thinking.cycle");
-		const cyclePermissionMode = this.getAppKeyDisplay("app.mode.cycle");
-		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
-		const selectModel = this.getAppKeyDisplay("app.model.select");
-		const expandTools = "click";
-		const toggleThinking = this.getAppKeyDisplay("app.thinking.toggle");
-		const externalEditor = this.getAppKeyDisplay("app.editor.external");
-		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
-		const copyMessage = this.getAppKeyDisplay("app.message.copy");
-		const followUp = this.getAppKeyDisplay("app.message.followUp");
-		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
-		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
-
-		let hotkeys = `
-**Navigation**
-| Key | Action |
-|-----|--------|
-| \`${cursorUp}\` / \`${cursorDown}\` / \`${cursorLeft}\` / \`${cursorRight}\` | Move cursor / browse history |
-| \`${cursorWordLeft}\` / \`${cursorWordRight}\` | Move by word |
-| \`${cursorLineStart}\` | Start of line |
-| \`${cursorLineEnd}\` | End of line |
-| \`${jumpForward}\` | Jump forward to character |
-| \`${jumpBackward}\` | Jump backward to character |
-| \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
-| Mouse wheel | Scroll session (Ctrl+wheel pages) |
-
-**Editing**
-| Key | Action |
-|-----|--------|
-| \`${submit}\` | Send message |
-| \`${newLine}\` | New line${process.platform === "win32" ? " (Ctrl+Enter on Windows Terminal)" : ""} |
-| \`${deleteWordBackward}\` | Delete word backwards |
-| \`${deleteWordForward}\` | Delete word forwards |
-| \`${deleteToLineStart}\` | Delete to start of line |
-| \`${deleteToLineEnd}\` | Delete to end of line |
-| \`${yank}\` | Paste the most-recently-deleted text |
-| \`${yankPop}\` | Cycle through the deleted text after pasting |
-| \`${undo}\` | Undo |
-
-**Other**
-| Key | Action |
-|-----|--------|
-| \`${tab}\` | Path completion / accept autocomplete |
-| \`${interrupt}\` | Cancel autocomplete / abort streaming |
-| \`${clear}\` | Clear editor (first) / exit (second) |
-| \`${exit}\` twice | Exit (when editor is empty) |
-| \`${suspend}\` | Suspend to background |
-| \`${cyclePermissionMode}\` | Cycle permission mode |
-${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
-| \`${selectModel}\` | Open model selector |
-| \`${expandTools}\` | Expand or collapse a thinking/tool card |
-${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |\n` : ""}| \`${externalEditor}\` | Edit message in external editor |
-| \`${copyMessage}\` | Copy last assistant message |
-| \`${followUp}\` | Queue follow-up message |
-| \`${dequeue}\` | Restore queued messages |
-| \`${pasteImage}\` | Paste image or text from clipboard |
-| \`/paste-image\` | Paste image without a terminal shortcut |
-| \`/\` | Slash commands |
-| \`!\` | Run bash command |
-| \`!!\` | Run bash command (excluded from context) |
-`;
-
-		// Add extension-registered shortcuts
-		const extensionRunner = this.session.extensionRunner;
-		const shortcuts = extensionRunner.getShortcuts(this.keybindings.getEffectiveConfig());
-		if (shortcuts.size > 0) {
-			hotkeys += `
-**Extensions**
-| Key | Action |
-|-----|--------|
-`;
-			for (const [key, shortcut] of shortcuts) {
-				const description = shortcut.description ?? shortcut.extensionPath;
-				const keyDisplay = formatKeyText(key, { capitalize: true });
-				hotkeys += `| \`${keyDisplay}\` | ${description} |\n`;
-			}
-		}
-
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Keyboard Shortcuts")), 1, 0));
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Markdown(hotkeys.trim(), 1, 1, this.getMarkdownThemeWithSettings()));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.ui.requestRender();
 	}
 
 	private async handleClearCommand(): Promise<void> {
