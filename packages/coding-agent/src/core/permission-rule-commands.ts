@@ -74,7 +74,6 @@ const MAX_STAGES = 16;
 const SUBSTITUTION = "\u0001";
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-const HEREDOC_DELIMITER = /'([^']*)'|"([^"]*)"|([^\s;&|<>()'"]*)/y;
 /** Words that start a command without being it. */
 const PREFIX_WORDS = new Set(["!", "{", "}", "if", "then", "do", "else", "elif", "while", "until", "time"]);
 /** Commands that run the command after them: options that take a value, and positionals before it. */
@@ -106,8 +105,44 @@ const VALUED_SHELL_OPTION = /^[-+][A-Za-z]*[oO]$/;
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
-/** Adds the segments of `text` to `segments` in one pass (see the module comment). */
-function scan(text: string, segments: Segment[]): void {
+/**
+ * The end marker bash takes from the here-document word at `start`: the word after quote removal,
+ * so `\EOF`, `E"O"F` and `'E'OF` all end at a line `EOF`. `delimiter` is undefined when bash could
+ * read the word differently than this does (a `$` or backtick, a line continuation) or rejects it
+ * (an unclosed quote, no word).
+ */
+function heredocDelimiter(text: string, start: number): { delimiter: string | undefined; end: number } {
+	let delimiter = "";
+	let quote: "'" | '"' | undefined;
+	let i = start;
+	for (; i < text.length; i++) {
+		const ch = text[i];
+		if (quote === "'") {
+			if (ch === "'") quote = undefined;
+			else delimiter += ch;
+		} else if (ch === "\\") {
+			const next = text[i + 1];
+			if (next === undefined || next === "\n") return { delimiter: undefined, end: i };
+			// Inside double quotes a backslash is kept unless it escapes $ ` " or \.
+			if (quote === '"' && !'$`"\\'.includes(next)) delimiter += ch;
+			delimiter += next;
+			i++;
+		} else if (ch === "$" || ch === "`") return { delimiter: undefined, end: i };
+		else if (quote === '"') {
+			if (ch === '"') quote = undefined;
+			else delimiter += ch;
+		} else if (ch === "'" || ch === '"') quote = ch;
+		else if (" \t\n;&|<>()".includes(ch)) break;
+		else delimiter += ch;
+	}
+	return { delimiter: quote || i === start ? undefined : delimiter, end: i };
+}
+
+/**
+ * Adds the segments of `text` to `segments` in one pass (see the module comment). Returns true when
+ * a here-document's end marker can't be resolved, so later lines may be body or commands.
+ */
+function scan(text: string, segments: Segment[]): boolean {
 	const newFrame = (closer?: ")" | "`"): Frame => ({
 		closer,
 		parens: 0,
@@ -120,6 +155,7 @@ function scan(text: string, segments: Segment[]): void {
 	const stack = [newFrame()];
 	let f = stack[0];
 	const heredocs: Array<{ delimiter: string; stripTabs: boolean; segment: Segment }> = [];
+	let unresolved = false;
 
 	const segment = () => {
 		f.segment ??= { words: [], expanded: [] };
@@ -223,10 +259,10 @@ function scan(text: string, segments: Segment[]): void {
 				const stripTabs = text[i] === "-";
 				if (stripTabs) i++;
 				while (text[i] === " " || text[i] === "\t") i++;
-				HEREDOC_DELIMITER.lastIndex = i;
-				const match = HEREDOC_DELIMITER.exec(text);
-				heredocs.push({ delimiter: match?.[1] ?? match?.[2] ?? match?.[3] ?? "", stripTabs, segment: segment() });
-				i = HEREDOC_DELIMITER.lastIndex - 1;
+				const { delimiter, end } = heredocDelimiter(text, i);
+				unresolved ||= delimiter === undefined;
+				heredocs.push({ delimiter: delimiter ?? "", stripTabs, segment: segment() });
+				i = end - 1;
 				continue;
 			}
 			while (text[i + 1] === "<" || text[i + 1] === ">" || text[i + 1] === "&" || text[i + 1] === "|") i++;
@@ -249,6 +285,7 @@ function scan(text: string, segments: Segment[]): void {
 	}
 	while (stack.length > 1) close();
 	endSegment();
+	return unresolved;
 }
 
 function basenameOf(word: string): string {
@@ -371,7 +408,7 @@ export function deniedCommandLines(command: string, budget = Number.POSITIVE_INF
 		if (result.left < 0) result.uncheckable = true;
 		if (result.uncheckable) break;
 		const segments: Segment[] = [];
-		scan(text, segments);
+		if (scan(text, segments)) result.uncheckable = true;
 		for (const segment of segments) segmentLines(segment, depth, result, queue);
 	}
 	if (result.left < 0) result.uncheckable = true;

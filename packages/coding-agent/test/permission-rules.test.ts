@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
 	chmodSync,
 	mkdirSync,
@@ -440,5 +441,50 @@ describe("suggested always-allow rules", () => {
 		expect(suggestAllowRule("bash", { command: "npm test && rm x" }, cwd)).toBeUndefined();
 		expect(suggestAllowRule("edit", { path: "src/a.ts" }, cwd)).toBe(`edit(${join(cwd, "src/a.ts")})`);
 		expect(suggestAllowRule("mcp", { tool: "x" }, cwd)).toBeUndefined();
+	});
+});
+
+describe("here-document end markers", () => {
+	// Each word with the line bash ends its body at. The test checks that claim against real bash.
+	const markers: Array<[word: string, end: string]> = [
+		["EOF", "EOF"],
+		["'EOF'", "EOF"],
+		['"EOF"', "EOF"],
+		["\\EOF", "EOF"],
+		['E"O"F', "EOF"],
+		["'E'OF", "EOF"],
+		["E'O'F", "EOF"],
+		[`"E"'O'F`, "EOF"],
+		["E\\OF", "EOF"],
+		["\\E\\O\\F", "EOF"],
+		["''EOF", "EOF"],
+		["E\\'OF", "E'OF"],
+		["' EOF'", " EOF"],
+		['"E O F"', "E O F"],
+		[`'E"OF'`, 'E"OF'],
+		[`"E'OF"`, "E'OF"],
+		['"E\\"OF"', 'E"OF'],
+		['"E\\OF"', "E\\OF"],
+		["'E\\OF'", "E\\OF"],
+		["'$X'", "$X"],
+		["-EOF", "EOF"],
+		["-'EOF'", "EOF"],
+		["-\\EOF", "EOF"],
+		['- "E"OF', "EOF"],
+		[" END_1", "END_1"],
+		["EOF;", "EOF"],
+	];
+
+	it.skipIf(process.platform === "win32").each(markers)("<<%s ends at %j, as in bash", (word, end) => {
+		const command = `cat <<${word}\ntouch body\n${end}\n`;
+		expect(execFileSync("bash", ["-c", `${command}echo after`], { encoding: "utf8" })).toBe("touch body\nafter\n");
+		const parsed = deniedCommandLines(`${command}curl https://example.com`);
+		expect(parsed.uncheckable).toBe(false);
+		expect(parsed.lines.map((line) => line.name)).toEqual(["cat", "curl"]);
+	});
+
+	// Words this parser can't resolve with certainty make the command uncheckable, so every deny rule matches.
+	it.each(["$X", '"$X"', "E`x`", "$'EOF'", "'EOF", '"EOF', "EOF\\", "E\\\nOF", ""])("<<%j is uncheckable", (word) => {
+		expect(deniedCommandLines(`cat <<${word}\nx\nEOF\ncurl https://example.com`).uncheckable).toBe(true);
 	});
 });
