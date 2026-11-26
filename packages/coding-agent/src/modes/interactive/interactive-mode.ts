@@ -107,17 +107,9 @@ import * as processRegistry from "../../core/process-registry.ts";
 import {
 	captureTreeChanges,
 	clearRollback,
-	commitRollbackTurn,
-	getRollbackRecoveryBlockReason,
-	getRollbackTargetUserId,
 	initRollback,
-	isRollbackEnabled,
 	isRollbackSessionForceEnabled,
-	migrateRollbackSession,
-	peekRollbackTurnsConsumed,
-	type RollbackResult,
 	beginTurn as rollbackBeginTurn,
-	rollbackLastTurn,
 	setRollbackWarningHandler,
 } from "../../core/rollback.ts";
 import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
@@ -223,6 +215,7 @@ import {
 } from "./model-commands.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { type PermissionControllerHost, PermissionModeController } from "./permission-controller.ts";
+import { handleRollbackCommand, type RollbackCommandHost } from "./rollback-command.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
 import {
 	findArgumentlessSlashCommand,
@@ -570,6 +563,8 @@ export class InteractiveMode {
 	// Owns permission mode changes and their history; see permission-controller.ts.
 	private readonly permissions = new PermissionModeController(this.createPermissionControllerHost());
 	private readonly modelCommandHost: ModelCommandHost = this.createModelCommandHost();
+	// Passed to rollback-command.ts for /rollback.
+	private readonly rollbackCommandHost: RollbackCommandHost = this.createRollbackCommandHost();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -5306,6 +5301,32 @@ export class InteractiveMode {
 		};
 	}
 
+	// Builds the RollbackCommandHost. `session` and `editor` stay getters because /new, /resume and
+	// /fork replace the session and extensions can replace the editor.
+	private createRollbackCommandHost(): RollbackCommandHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get runtimeHost() {
+				return mode.runtimeHost;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get redoStack() {
+				return mode.redoStack;
+			},
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+		};
+	}
+
 	// Builds the PermissionControllerHost. `session` stays a getter because /new, /resume and /fork replace it.
 	private createPermissionControllerHost(): PermissionControllerHost {
 		const mode = this;
@@ -5361,7 +5382,7 @@ export class InteractiveMode {
 			handleModeCommand: (args) => this.permissions.handleModeCommand(args),
 			applyPermissionMode: (permissionMode) => this.permissions.applyPermissionMode(permissionMode),
 			showProcessesSelector: () => this.showProcessesSelector(),
-			handleRollbackCommand: () => this.handleRollbackCommand(),
+			handleRollbackCommand: () => handleRollbackCommand(this.rollbackCommandHost),
 			showTrustSelector: () => this.showTrustSelector(),
 			showOAuthSelector: (oauthMode) => showOAuthSelector(this.loginFlowHost, oauthMode),
 			handleClearCommand: () => this.handleClearCommand(),
@@ -6190,119 +6211,6 @@ export class InteractiveMode {
 			});
 			return { component, focus: component };
 		});
-	}
-
-	// lunr: /rollback — restore last turn's file changes + persistently rewind the conversation.
-	private async handleRollbackCommand(): Promise<void> {
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /rollback.");
-			return;
-		}
-		if (!isRollbackEnabled(this.sessionManager.getSessionId())) {
-			this.showStatus("Rollback is disabled — enable it in /settings → Rollback");
-			return;
-		}
-		const recoveryBlocked = getRollbackRecoveryBlockReason(this.sessionManager.getSessionId());
-		if (recoveryBlocked) {
-			this.showWarning(recoveryBlocked);
-			return;
-		}
-
-		// lunr: how many turns the rollback will consume — the newest non-empty turn
-		// plus any empty (chat-only) turns on top of it. The conversation must rewind
-		// past the same number of user messages or files and messages desync.
-		// Defaults to 1 so /rollback still rewinds one exchange when there's nothing to restore.
-		const turnsToConsume = Math.max(1, peekRollbackTurnsConsumed(this.sessionManager.getSessionId()));
-
-		// Find the rewind target (the turnsToConsume-th user message from the end of
-		// the current branch) BEFORE mutating anything — forking to it is what makes
-		// the rewind persistent.
-		const branch = this.sessionManager.getBranch();
-		let targetUserId = getRollbackTargetUserId(this.sessionManager.getSessionId());
-		if (targetUserId && !branch.some((entry) => entry.id === targetUserId)) {
-			this.showWarning("Rollback recovery belongs to another chat branch. Return to that branch to retry.");
-			return;
-		}
-		let userMessagesSeen = 0;
-		let fallbackUserId: string | undefined;
-		for (let i = branch.length - 1; !targetUserId && i >= 0; i--) {
-			const entry = branch[i];
-			if (entry.type === "message" && entry.message.role === "user") {
-				userMessagesSeen++;
-				fallbackUserId = entry.id;
-				if (userMessagesSeen >= turnsToConsume) break;
-			}
-		}
-		targetUserId ??= fallbackUserId;
-		if (!targetUserId) {
-			this.showStatus("Nothing to roll back");
-			return;
-		}
-
-		let result: RollbackResult;
-		try {
-			result = rollbackLastTurn(this.sessionManager.getSessionId(), { deferCommit: true, targetUserId });
-		} catch (error) {
-			this.showError(
-				`Rollback could not prepare recovery: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			return;
-		}
-		if (!result.complete) {
-			const failures = result.failed
-				.slice(0, 3)
-				.map(({ path: file, error }) => `${path.basename(file)}: ${error}`)
-				.join("; ");
-			this.showWarning(
-				`Rollback incomplete. ${result.restored.length} file(s) restored, ${result.deleted.length} deleted, ${result.failed.length} failed. ${failures}. Chat unchanged. /rollback retries this turn's unfinished recovery.`,
-			);
-			return;
-		}
-
-		let chatRewound = false;
-		try {
-			// Restore first, but keep snapshots and completed-path receipts until
-			// the fork succeeds. A veto or exception retries only this chat rewind.
-			const oldSid = this.sessionManager.getSessionId();
-			const forkResult = await this.runtimeHost.fork(targetUserId, { position: "before" });
-			if (forkResult.cancelled) {
-				this.showWarning(
-					"File recovery complete. Chat rewind cancelled. /rollback retries the same turn without restoring completed files again.",
-				);
-				return;
-			}
-			chatRewound = true;
-			migrateRollbackSession(oldSid, this.sessionManager.getSessionId());
-			if (result.turnIndex !== undefined) commitRollbackTurn(this.sessionManager.getSessionId(), result.turnIndex);
-			// /redo cannot cross a fork because the branched session has new entry ids.
-			this.redoStack.length = 0;
-			if (forkResult.selectedText && !this.editor.getText().trim()) {
-				this.editor.setText(forkResult.selectedText);
-			}
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			this.showError(
-				chatRewound
-					? `Chat rewound, but finishing rollback failed: ${message}`
-					: `File recovery complete; chat rewind failed: ${message}. /rollback retries the same turn.`,
-			);
-			return;
-		}
-
-		const names = (paths: string[]): string => {
-			const base = paths
-				.slice(0, 3)
-				.map((p) => path.basename(p))
-				.join(", ");
-			return paths.length > 3 ? `${base}, …` : base;
-		};
-		const parts: string[] = [];
-		if (result.restored.length > 0)
-			parts.push(`${result.restored.length} file(s) restored (${names(result.restored)})`);
-		if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted (${names(result.deleted)})`);
-		if (parts.length === 0)
-			parts.push(result.turnIndex === undefined ? "no file changes to restore" : "file recovery complete");
-		this.showStatus(`Rollback complete — ${parts.join("; ")}.`);
 	}
 
 	/**
