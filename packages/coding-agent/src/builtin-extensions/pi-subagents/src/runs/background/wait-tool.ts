@@ -1,4 +1,4 @@
-// @ts-nocheck
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { SubagentWaitParams } from "../../extension/schemas.ts";
 import type { Details, SubagentState } from "../../shared/types.ts";

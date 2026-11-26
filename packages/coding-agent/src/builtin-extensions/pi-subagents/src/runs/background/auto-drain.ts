@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { snapshotBackgroundWork } from "../../api/background-work.ts";
 import { ASYNC_DIR, RESULTS_DIR, type Details, type SubagentState } from "../../shared/types.ts";
