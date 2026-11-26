@@ -43,8 +43,6 @@ import type {
 import {
 	cleanupSessionResources,
 	estimateContextTokens as estimateRequestContextTokens,
-	isContextOverflow,
-	isRetryableAssistantError,
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
@@ -52,7 +50,6 @@ import { getAgentDir } from "../config.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
-import { sleep } from "../utils/sleep.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import {
 	type AutoReviewer,
@@ -129,6 +126,13 @@ import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
 import { SessionCompaction, type SessionCompactionHost } from "./session-compaction.ts";
 import type { SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
+import {
+	isRetryableError,
+	isRotationError,
+	prepareRetry,
+	type SessionRetryHost,
+	tryRotateSubscriptionKey,
+} from "./session-retry.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
@@ -150,7 +154,6 @@ import { createAllToolDefinitions } from "./tools/index.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { getUserMessagesForForking, runTreeNavigation, type TreeNavigationHost } from "./tree-navigation.ts";
-import { isAuthInvalidError, isUsageLimitError } from "./usage-limit.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -424,6 +427,8 @@ export class AgentSession {
 	// Retry state
 	private _retryAbortController: AbortController | undefined = undefined;
 	private _retryAttempt = 0;
+	// Passed to the session-retry.ts functions after a failed run.
+	private readonly _retryHost: SessionRetryHost = this.createRetryHost();
 
 	// Bash execution state
 	private _bashOperations = new Map<AbortController, Promise<void>>();
@@ -673,6 +678,39 @@ export class AgentSession {
 			setThinkingLevel: (level) => this.setThinkingLevel(level),
 			getAvailableThinkingLevels: () => this.getAvailableThinkingLevels(),
 			supportsThinking: () => this.supportsThinking(),
+		};
+	}
+
+	// Builds the SessionRetryHost. The retry count and abort controller stay AgentSession fields,
+	// which the host reads and sets; the model changes over the session's life.
+	private createRetryHost(): SessionRetryHost {
+		const session = this;
+		return {
+			get agent() {
+				return session.agent;
+			},
+			get settingsManager() {
+				return session.settingsManager;
+			},
+			get modelRuntime() {
+				return session._modelRuntime;
+			},
+			get model() {
+				return session.model;
+			},
+			get retryAttempt() {
+				return session._retryAttempt;
+			},
+			set retryAttempt(attempt) {
+				session._retryAttempt = attempt;
+			},
+			get retryAbortController() {
+				return session._retryAbortController;
+			},
+			set retryAbortController(controller) {
+				session._retryAbortController = controller;
+			},
+			emit: (event) => this._emit(event),
 		};
 	}
 
@@ -1014,7 +1052,7 @@ export class AgentSession {
 		for (let i = event.messages.length - 1; i >= 0; i--) {
 			const message = event.messages[i];
 			if (message.role === "assistant") {
-				return this._isRetryableError(message as AssistantMessage);
+				return isRetryableError(this._retryHost, message as AssistantMessage);
 			}
 		}
 		return false;
@@ -1820,16 +1858,24 @@ export class AgentSession {
 
 		// lunr: quota-dead or auth-invalid keys rotate immediately — same-key backoff
 		// against an exhausted credential is pointless.
-		if (msg.stopReason === "error" && this._isRotationError(msg) && (await this._tryRotateSubscriptionKey(msg))) {
+		if (
+			msg.stopReason === "error" &&
+			isRotationError(msg) &&
+			(await tryRotateSubscriptionKey(this._retryHost, msg))
+		) {
 			return true;
 		}
 
-		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
+		if (isRetryableError(this._retryHost, msg) && (await prepareRetry(this._retryHost, msg))) {
 			return true;
 		}
 
 		// lunr: last-resort rotation for retryable errors once same-key backoff is exhausted.
-		if (msg.stopReason === "error" && this._isRetryableError(msg) && (await this._tryRotateSubscriptionKey(msg))) {
+		if (
+			msg.stopReason === "error" &&
+			isRetryableError(this._retryHost, msg) &&
+			(await tryRotateSubscriptionKey(this._retryHost, msg))
+		) {
 			return true;
 		}
 
@@ -3136,123 +3182,10 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Check if an error is retryable (overloaded, rate limit, server errors).
-	 * Context overflow errors are NOT retryable (handled by compaction instead).
-	 */
-	private _isRetryableError(message: AssistantMessage): boolean {
-		// Context overflow is handled by compaction, not retry.
-		if (isContextOverflow(message, this.model?.contextWindow ?? 0)) return false;
-		return isRetryableAssistantError(message);
-	}
-
-	/**
-	 * Prepare a retryable error for continuation with exponential backoff.
-	 * @returns true if the caller should continue the agent, false otherwise
-	 */
-	private async _prepareRetry(message: AssistantMessage): Promise<boolean> {
-		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled) {
-			return false;
-		}
-
-		this._retryAttempt++;
-
-		if (this._retryAttempt > settings.maxRetries) {
-			// Preserve the completed attempt count so post-run handling can emit the final failure.
-			this._retryAttempt--;
-			return false;
-		}
-
-		const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
-
-		this._emit({
-			type: "auto_retry_start",
-			attempt: this._retryAttempt,
-			maxAttempts: settings.maxRetries,
-			delayMs,
-			errorMessage: message.errorMessage || "Unknown error",
-		});
-
-		// Remove error message from agent state (keep in session for history)
-		const messages = this.agent.state.messages;
-		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-			this.agent.state.messages = messages.slice(0, -1);
-		}
-
-		// Wait with exponential backoff (abortable)
-		this._retryAbortController = new AbortController();
-		try {
-			await sleep(delayMs, this._retryAbortController.signal);
-		} catch {
-			// Aborted during sleep - emit end event so UI can clean up
-			const attempt = this._retryAttempt;
-			this._retryAttempt = 0;
-			this._emit({
-				type: "auto_retry_end",
-				success: false,
-				attempt,
-				finalError: "Retry cancelled",
-			});
-			return false;
-		} finally {
-			this._retryAbortController = undefined;
-		}
-
-		return true;
-	}
-
-	/**
 	 * Cancel in-progress retry.
 	 */
 	abortRetry(): void {
 		this._retryAbortController?.abort();
-	}
-
-	/** lunr: errors that mark a subscription key dead — rotate without same-key backoff. */
-	private _isRotationError(message: AssistantMessage): boolean {
-		const errorMessage = message.errorMessage ?? "";
-		return isUsageLimitError(errorMessage) || isAuthInvalidError(errorMessage);
-	}
-
-	/**
-	 * lunr: multi-subscription rotation. When a run is about to fail final, switch
-	 * the provider to the next pooled key (mirrored into the credential store by
-	 * SubscriptionManager) and continue immediately — no backoff sleep. Returns
-	 * false when rotation is impossible, leaving the error as the final message.
-	 */
-	private async _tryRotateSubscriptionKey(message: AssistantMessage): Promise<boolean> {
-		const requestKey = this._modelRuntime.getRequestSubscriptionKey(message);
-		if (!requestKey) return false;
-		const providerId = requestKey.providerId;
-		// A runtime --api-key override wins over auth.json in RuntimeCredentials.read(),
-		// so mirroring a rotated key into the store would have no effect — skip rotation.
-		if (this._modelRuntime.hasRuntimeApiKey(providerId)) return false;
-		const manager = this._modelRuntime.subscriptionManager;
-
-		const errorMessage = message.errorMessage ?? "Unknown error";
-		const entry = await manager.rotateOnFailure(providerId, errorMessage, requestKey.fingerprint);
-		if (!entry) return false;
-
-		// Close out any in-flight retry indicator; a fresh key gets a fresh retry budget.
-		if (this._retryAttempt > 0) {
-			this._emit({ type: "auto_retry_end", success: true, attempt: this._retryAttempt });
-		}
-		this._retryAttempt = 0;
-
-		// Remove error message from agent state (keep in session for history) —
-		// same slice pattern as _prepareRetry.
-		const messages = this.agent.state.messages;
-		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-			this.agent.state.messages = messages.slice(0, -1);
-		}
-
-		this._emit({
-			type: "subscription_rotation",
-			providerId,
-			keyName: entry.name,
-			errorMessage,
-		});
-		return true;
 	}
 
 	/** Whether auto-retry is currently in progress */
