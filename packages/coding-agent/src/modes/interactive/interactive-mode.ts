@@ -7,8 +7,6 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { CLAUDE_CODE_HISTORY_REPLAYED_NOTE, claudeCodeHistoryReplayed } from "@earendil-works/pi-ai";
 import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
@@ -38,15 +36,9 @@ import {
 } from "@earendil-works/pi-tui";
 import { spawn } from "child_process";
 import { APP_NAME, APP_TITLE, CONFIG_DIR_NAME, getAgentDir, getDebugLogPath, VERSION } from "../../config.ts";
-import {
-	type AgentSession,
-	type AgentSessionEvent,
-	NothingToCompactError,
-	parseSkillBlock,
-} from "../../core/agent-session.ts";
+import { type AgentSession, type AgentSessionEvent, NothingToCompactError } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SIGNAL_DISPOSE_LIMIT_MS } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
-import { CACHE_TTL_MS, type CacheMiss, collectCacheMisses, detectCacheMiss } from "../../core/cache-stats.ts";
 import { startCatalogRefreshPolling } from "../../core/catalog-refresh-polling.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -61,7 +53,6 @@ import type {
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { globalBridge } from "../../core/global-bridge.ts";
 import { configureHttpDispatcher } from "../../core/http-dispatcher.ts";
-import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
@@ -82,7 +73,6 @@ import {
 	registerTransferHandler,
 	requestSessionTransfer,
 } from "../../core/session-handoff.ts";
-import { type SessionEntry, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/subagent-cancellation.ts";
@@ -101,18 +91,22 @@ import { processImage } from "../../utils/image-process.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool, getToolPath } from "../../utils/tools-manager.ts";
 import { type ApprovalDialogHost, showPlanApprovalDialog, showToolApprovalDialog } from "./approval-dialogs.ts";
+import {
+	addCustomEntryToChat,
+	addMessageToChat,
+	type ChatHistoryHost,
+	maybeShowCacheMissNotice,
+	maybeShowHistoryReplayNotice,
+	renderInitialMessages,
+	renderSessionEntries,
+} from "./chat-history.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BootScreenComponent, type BootScreenRow } from "./components/boot-screen.ts";
-import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
-import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
-import { CustomEntryComponent } from "./components/custom-entry.ts";
-import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-import { FooterComponent, formatTokens } from "./components/footer.ts";
-import { InjectedPromptMessageComponent } from "./components/injected-prompt-message.ts";
+import { FooterComponent } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyText } from "./components/keybinding-hints.ts";
 import { type AuthSelectorProvider, formatAuthSelectorProviderType } from "./components/oauth-selector.ts";
 import {
@@ -126,7 +120,6 @@ import {
 	WELCOME_TEXT,
 } from "./components/onboarding.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
-import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
 	CompactionStatusIndicator,
 	IdleStatus,
@@ -137,7 +130,6 @@ import {
 import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/thinking-summary.ts";
 import { applySameToolGrouping, applyToolRunSpacing, ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
-import { UserMessageComponent } from "./components/user-message.ts";
 import { ExitConfirmation } from "./exit-confirmation.ts";
 import { ExtensionDialogs, type ExtensionDialogsHost } from "./extension-dialogs.ts";
 import { ExtensionWidgets, type ExtensionWidgetsHost } from "./extension-widgets.ts";
@@ -242,12 +234,6 @@ type QueuedUserInput = {
 	text: string;
 	images?: ImageContent[];
 };
-
-type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }>;
-
-function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
-	return "type" in item && item.type === "custom";
-}
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
 
@@ -521,6 +507,8 @@ export class InteractiveMode {
 	// `chatContainer` and the editor, so every member that reads a field must be a getter.
 	// Owns the dialog shown in place of the editor; see extension-dialogs.ts.
 	private readonly dialogs = new ExtensionDialogs(this.createExtensionDialogsHost());
+	// Passed to chat-history.ts, which draws the session's messages into the chat.
+	private readonly chatHistoryHost: ChatHistoryHost = this.createChatHistoryHost();
 	// Passed to the login-flow.ts functions so /login reaches this UI and the current session.
 	private readonly loginFlowHost: LoginFlowHost = this.createLoginFlowHost();
 	// Passed to the slash-dispatch.ts handlers when a builtin slash command is submitted.
@@ -888,7 +876,7 @@ export class InteractiveMode {
 		// MCP/LSP/web/intercom attach in the background so the editor is usable.
 		await this.rebindCurrentSession();
 		time("rebindCurrentSession");
-		this.renderInitialMessages();
+		renderInitialMessages(this.chatHistoryHost);
 		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
 			const modelList = this.session.scopedModels
 				.map((sm) => {
@@ -1360,7 +1348,7 @@ export class InteractiveMode {
 					}
 
 					this.clearChatContainer();
-					this.renderInitialMessages();
+					renderInitialMessages(this.chatHistoryHost);
 					if (result.editorText && !this.editor.getText().trim()) {
 						this.restoreEditorFromTreeResult(result);
 					}
@@ -1493,7 +1481,7 @@ export class InteractiveMode {
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.pendingTools.clear();
-		this.renderInitialMessages();
+		renderInitialMessages(this.chatHistoryHost);
 	}
 
 	/**
@@ -2516,7 +2504,7 @@ export class InteractiveMode {
 
 			case "entry_appended":
 				if (event.entry.type === "custom") {
-					this.addCustomEntryToChat(event.entry);
+					addCustomEntryToChat(this.chatHistoryHost, event.entry);
 					this.ui.requestRender();
 				}
 				break;
@@ -2534,7 +2522,7 @@ export class InteractiveMode {
 
 			case "message_start":
 				if (event.message.role === "custom") {
-					this.addMessageToChat(event.message);
+					addMessageToChat(this.chatHistoryHost, event.message);
 					this.ui.requestRender();
 				} else if (event.message.role === "user") {
 					// lunr: a new user message invalidates /redo
@@ -2542,7 +2530,7 @@ export class InteractiveMode {
 					// lunr: begin a new rollback turn (captures tree-scope baseline when enabled)
 					rollbackBeginTurn(this.sessionManager.getCwd(), this.sessionManager.getSessionId());
 					this.stopSmoothStreaming();
-					this.addMessageToChat(event.message);
+					addMessageToChat(this.chatHistoryHost, event.message);
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
@@ -2628,7 +2616,7 @@ export class InteractiveMode {
 					updateThinkingRunTimings(this.thinkingRunTimings, this.streamingMessage.content, Date.now(), true);
 					this.thinkingTimingsByMessage.set(this.streamingMessage, this.thinkingRunTimings);
 					this.streamingComponent.updateContent(this.streamingMessage);
-					this.maybeShowHistoryReplayNotice(this.streamingMessage);
+					maybeShowHistoryReplayNotice(this.chatHistoryHost, this.streamingMessage);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
@@ -2646,7 +2634,7 @@ export class InteractiveMode {
 						for (const [, component] of this.pendingTools.entries()) {
 							component.setArgsComplete();
 						}
-						this.maybeShowCacheMissNotice(this.streamingMessage);
+						maybeShowCacheMissNotice(this.chatHistoryHost, this.streamingMessage);
 					}
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
@@ -2844,321 +2832,6 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): void {
-		const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
-		if (!renderer) {
-			return;
-		}
-		const component = new CustomEntryComponent(entry, renderer);
-		component.setExpanded(this.toolOutputExpanded);
-		if (!component.hasContent()) {
-			return;
-		}
-
-		if (this.streamingComponent) {
-			const streamingIndex = this.chatContainer.children.indexOf(this.streamingComponent);
-			if (streamingIndex >= 0) {
-				this.chatContainer.children.splice(streamingIndex, 0, component);
-				return;
-			}
-		}
-
-		this.chatContainer.addChild(component);
-	}
-
-	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
-		switch (message.role) {
-			case "bashExecution": {
-				const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
-				if (message.output) {
-					component.appendOutput(message.output);
-				}
-				component.setComplete(
-					message.exitCode,
-					message.cancelled,
-					message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
-					message.fullOutputPath,
-				);
-				this.chatContainer.addChild(component);
-				break;
-			}
-			case "custom": {
-				if (message.display) {
-					const renderer = this.session.extensionRunner.getMessageRenderer(message.customType);
-					const component = new CustomMessageComponent(message, renderer, this.getMarkdownThemeWithSettings());
-					component.setExpanded(this.toolOutputExpanded);
-					this.chatContainer.addChild(component);
-				}
-				break;
-			}
-			case "compactionSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new CompactionSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
-				break;
-			}
-			case "branchSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new BranchSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
-				break;
-			}
-			case "user": {
-				const textContent = this.getUserMessageText(message);
-				if (textContent) {
-					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(new Spacer(1));
-					}
-					const skillBlock = parseSkillBlock(textContent);
-					// lunr: render injected prompts (/research /goal) collapsed instead
-					// of dumping the full multi-line prompt body verbatim.
-					const injected = detectInjectedPrompt(textContent);
-					if (injected) {
-						const component = new InjectedPromptMessageComponent(
-							injected.kind,
-							injected.summary,
-							textContent,
-							this.getMarkdownThemeWithSettings(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-					} else if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
-							this.getMarkdownThemeWithSettings(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-						// Render user message separately if present
-						if (skillBlock.userMessage) {
-							this.chatContainer.addChild(new Spacer(1));
-							const userComponent = new UserMessageComponent(
-								skillBlock.userMessage,
-								this.getMarkdownThemeWithSettings(),
-								this.outputPad,
-							);
-							this.chatContainer.addChild(userComponent);
-						}
-					} else {
-						const userComponent = new UserMessageComponent(
-							textContent,
-							this.getMarkdownThemeWithSettings(),
-							this.outputPad,
-						);
-						this.chatContainer.addChild(userComponent);
-					}
-					if (options?.populateHistory) {
-						this.editor.addToHistory?.(textContent);
-					}
-				}
-				break;
-			}
-			case "assistant": {
-				const assistantComponent = new AssistantMessageComponent(
-					message,
-					this.hideThinkingBlock,
-					this.getMarkdownThemeWithSettings(),
-					this.hiddenThinkingLabel,
-					this.outputPad,
-					this.thinkingCollapse,
-					{
-						requestRender: () => this.ui.requestRender(),
-						reasoningDisplay: this.settingsManager.getReasoningDisplay(),
-					},
-				);
-				// lunr: collapsible reasoning — re-attach live timings when this
-				// message was streamed in this session (undefined = history).
-				assistantComponent.setThinkingTimings(this.thinkingTimingsByMessage.get(message));
-				// lunr: ctrl+o expansion — inherit the global expand state.
-				assistantComponent.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(assistantComponent);
-				break;
-			}
-			case "toolResult": {
-				// Tool results are rendered inline with tool calls, handled separately
-				break;
-			}
-			default: {
-				const _exhaustive: never = message;
-			}
-		}
-	}
-
-	private renderSessionItems(
-		items: readonly RenderSessionItem[],
-		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
-	): void {
-		this.pendingTools.clear();
-		let browserActivityComponent: ToolExecutionComponent | undefined;
-		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
-		// Cache-miss notices are not persisted; re-derive them from the full entry
-		// list and re-inject them after the assistant messages that paid for them.
-		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
-			? collectCacheMisses(this.sessionManager.getEntries(), this.session.modelRuntime)
-			: new Map<AssistantMessage, CacheMiss>();
-
-		if (options.updateFooter) {
-			this.footer.invalidate();
-			this.updateEditorBorderColor();
-		}
-
-		for (const item of items) {
-			if (isCustomSessionEntry(item)) {
-				this.addCustomEntryToChat(item);
-				continue;
-			}
-
-			const message = item;
-			// Assistant messages need special handling for tool calls
-			if (message.role === "assistant") {
-				this.addMessageToChat(message);
-				// Render tool call components
-				for (const content of message.content) {
-					if (content.type === "toolCall") {
-						let component = content.name === "browser" ? browserActivityComponent : undefined;
-						if (component) {
-							component.beginNextExecution(content.id, content.arguments);
-						} else {
-							component = new ToolExecutionComponent(
-								content.name,
-								content.id,
-								content.arguments,
-								{
-									showImages: this.settingsManager.getShowImages(),
-									imageWidthCells: this.settingsManager.getImageWidthCells(),
-								},
-								this.getRegisteredToolDefinition(content.name),
-								this.ui,
-								this.sessionManager.getCwd(),
-							);
-							component.setExpanded(this.toolOutputExpanded);
-							this.addToolComponentToChat(component);
-							if (content.name === "browser") browserActivityComponent = component;
-						}
-
-						if (message.stopReason === "aborted" || message.stopReason === "error") {
-							let errorMessage: string;
-							if (message.stopReason === "aborted") {
-								const retryAttempt = this.session.retryAttempt;
-								errorMessage =
-									retryAttempt > 0
-										? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-										: "Operation aborted";
-							} else {
-								errorMessage = message.errorMessage || "Error";
-							}
-							component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
-						} else {
-							renderedPendingTools.set(content.id, component);
-						}
-					}
-				}
-				if (message.stopReason !== "aborted" && message.stopReason !== "error") {
-					const miss = cacheMisses.get(message);
-					if (miss) this.addCacheMissNotice(miss);
-				}
-			} else if (message.role === "toolResult") {
-				// Match tool results to pending tool components
-				const component = renderedPendingTools.get(message.toolCallId);
-				if (component) {
-					component.updateResult(message);
-					renderedPendingTools.delete(message.toolCallId);
-				}
-			} else {
-				if (message.role === "user") browserActivityComponent = undefined;
-				// All other messages use standard rendering
-				this.addMessageToChat(message, options);
-			}
-		}
-
-		for (const [toolCallId, component] of renderedPendingTools) {
-			this.pendingTools.set(toolCallId, component);
-		}
-		this.ui.requestRender();
-	}
-
-	/**
-	 * Render session entries to chat. Used for initial load and rebuild after compaction.
-	 * @param entries Compaction-aware session entries to render
-	 * @param options.updateFooter Update footer state
-	 * @param options.populateHistory Add user messages to editor history
-	 */
-	private renderSessionEntries(
-		entries: SessionEntry[],
-		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
-	): void {
-		const items = entries.flatMap((entry): RenderSessionItem[] => {
-			if (entry.type === "custom") {
-				return [entry];
-			}
-			return sessionEntryToContextMessages(entry);
-		});
-		this.renderSessionItems(items, options);
-	}
-
-	/**
-	 * Show a transcript notice when a completed assistant message paid for a
-	 * significant cache miss. The overlap estimate cannot establish identical prompt content. It also shows
-	 * a model switch, or an idle gap past the cache TTL.
-	 */
-	private maybeShowCacheMissNotice(message: AssistantMessage): void {
-		if (!this.settingsManager.getShowCacheMissNotices()) return;
-
-		// Entries don't contain `message` yet: message_end fires before persistence.
-		const miss = detectCacheMiss(this.sessionManager.getEntries(), message, this.session.modelRuntime);
-		if (miss) this.addCacheMissNotice(miss);
-	}
-
-	/** Warns when a Claude subscription session first grows past what Claude Code can send prompt-cached. */
-	private maybeShowHistoryReplayNotice(message: AssistantMessage): void {
-		if (!claudeCodeHistoryReplayed(message)) return;
-		// Entries don't contain `message` yet: message_end fires before persistence.
-		const entries = this.sessionManager.getEntries();
-		for (let index = entries.length - 1; index >= 0; index--) {
-			const entry = entries[index];
-			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-			if (claudeCodeHistoryReplayed(entry.message)) return;
-			break;
-		}
-		this.showWarning(CLAUDE_CODE_HISTORY_REPLAYED_NOTE);
-	}
-
-	private addCacheMissNotice(miss: CacheMiss): void {
-		if (miss.missedTokens < 20_000 && miss.missedCost < 0.1) return;
-
-		const cost = miss.missedCost >= 0.01 ? ` (~$${miss.missedCost.toFixed(2)})` : "";
-		const reBilled = `~${formatTokens(miss.missedTokens)} tokens may have missed cache${cost}`;
-		let label = "Estimated cache miss";
-		if (miss.modelChanged) {
-			label = "Estimated cache miss after model switch";
-		} else if (miss.idleMs >= CACHE_TTL_MS) {
-			label = `Cache miss after ${Math.round(miss.idleMs / 60_000)}m idle`;
-		}
-		const text = theme.fg("warning", `${label}: ${reBilled}`);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(text, 1, 0));
-	}
-
-	renderInitialMessages(): void {
-		const entries = this.sessionManager.buildContextEntries();
-		this.renderSessionEntries(entries, {
-			updateFooter: true,
-			populateHistory: true,
-		});
-		this.renderProjectTrustWarningIfNeeded();
-
-		// Show compaction info if session was compacted
-		const allEntries = this.sessionManager.getEntries();
-		const compactionCount = allEntries.filter((e) => e.type === "compaction").length;
-		if (compactionCount > 0) {
-			const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
-			this.showStatus(`Session compacted ${times}`);
-		}
-	}
-
 	private renderProjectTrustWarningIfNeeded(): void {
 		if (this.settingsManager.isProjectTrusted() || !hasTrustRequiringProjectResources(this.sessionManager.getCwd())) {
 			return;
@@ -3195,7 +2868,7 @@ export class InteractiveMode {
 
 	private rebuildChatFromMessages(): void {
 		this.clearChatContainer();
-		this.renderSessionEntries(this.sessionManager.buildContextEntries());
+		renderSessionEntries(this.chatHistoryHost, this.sessionManager.buildContextEntries());
 	}
 
 	// =========================================================================
@@ -3915,7 +3588,8 @@ export class InteractiveMode {
 
 	private renderCompactionResult(result: { summary: string; tokensBefore: number }): void {
 		this.rebuildChatFromMessages();
-		this.addMessageToChat(
+		addMessageToChat(
+			this.chatHistoryHost,
 			createCompactionSummaryMessage(result.summary, result.tokensBefore, new Date().toISOString()),
 		);
 		this.footer.invalidate();
@@ -4228,7 +3902,7 @@ export class InteractiveMode {
 			showStatusIndicator: (indicator) => this.showStatusIndicator(indicator),
 			clearStatusIndicator: (kind) => this.clearStatusIndicator(kind),
 			clearChatContainer: () => this.clearChatContainer(),
-			renderInitialMessages: () => this.renderInitialMessages(),
+			renderInitialMessages: () => renderInitialMessages(this.chatHistoryHost),
 			restoreEditorFromTreeResult: (result) => this.restoreEditorFromTreeResult(result),
 			flushCompactionQueue: (options) => this.flushCompactionQueue(options),
 			createProjectTrustContext: (cwd) => this.createProjectTrustContext(cwd),
@@ -4428,6 +4102,67 @@ export class InteractiveMode {
 			get ui() {
 				return mode.ui;
 			},
+		};
+	}
+
+	// Builds the ChatHistoryHost. Every field member is a getter (see the note above the host fields),
+	// so each message is drawn with the display state current when it renders.
+	private createChatHistoryHost(): ChatHistoryHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get footer() {
+				return mode.footer;
+			},
+			get streamingComponent() {
+				return mode.streamingComponent;
+			},
+			get pendingTools() {
+				return mode.pendingTools;
+			},
+			get thinkingTimingsByMessage() {
+				return mode.thinkingTimingsByMessage;
+			},
+			get toolOutputExpanded() {
+				return mode.toolOutputExpanded;
+			},
+			get hideThinkingBlock() {
+				return mode.hideThinkingBlock;
+			},
+			get thinkingCollapse() {
+				return mode.thinkingCollapse;
+			},
+			get hiddenThinkingLabel() {
+				return mode.hiddenThinkingLabel;
+			},
+			get outputPad() {
+				return mode.outputPad;
+			},
+			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
+			getRegisteredToolDefinition: (toolName) => this.getRegisteredToolDefinition(toolName),
+			getUserMessageText: (message) => this.getUserMessageText(message),
+			addToolComponentToChat: (component) => this.addToolComponentToChat(component),
+			renderProjectTrustWarningIfNeeded: () => this.renderProjectTrustWarningIfNeeded(),
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			updateEditorBorderColor: () => this.updateEditorBorderColor(),
 		};
 	}
 
