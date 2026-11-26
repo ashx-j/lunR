@@ -1275,6 +1275,11 @@ export class SubagentAsyncWidget {
 		this.requestRender = requestRender;
 	}
 
+	/** Repaints after setJobs or setExpanded changed what render() returns. */
+	repaint(): void {
+		this.requestRender?.();
+	}
+
 	private hasRunning(): boolean {
 		return this.jobs.some((job) => job.status === "running");
 	}
@@ -1371,19 +1376,19 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 	}
 	if (!ctx.hasUI) return;
 	const expanded = ctx.ui.getToolsExpanded?.() ?? false;
-	const requestRender = () => ctx.ui.requestRender?.();
 	const activeWidget = activeWidgets.get(ctx.ui);
 	if (activeWidget) {
 		activeWidget.setJobs(jobs);
 		activeWidget.setExpanded(expanded);
-		activeWidget.setRequestRender(requestRender);
-		ctx.ui.requestRender?.();
+		activeWidget.repaint();
 		return;
 	}
-	const widget = new SubagentAsyncWidget(jobs, undefined, { expanded, requestRender });
+	const widget = new SubagentAsyncWidget(jobs, undefined, { expanded });
 	activeWidgets.set(ctx.ui, widget);
-	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
+	// ExtensionUIContext has no requestRender; the TUI handed to the widget factory does.
+	ctx.ui.setWidget(WIDGET_KEY, (tui, theme) => {
 		widget.setTheme(theme);
+		widget.setRequestRender(() => tui.requestRender());
 		return widget;
 	});
 }
