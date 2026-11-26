@@ -395,9 +395,7 @@ describe("package commands", () => {
 		expect(process.exitCode).toBe(2);
 	});
 
-	// Product bug on Windows: the config selector writes override patterns with backslashes
-	// (-extensions\\bar.ts), which lunR on Linux and macOS does not match. See PR #320.
-	it.skipIf(process.platform === "win32")("cycles project package overrides in config local mode", async () => {
+	it("cycles project package overrides in config local mode", async () => {
 		const storage = new InMemorySettingsStorage();
 		storage.withLock("global", () => JSON.stringify({ packages: ["npm:pi-tools"] }));
 		const settingsManager = SettingsManager.fromStorage(storage, { projectTrusted: true });

@@ -3,7 +3,7 @@
  */
 
 import { homedir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import {
 	type Component,
 	Container,
@@ -22,6 +22,14 @@ import { canonicalizePath, isLocalPath, resolvePath } from "../../../utils/paths
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
+
+/**
+ * Settings patterns and package paths use `/` on every platform, so project settings written on Windows match on
+ * Linux and macOS. Entries an older Windows lunR wrote with `\\` still compare equal on Windows.
+ */
+function toSettingsPath(path: string): string {
+	return path.split(sep).join("/");
+}
 
 type ResourceType = "extensions" | "skills" | "prompts" | "themes";
 type ConfigWriteScope = "global" | "project";
@@ -545,7 +553,7 @@ class ResourceList implements Component, Focusable {
 		// Filter out existing patterns for this resource
 		const updated = current.filter((p) => {
 			const stripped = p.startsWith("!") || p.startsWith("+") || p.startsWith("-") ? p.slice(1) : p;
-			return stripped !== pattern;
+			return toSettingsPath(stripped) !== pattern;
 		});
 
 		if (enabled) {
@@ -610,7 +618,7 @@ class ResourceList implements Component, Focusable {
 		// Filter out existing patterns for this resource
 		const updated = current.filter((p) => {
 			const stripped = p.startsWith("!") || p.startsWith("+") || p.startsWith("-") ? p.slice(1) : p;
-			return stripped !== pattern;
+			return toSettingsPath(stripped) !== pattern;
 		});
 
 		if (enabled) {
@@ -670,7 +678,9 @@ class ResourceList implements Component, Focusable {
 
 	private setProjectTopLevelOverride(item: ResourceItem, state: ProjectOverrideState): boolean {
 		const current = (this.settingsManager.getProjectSettings()[item.resourceType] ?? []) as string[];
-		const pattern = this.isInheritedGlobalItem(item) ? item.path : this.getResourcePatternForScope(item, "project");
+		const pattern = this.isInheritedGlobalItem(item)
+			? toSettingsPath(item.path)
+			: this.getResourcePatternForScope(item, "project");
 		const patterns = this.getTopLevelOverridePatterns(item, "project");
 		const updated = current.filter((entry) => {
 			const target = this.getPatternEntryTarget(entry);
@@ -786,25 +796,28 @@ class ResourceList implements Component, Focusable {
 		const baseDir = this.getTopLevelBaseDir(scope);
 		const patterns = new Set<string>([
 			this.getResourcePatternForScope(item, scope),
-			item.path,
-			relative(baseDir, item.path),
+			toSettingsPath(item.path),
+			toSettingsPath(relative(baseDir, item.path)),
 		]);
-		if (item.metadata.baseDir) patterns.add(relative(item.metadata.baseDir, item.path));
+		if (item.metadata.baseDir) patterns.add(toSettingsPath(relative(item.metadata.baseDir, item.path)));
 		return patterns;
 	}
 
 	private getResourcePatternForScope(item: ResourceItem, scope: SettingsScope): string {
 		const sourceScope = this.getItemScope(item);
-		if (scope !== sourceScope) return item.path;
+		if (scope !== sourceScope) return toSettingsPath(item.path);
 		const baseDir = item.metadata.baseDir ?? this.getTopLevelBaseDir(sourceScope);
-		return relative(baseDir, item.path);
+		return toSettingsPath(relative(baseDir, item.path));
 	}
 
 	private createPackageOverrideSource(item: ResourceItem): PackageSource {
 		const source = item.metadata.source;
 		if (!isLocalPath(source)) return { source, autoload: false };
 		const sourcePath = resolvePath(source, this.getTopLevelBaseDir(this.getItemScope(item)), { trim: true });
-		return { source: relative(this.getTopLevelBaseDir("project"), sourcePath) || ".", autoload: false };
+		return {
+			source: toSettingsPath(relative(this.getTopLevelBaseDir("project"), sourcePath)) || ".",
+			autoload: false,
+		};
 	}
 
 	private packageSourceStringMatches(
@@ -836,7 +849,9 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private getPatternEntryTarget(entry: string): string {
-		return entry.startsWith("!") || entry.startsWith("+") || entry.startsWith("-") ? entry.slice(1) : entry;
+		return toSettingsPath(
+			entry.startsWith("!") || entry.startsWith("+") || entry.startsWith("-") ? entry.slice(1) : entry,
+		);
 	}
 
 	private getResourceItemKey(item: ResourceItem): string {
@@ -854,12 +869,12 @@ class ResourceList implements Component, Focusable {
 	private getResourcePattern(item: ResourceItem): string {
 		const scope = item.metadata.scope as "user" | "project";
 		const baseDir = item.metadata.baseDir ?? this.getTopLevelBaseDir(scope);
-		return relative(baseDir, item.path);
+		return toSettingsPath(relative(baseDir, item.path));
 	}
 
 	private getPackageResourcePattern(item: ResourceItem): string {
 		const baseDir = item.metadata.baseDir ?? dirname(item.path);
-		return relative(baseDir, item.path);
+		return toSettingsPath(relative(baseDir, item.path));
 	}
 }
 
