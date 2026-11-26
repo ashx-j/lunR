@@ -179,7 +179,7 @@ export class SessionCompaction {
 				throw new Error("Compaction cancelled");
 			}
 			const extensionCompaction = hook.compaction;
-			const fromExtension = extensionCompaction !== undefined;
+			const fromExtension = !!extensionCompaction;
 
 			let summary: string;
 			let firstKeptEntryId: string;
@@ -563,7 +563,7 @@ export class SessionCompaction {
 				return false;
 			}
 			const extensionCompaction = hook.compaction;
-			const fromExtension = extensionCompaction !== undefined;
+			const fromExtension = !!extensionCompaction;
 
 			let summary: string;
 			let firstKeptEntryId: string;

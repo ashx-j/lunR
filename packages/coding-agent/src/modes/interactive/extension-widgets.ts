@@ -79,7 +79,6 @@ export class ExtensionWidgets {
 	 * Render all extension widgets to the widget container.
 	 */
 	render(): void {
-		if (!this.above || !this.below) return;
 		this._renderContainer(this.above, this._aboveWidgets, true, true);
 		this._renderContainer(this.below, this._belowWidgets, false, false);
 		this.host.ui.requestRender();

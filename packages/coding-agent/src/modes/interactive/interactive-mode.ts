@@ -478,7 +478,6 @@ export class InteractiveMode {
 	// Extension UI state
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
-	// Extension widgets (components rendered above/below the editor)
 	// The extension widget areas above and below the editor; see extension-widgets.ts.
 	private readonly widgets = new ExtensionWidgets(this.createExtensionWidgetsHost());
 
