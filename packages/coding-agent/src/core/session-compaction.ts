@@ -79,9 +79,9 @@ export class SessionCompaction {
 	private _manualAbortController: AbortController | undefined = undefined;
 	private _manualPromise: Promise<CompactionResult> | undefined = undefined;
 	private _autoAbortController: AbortController | undefined = undefined;
-	/** Set after one overflow compact-and-retry; AgentSession clears it when a run ends without overflow. */
+	/** Set after one overflow compact-and-retry. AgentSession's agent event handler clears it when a user message starts and when a reply ends without an error. */
 	overflowRecoveryAttempted = false;
-	/** Set when a ceiling compaction fails or is cancelled; cleared just before the next prompt's opening check. */
+	/** Set when a ceiling compaction fails or is cancelled. AgentSession also sets it from the between-turn check and clears it just before a prompt's opening check. */
 	ceilingFailedThisRun = false;
 	/** `lastCompactedTokens`: the estimated context size the latest compaction left. Not persisted. */
 	private _compactedContextTokens = 0;

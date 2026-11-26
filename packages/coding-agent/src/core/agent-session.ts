@@ -155,6 +155,9 @@ import { resolveToCwd } from "./tools/path-utils.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { getUserMessagesForForking, runTreeNavigation, type TreeNavigationHost } from "./tree-navigation.ts";
 
+// NothingToCompactError moved with compaction; callers still import it from here.
+export { NothingToCompactError } from "./session-compaction.ts";
+
 // ============================================================================
 // Skill Block Parsing
 // ============================================================================
@@ -375,13 +378,6 @@ export type ToolCallGate = (
 ) => ToolCallGateResult | undefined | Promise<ToolCallGateResult | undefined>;
 
 // ============================================================================
-// Constants
-// ============================================================================
-
-// NothingToCompactError moved with compaction; callers still import it from here.
-export { NothingToCompactError } from "./session-compaction.ts";
-
-// ============================================================================
 // AgentSession Class
 // ============================================================================
 
@@ -413,6 +409,8 @@ export class AgentSession {
 	/** `run_in_background` jobs. They survive tool rebuilds and stop when the session is disposed. */
 	readonly bashJobs = new BashJobs();
 
+	// The hosts below are built in field initializers, before the constructor assigns `agent`,
+	// `sessionManager` and the model runtime, so every member that reads a field must be a getter.
 	// Compaction state and runs; see session-compaction.ts.
 	private readonly _compaction = new SessionCompaction(this.createCompactionHost());
 

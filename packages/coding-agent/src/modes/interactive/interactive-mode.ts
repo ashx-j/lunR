@@ -548,6 +548,8 @@ export class InteractiveMode {
 	private startupReadyPromise?: Promise<void>;
 	private startupFeatureError?: Error;
 	private deferredBuiltinAttachPromise: Promise<void> | undefined;
+	// The hosts below are built in field initializers, before the constructor assigns `ui`,
+	// `chatContainer` and the editor, so every member that reads a field must be a getter.
 	// Passed to the login-flow.ts functions so /login reaches this UI and the current session.
 	private readonly loginFlowHost: LoginFlowHost = this.createLoginFlowHost();
 	// Passed to the slash-dispatch.ts handlers when a builtin slash command is submitted.
