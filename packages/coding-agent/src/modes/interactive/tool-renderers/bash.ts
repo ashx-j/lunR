@@ -95,24 +95,24 @@ function formatChangeSummary(changes: BashFileChanges): string {
 
 /** One file's heading and diff, like the edit card's body. */
 function formatFileChange(file: BashFileChange): string {
-	const note =
-		file.kind === "deleted"
-			? "deleted"
-			: file.kind === "created"
-				? "new"
-				: file.modeOnly
-					? "mode changed"
-					: file.binary
-						? "binary"
-						: undefined;
-	const heading = theme.fg("toolTitle", file.path) + (note ? theme.fg("muted", ` (${note})`) : "");
+	const notes = [
+		file.kind === "deleted" ? "deleted" : file.kind === "created" ? "new" : undefined,
+		file.binary ? "binary" : undefined,
+		// The earlier text is git's HEAD version, not a copy of the file from before the call.
+		file.againstHead && file.diff ? "compared with HEAD" : undefined,
+	].filter(Boolean);
+	const heading =
+		theme.fg("toolTitle", file.path) + (notes.length > 0 ? theme.fg("muted", ` (${notes.join(", ")})`) : "");
 	return file.diff ? `${heading}\n${renderDiff(file.diff)}` : heading;
+}
+
+function isFileChanges(value: unknown): value is BashFileChanges {
+	return typeof value === "object" && value !== null && "files" in value && Array.isArray(value.files);
 }
 
 function readFileChanges(details: unknown): BashFileChanges | undefined {
 	if (!details || typeof details !== "object" || !("fileChanges" in details)) return undefined;
-	const { fileChanges } = details as BashToolDetails;
-	return fileChanges && Array.isArray(fileChanges.files) ? fileChanges : undefined;
+	return isFileChanges(details.fileChanges) ? details.fileChanges : undefined;
 }
 
 function rebuildBashResultRenderComponent(
@@ -136,7 +136,7 @@ function rebuildBashResultRenderComponent(
 	// The model's "Files changed" line repeats what the header and the diffs show.
 	const modelLine = allChanges ? formatChangesForModel(allChanges) : undefined;
 	const shown = modelLine ? { ...result, content: result.content.filter((part) => part.text !== modelLine) } : result;
-	let output = getTextOutput(shown as any, showImages).trim();
+	let output = getTextOutput(shown, showImages).trim();
 	const truncation = result.details?.truncation;
 	const fullOutputPath = result.details?.fullOutputPath;
 	if (!options.isPartial && truncation?.truncated && fullOutputPath && output.endsWith("]")) {
@@ -183,7 +183,9 @@ function rebuildBashResultRenderComponent(
 		const shown = changes.files.slice(0, MAX_CARD_FILES);
 		for (const file of shown) component.addChild(new Text(`\n${formatFileChange(file)}`, 0, 0));
 		const rest = changes.files.length - shown.length + changes.more;
-		if (rest > 0) component.addChild(new Text(`\n${theme.fg("muted", `and ${rest} more files`)}`, 0, 0));
+		if (rest > 0) {
+			component.addChild(new Text(`\n${theme.fg("muted", `and ${rest} more file${rest === 1 ? "" : "s"}`)}`, 0, 0));
+		}
 	}
 
 	// lunr: the truncation/full-output notice is intentionally NOT rendered in

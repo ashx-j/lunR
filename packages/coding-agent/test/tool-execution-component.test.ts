@@ -715,7 +715,7 @@ describe("ToolExecutionComponent parity", () => {
 		const files = Array.from({ length: 30 }, (_, i) => ({
 			path: `f${i}.txt`,
 			kind: "modified" as const,
-			...(i < 20 ? { added: 1, removed: 1, diff: `-1 old ${i}\n+1 new ${i}` } : {}),
+			...(i < 20 ? { added: 1, removed: 1, diff: `-1 old ${i}\n+1 new ${i}`, againstHead: true } : {}),
 		}));
 		const fileChanges = { files, more: 0 };
 		const modelLine = formatChangesForModel(fileChanges);
@@ -744,6 +744,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(card(false)).not.toContain("+20");
 		const expanded = card(true);
 		expect(expanded).toContain("+1 new 19");
+		expect(expanded).toContain("f19.txt (compared with HEAD)");
 		expect(expanded).not.toContain("f20.txt");
 		expect(expanded).toContain("and 10 more files");
 		expect(expanded).not.toContain(modelLine);
