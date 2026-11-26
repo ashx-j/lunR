@@ -5803,10 +5803,11 @@ export class InteractiveMode {
 	 * unnamed session, asks the model for a short title derived from the first user message.
 	 * Uses the light tier model when model tiers are enabled; otherwise the session model.
 	 * Never blocks the UI; failures are swallowed to the debug log. Skipped entirely when
-	 * the user has already named the session (via /name, /title, or --name).
+	 * the user has already named the session (via /name, /title, or --name), and during shutdown,
+	 * whose abort of a running first turn also ends in agent_end.
 	 */
 	private maybeAutoNameSession(): void {
-		if (this.autoNameTriggered) return;
+		if (this.autoNameTriggered || this.isShuttingDown) return;
 		if (this.sessionManager.getSessionName()) return;
 		const userMessages = this.session.getUserMessagesForForking();
 		if (userMessages.length === 0) return; // No real turn yet; try again on the next agent_end.
