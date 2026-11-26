@@ -46,7 +46,10 @@ it.skipIf(process.platform === "win32")("waits for the child's watchdog review b
 		if (/^PI_(SUBAGENT_|SUBAGENTS_|INTERCOM_)/.test(key)) vi.stubEnv(key, undefined);
 	}
 	vi.stubEnv("PI_CODING_AGENT_DIR", root);
-	writeFileSync(join(root, "settings.json"), JSON.stringify({ subagents: { watchdog: { enabled: true, children: { enabled: true } } } }));
+	writeFileSync(
+		join(root, "settings.json"),
+		JSON.stringify({ subagents: { watchdog: { enabled: true, children: { enabled: true } } } }),
+	);
 	resetPermissions("auto");
 	const runId = "watchdog-run";
 	const spec = normalizeChildSpec(
@@ -55,8 +58,20 @@ it.skipIf(process.platform === "win32")("waits for the child's watchdog review b
 	);
 	const reviewed = join(root, "reviewed");
 	const status = (seq: number, phase: string) =>
-		JSON.stringify({ type: CHILD_WATCHDOG_STATUS_EVENT, runId, agent: spec.childId, childIndex: 0, seq, phase, ts: Date.now(), followUpPending: false });
-	const turnEnd = JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop" } });
+		JSON.stringify({
+			type: CHILD_WATCHDOG_STATUS_EVENT,
+			runId,
+			agent: spec.childId,
+			childIndex: 0,
+			seq,
+			phase,
+			ts: Date.now(),
+			followUpPending: false,
+		});
+	const turnEnd = JSON.stringify({
+		type: "message_end",
+		message: { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop" },
+	});
 	fixture.command.mockReturnValue({
 		command: process.execPath,
 		args: [

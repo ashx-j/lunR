@@ -573,7 +573,9 @@ describe("async widget ownership", () => {
 				tui,
 				hasUI: true,
 				ui: {
-					setWidget: vi.fn((_key: string, factory?: (tui: unknown, theme: unknown) => unknown) => factory?.(tui, stubTheme)),
+					setWidget: vi.fn((_key: string, factory?: (tui: unknown, theme: unknown) => unknown) =>
+						factory?.(tui, stubTheme),
+					),
 					getToolsExpanded: () => false,
 				},
 			};

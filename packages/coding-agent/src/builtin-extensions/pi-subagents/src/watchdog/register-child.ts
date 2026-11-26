@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { writeRawStdout } from "../../../../core/output-guard.ts";
 import { MainWatchdogRuntime } from "./runtime.ts";
 import { createMainWatchdogReview } from "./review.ts";
 import { DEFAULT_WATCHDOG_CONFIG } from "./settings.ts";
@@ -45,12 +46,10 @@ function childWarningDetails(details: WatchdogWarningDetails, config: ChildWatch
 	};
 }
 
+// The parent reads status events from the child's stdout. A lunR child in json mode has
+// takeOverStdout() active, which sends process.stdout.write to stderr, so write raw stdout.
 function writeStatus(event: unknown): void {
-	try {
-		process.stdout.write(`${JSON.stringify(event)}\n`);
-	} catch {
-		// Child watchdog status is advisory; stdout failures are handled by the child process itself.
-	}
+	writeRawStdout(`${JSON.stringify(event)}\n`);
 }
 
 export function registerChildWatchdog(pi: ExtensionAPI, rawConfig = process.env[CHILD_WATCHDOG_CONFIG_ENV]): MainWatchdogRuntime | undefined {
