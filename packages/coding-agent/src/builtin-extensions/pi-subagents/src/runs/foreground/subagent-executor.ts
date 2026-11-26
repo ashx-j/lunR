@@ -218,7 +218,7 @@ interface ExecutionContextData {
 	params: MaterializedParams;
 	effectiveCwd: string;
 	ctx: ExtensionContext;
-	signal: AbortSignal;
+	signal: AbortSignal | undefined;
 	onUpdate?: (r: AgentToolResult<Details>) => void;
 	agents: ChildRuntimeConfig[];
 	runId: string;
@@ -473,7 +473,17 @@ function resolveForegroundResumeTarget(params: SubagentParamsLike, state: Subage
 }
 
 type AsyncResumeSourceTarget = ReturnType<typeof resolveAsyncResumeTarget> & { source: "async" };
-type ForegroundResumeSourceTarget = NonNullable<ReturnType<typeof resolveForegroundResumeTarget>> & { kind: "revive"; source: "foreground" };
+// Foreground and nested run records keep none of these; the revive code reads them with fallbacks
+// (the description falls back to the agent, permissions to "read-only", the model to the tier).
+type NoRecordedChildConfig = {
+	childId?: undefined;
+	description?: undefined;
+	permissions?: undefined;
+	model?: undefined;
+	thinking?: undefined;
+	modelSelection?: undefined;
+};
+type ForegroundResumeSourceTarget = NonNullable<ReturnType<typeof resolveForegroundResumeTarget>> & { kind: "revive"; source: "foreground" } & NoRecordedChildConfig;
 type NestedResumeSourceTarget = {
 	kind: "revive";
 	source: "nested";
@@ -484,7 +494,7 @@ type NestedResumeSourceTarget = {
 	intercomTarget: string;
 	cwd?: string;
 	sessionFile: string;
-};
+} & NoRecordedChildConfig;
 type ResumeSourceTarget = AsyncResumeSourceTarget | ForegroundResumeSourceTarget | NestedResumeSourceTarget;
 
 function isAsyncRunNotFound(error: unknown): boolean {
@@ -805,7 +815,7 @@ function appendStepToAsyncChain(input: {
 		};
 	}
 
-	let appendParams: SubagentParamsLike;
+	let appendParams: MaterializedParams;
 	const appendChildRunId = `${resolved.id}-append-${randomUUID().slice(0, 8)}`;
 	try {
 		appendParams = internalizePromptDrivenChildren(input.params, {
@@ -1317,7 +1327,8 @@ async function resumeAsyncRun(input: {
 		...(recoveryDescriptor?.sessionDir ? { sessionDir: recoveryDescriptor.sessionDir } : {}),
 		sessionFile: target.sessionFile,
 		revivalLease: {
-			sessionFile: target.sessionFile,
+			// Non-null: without attachChain, resolveResumeTarget required a session file.
+			sessionFile: target.sessionFile!,
 			runId,
 			sourceRunId: target.runId,
 			...(input.deps.state.currentSessionId ? { parentSessionId: input.deps.state.currentSessionId } : {}),
@@ -2414,7 +2425,7 @@ interface ForegroundParallelRunInput {
 	state: SubagentState;
 	intercomEvents: IntercomEventBus;
 	parentSessionId: string | null;
-	signal: AbortSignal;
+	signal: AbortSignal | undefined;
 	runId: string;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex: (idx?: number) => string | undefined;
@@ -3122,7 +3133,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget(runId, spec.childId, 0) : undefined;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
-	const agentConfig = {
+	const agentConfig: ChildRuntimeConfig = {
 		name: spec.childId,
 		description: spec.description,
 		model: spec.model,
@@ -3603,7 +3614,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				if (paramsWithResolvedCwd.dir) {
 					try {
 						const location = resolveAsyncRunLocation(paramsWithResolvedCwd, ASYNC_DIR, RESULTS_DIR);
-						return stopAsyncRun(deps.state, location.resolvedId ?? targetRunId ?? path.basename(location.asyncDir ?? paramsWithResolvedCwd.dir), deps.kill, location);
+						// Non-null: with dir set the location has an asyncDir, so getAsyncInterruptTarget finds a target.
+						return stopAsyncRun(deps.state, location.resolvedId ?? targetRunId ?? path.basename(location.asyncDir ?? paramsWithResolvedCwd.dir), deps.kill, location)!;
 					} catch (error) {
 						const text = error instanceof Error ? error.message : String(error);
 						return { content: [{ type: "text", text }], isError: true, details: { mode: "management", results: [] } };
@@ -3738,7 +3750,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (foregroundTimeout.error) return buildRequestedModeError(effectiveParams, foregroundTimeout.error);
 		const turnBudget = resolveTurnBudgetConfig(effectiveParams.turnBudget ?? deps.config.turnBudget);
 		if (turnBudget.error) return buildRequestedModeError(effectiveParams, turnBudget.error);
-		const contextPolicy = resolveAgentDefaultContextPolicy(effectiveParams);
+		const contextPolicy = resolveAgentDefaultContextPolicy(internalized.params);
 		effectiveParams = contextPolicy.params;
 		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
 		const intercomBridge = resolveIntercomBridge({
@@ -3866,7 +3878,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			path.join(sessionDirForIndex(idx), "session.jsonl");
 		try {
 			if (!(effectiveParams.clarify === true && ctx.hasUI)) {
-				preflightForkSessionsForStaticTasks(effectiveParams, contextPolicy, forkSessionFileForTask, deps.config.chain?.dynamicFanout?.maxItems);
+				preflightForkSessionsForStaticTasks(contextPolicy.params, contextPolicy, forkSessionFileForTask, deps.config.chain?.dynamicFanout?.maxItems);
 			}
 		} catch (error) {
 			return toExecutionErrorResult(effectiveParams, error);
@@ -3889,8 +3901,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (spawnLimitError) return spawnLimitError;
 
 		const execData: ExecutionContextData = {
-			// internalizePromptDrivenChildren materialized these params above; later steps only add fields.
-			params: effectiveParams as MaterializedParams,
+			params: contextPolicy.params,
 			effectiveCwd,
 			ctx,
 			signal,
