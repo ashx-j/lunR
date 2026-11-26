@@ -12,7 +12,16 @@ concurrency:
 
 jobs:
   build-check-test:
-    runs-on: ubuntu-latest
+    # The Linux job keeps its old name; macOS and Windows run the same steps.
+    name: ${{ matrix.os == 'ubuntu-latest' && 'build-check-test' || format('build-check-test ({0})', matrix.os) }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,10 +33,30 @@ jobs:
           cache: npm
 
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
           sudo ln -s $(which fdfind) /usr/local/bin/fd
+
+      - name: Install fd and ripgrep
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install fd ripgrep
+
+      - name: Install fd and ripgrep
+        if: runner.os == 'Windows'
+        run: choco install fd ripgrep -y --no-progress
+
+      # The default temp dir is a symlink on macOS (/var -> /private/var) and an 8.3 short name on Windows
+      # (RUNNER~1). Many tests compare the paths lunR canonicalizes with the raw temp path.
+      - name: Use a canonical temp dir
+        if: runner.os != 'Linux'
+        run: |
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -59,4 +88,4 @@ jobs:
           bun-version: 1.3.14
 
       - name: Script tests
-        run: node --test scripts/build-standalone.test.mjs scripts/distribution-lock-graph.test.mjs scripts/release-commands.test.mjs
+        run: node --test scripts/build-standalone.test.mjs scripts/distribution-lock-graph.test.mjs scripts/release-commands.test.mjs scripts/qualify-release.test.mjs

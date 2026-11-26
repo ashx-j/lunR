@@ -291,9 +291,11 @@ async function crashOwner(stage: string): Promise<number> {
 			stderr += chunk;
 		});
 		child.on("error", reject);
-		child.on("exit", (_code, signal) => {
-			if (signal !== "SIGKILL" || !child.pid)
-				reject(new Error(stderr || "fixture did not crash at the owner boundary"));
+		child.on("exit", (code, signal) => {
+			const crashed =
+				signal === "SIGKILL" ||
+				(process.platform === "win32" && code !== 0 && stderr.trim() === "CRASH_AT_OWNER_BOUNDARY");
+			if (!crashed || !child.pid) reject(new Error(stderr || "fixture did not crash at the owner boundary"));
 			else resolve(child.pid);
 		});
 	});

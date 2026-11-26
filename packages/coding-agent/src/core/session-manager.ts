@@ -36,6 +36,7 @@ import {
 	canonicalSessionPath,
 	SessionOwnership,
 	SessionOwnershipError,
+	sessionPathKey,
 	writeSessionJson,
 } from "./session-ownership.ts";
 
@@ -800,6 +801,24 @@ async function listSessionsFromDir(
 	return sessions;
 }
 
+// Windows refuses a rename onto a file another process holds open for a moment (antivirus, the indexer, a
+// handoff peer closing it). Seen as EPERM in a CI session handoff; retries cover about 0.8 s, other platforms never wait.
+const RENAME_RETRY_DELAYS_MS = process.platform === "win32" ? [10, 25, 50, 100, 200, 400] : [];
+const RENAME_RETRY_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
+
+function renameReplacing(from: string, to: string): void {
+	for (const delayMs of RENAME_RETRY_DELAYS_MS) {
+		try {
+			renameSync(from, to);
+			return;
+		} catch (error) {
+			if (!RENAME_RETRY_CODES.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+		}
+	}
+	renameSync(from, to);
+}
+
 /** Atomically replace a log without changing the manager that owns it. */
 function writeSessionEntries(file: string, entries: FileEntry[]): void {
 	const mode = existsSync(file) ? statSync(file).mode & 0o777 : SESSION_FILE_MODE;
@@ -815,7 +834,7 @@ function writeSessionEntries(file: string, entries: FileEntry[]): void {
 		} finally {
 			closeSync(fd);
 		}
-		renameSync(temp, file);
+		renameReplacing(temp, file);
 	} finally {
 		// Only this invocation's successfully created temporary file is owned.
 		if (existsSync(temp)) unlinkSync(temp);
@@ -869,7 +888,7 @@ export class SessionManager {
 			if (
 				this.ownership &&
 				this.sessionFile &&
-				canonicalSessionPath(this.sessionFile) !== this.ownership.owner.file
+				sessionPathKey(this.sessionFile) !== sessionPathKey(this.ownership.owner.file)
 			) {
 				throw new SessionOwnershipError(this.sessionFile, "Session ownership does not match the write target.");
 			}
@@ -907,7 +926,7 @@ export class SessionManager {
 	private claim(file: string): void {
 		this.assertWritable();
 		const canonical = canonicalSessionPath(file);
-		if (this.ownership?.owner.file === canonical) return;
+		if (this.ownership && sessionPathKey(this.ownership.owner.file) === sessionPathKey(canonical)) return;
 		const next = new SessionOwnership(canonical);
 		this.saveLeaf();
 		this.ownership?.release();
@@ -973,7 +992,7 @@ export class SessionManager {
 	/** Switch to a different session file (used for resume and branching) */
 	setSessionFile(sessionFile: string): void {
 		this.assertWritable();
-		if (this.sessionFile && canonicalSessionPath(sessionFile) === canonicalSessionPath(this.sessionFile)) {
+		if (this.sessionFile && sessionPathKey(sessionFile) === sessionPathKey(this.sessionFile)) {
 			this.loadSessionFile(sessionFile);
 			return;
 		}

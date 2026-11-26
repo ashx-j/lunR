@@ -1,10 +1,7 @@
 # lunR
 
-A coding agent that runs in your terminal. You tell it what you want, and it reads, edits and runs the code in your project.
-
-lunR is built on [pi](https://github.com/badlogic/pi-mono). It adds the things pi leaves to extensions, like subagents, MCP, permission modes, scheduled prompts and a Telegram or Discord bot.
-
-You can use it with the subscription you already pay for, like Claude Pro or Max, ChatGPT Plus or Pro, GitHub Copilot or SuperGrok.
+A coding agent that runs in your terminal.
+You can use it with the subscription you already pay for, like Claude Code or Codex.
 
 [![npm](https://img.shields.io/npm/v/@ashx-j/lunr?style=flat-square)](https://www.npmjs.com/package/@ashx-j/lunr)
 
@@ -14,7 +11,6 @@ You need Node.js 22.19 or newer.
 
 ```bash
 npm i -g @ashx-j/lunr
-cd your-project
 lunr
 ```
 
@@ -34,11 +30,9 @@ The first launch walks you through signing in to a model provider.
 npm rm -g @ashx-j/lunr
 ```
 
-Your settings, sign-ins and sessions stay in `~/.lunr/agent`. Run `lunr uninstall --purge` before removing the package to delete them too.
-
 ## Credits
 
-lunR started as a fork of [pi](https://github.com/badlogic/pi-mono) by Mario Zechner. [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) lists pi and the other projects lunR uses code from.
+lunR started as a fork of [pi](https://github.com/badlogic/pi-mono) by Mario Zechner. [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)
 
 ## License
 

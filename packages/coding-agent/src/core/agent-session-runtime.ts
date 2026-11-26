@@ -15,7 +15,7 @@ import type { CreateAgentSessionResult } from "./sdk.ts";
 import { assertSessionCwdExists } from "./session-cwd.ts";
 import { SessionTransferError } from "./session-handoff.ts";
 import { SessionManager } from "./session-manager.ts";
-import { canonicalSessionPath, SessionOwnership } from "./session-ownership.ts";
+import { SessionOwnership, sessionPathKey } from "./session-ownership.ts";
 import { getSubagentCancellation } from "./subagent-cancellation.ts";
 
 /**
@@ -350,7 +350,7 @@ export class AgentSessionRuntime {
 		if (
 			!this.detached &&
 			this.session.sessionFile &&
-			canonicalSessionPath(sessionPath) === canonicalSessionPath(this.session.sessionFile)
+			sessionPathKey(sessionPath) === sessionPathKey(this.session.sessionFile)
 		)
 			return { cancelled: false };
 		const beforeResult = this.detached ? { cancelled: false } : await this.emitBeforeSwitch("resume", sessionPath);
@@ -553,7 +553,7 @@ export class AgentSessionRuntime {
 		}
 
 		const previousSessionFile = this.session.sessionFile;
-		if (canonicalSessionPath(destinationPath) !== canonicalSessionPath(resolvedPath)) {
+		if (sessionPathKey(destinationPath) !== sessionPathKey(resolvedPath)) {
 			const ownership = new SessionOwnership(destinationPath);
 			try {
 				copyFileSync(resolvedPath, destinationPath);

@@ -23,6 +23,9 @@ function callHandleCtrlZ(context: HandleCtrlZThis): void {
 
 const interactiveModePrototype = InteractiveMode.prototype as unknown;
 
+// Windows has no SIGTSTP or SIGCONT, so only the Windows branch test runs there.
+const posixOnly = test.skipIf(process.platform === "win32");
+
 describe("InteractiveMode.handleCtrlZ", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -62,7 +65,7 @@ describe("InteractiveMode.handleCtrlZ", () => {
 		expect(processKillSpy).not.toHaveBeenCalled();
 	});
 
-	test("keeps the process alive while suspended and restores the TUI on SIGCONT", () => {
+	posixOnly("keeps the process alive while suspended and restores the TUI on SIGCONT", () => {
 		const ui: FakeUi = {
 			start: vi.fn(),
 			stop: vi.fn(),
@@ -112,7 +115,7 @@ describe("InteractiveMode.handleCtrlZ", () => {
 		expect(ui.requestRender).toHaveBeenCalledWith(true);
 	});
 
-	test("cleans up the temporary handlers if suspension fails", () => {
+	posixOnly("cleans up the temporary handlers if suspension fails", () => {
 		const ui: FakeUi = {
 			start: vi.fn(),
 			stop: vi.fn(),

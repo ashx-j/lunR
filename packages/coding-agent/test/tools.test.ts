@@ -19,6 +19,7 @@ import {
 } from "../src/index.ts";
 import * as shellModule from "../src/utils/shell.ts";
 
+const windows = process.platform === "win32";
 const readTool = createReadTool(process.cwd());
 const writeTool = createWriteTool(process.cwd());
 const editTool = createEditTool(process.cwd());
@@ -487,7 +488,7 @@ describe("Coding Agent Tools", () => {
 					path: testFile,
 					edits: [{ oldText: "hello", newText: "world" }],
 				}),
-			).rejects.toThrow(`Could not edit file: ${testFile}. Error code: EACCES.`);
+			).rejects.toThrow(`Could not edit file: ${testFile}. Error code: ${windows ? "EPERM" : "EACCES"}.`);
 		});
 
 		it("should include the original error message for unknown edit access errors", async () => {
@@ -516,7 +517,8 @@ describe("Coding Agent Tools", () => {
 			expect(result).toEqual({ error: `Could not edit file: ${missingFile}. Error code: ENOENT.` });
 		});
 
-		it("should include EACCES in diff preview for unreadable files", async () => {
+		// chmod cannot take away read access on Windows.
+		it.skipIf(windows)("should include EACCES in diff preview for unreadable files", async () => {
 			const unreadableFile = join(testDir, "unreadable-preview.txt");
 			writeFileSync(unreadableFile, "hello\n");
 			chmodSync(unreadableFile, 0o222);
@@ -982,7 +984,8 @@ describe("Coding Agent Tools", () => {
 			writeFileSync(testFile, "target\n");
 
 			const result = await grepTool.execute("test-call-grep-injection", {
-				pattern: `--pre=${payload}`,
+				// Forward slashes keep a Windows path from reading as regex escapes.
+				pattern: `--pre=${payload.replace(/\\/g, "/")}`,
 				path: testDir,
 			});
 
