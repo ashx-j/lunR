@@ -3432,7 +3432,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
 		params: SubagentParamsLike,
-		signal: AbortSignal,
+		signal: AbortSignal | undefined,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	) => Promise<AgentToolResult<Details>>;
@@ -3440,7 +3440,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	const execute = async (
 		_id: string,
 		params: SubagentParamsLike,
-		signal: AbortSignal,
+		signal: AbortSignal | undefined,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
@@ -4037,7 +4037,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	const executeWithSingleDispatchGuard = async (
 		id: string,
 		params: SubagentParamsLike,
-		signal: AbortSignal,
+		signal: AbortSignal | undefined,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
