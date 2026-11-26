@@ -238,6 +238,7 @@ describe("mcp cold-start dependency split", () => {
 		vi.doUnmock("../src/builtin-extensions/pi-mcp-adapter/commands.ts");
 		vi.doUnmock("../src/builtin-extensions/pi-mcp-adapter/proxy-modes.ts");
 		vi.doUnmock("../src/builtin-extensions/pi-mcp-adapter/direct-tool-executor.ts");
+		vi.doUnmock("zod");
 		vi.restoreAllMocks();
 	});
 
@@ -354,6 +355,8 @@ describe("mcp cold-start dependency split", () => {
 		vi.doMock("../src/builtin-extensions/pi-mcp-adapter/commands.ts", blockHeavy);
 		vi.doMock("../src/builtin-extensions/pi-mcp-adapter/proxy-modes.ts", blockHeavy);
 		vi.doMock("../src/builtin-extensions/pi-mcp-adapter/direct-tool-executor.ts", blockHeavy);
+		// Only the connection engine validates with zod; loading it at registration cost every print run.
+		vi.doMock("zod", blockHeavy);
 
 		const mod = await import("../src/builtin-extensions/pi-mcp-adapter/index.ts");
 		const pi = createMockPi(agentDir);
@@ -379,6 +382,43 @@ describe("mcp cold-start dependency split", () => {
 		expect(heavyLoaded).toBe(false);
 		await emit(pi, "session_shutdown");
 		expect(heavyLoaded).toBe(false);
+	});
+
+	it("preloads the engine after the first TUI answer when servers are configured, never in print mode", async () => {
+		const agentDir = tempAgentDir();
+		const serverDef = { command: "true", lifecycle: "lazy" };
+		const configPath = writeConfig(agentDir, { mcpServers: { lazy: serverDef } });
+		writeCache(agentDir, {
+			lazy: {
+				configHash: computeServerHash(serverDef),
+				cachedAt: Date.now(),
+				tools: [{ name: "ping", description: "Ping" }],
+				resources: [],
+			},
+		});
+		process.argv = ["node", "lunr", "--mcp-config", configPath];
+		let loadCount = 0;
+		mockHeavyModules({
+			onInitModuleLoad: () => {
+				loadCount += 1;
+			},
+		});
+
+		const mod = await import("../src/builtin-extensions/pi-mcp-adapter/index.ts");
+		const pi = createMockPi(agentDir);
+		mod.default(pi);
+		await emit(pi, "session_start");
+		await emit(pi, "agent_end");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(loadCount).toBe(0);
+
+		pi.ctx.mode = "tui";
+		await emit(pi, "agent_end");
+		await vi.waitFor(() => expect(loadCount).toBe(1));
+		await emit(pi, "agent_end");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(loadCount).toBe(1);
+		await emit(pi, "session_shutdown");
 	});
 
 	it("loads heavy runtime once on first tool use and retries after init failure", async () => {

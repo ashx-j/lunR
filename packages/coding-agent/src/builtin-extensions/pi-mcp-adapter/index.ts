@@ -308,6 +308,8 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     type: "string",
   });
 
+  let hasConfiguredServers = false;
+  let enginePreloadStarted = false;
   pi.on("session_start", async (_event, ctx) => {
     const generation = ++lifecycleGeneration;
     sessionAbort.abort(new Error("MCP session changed"));
@@ -333,6 +335,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     const configPath = (pi.getFlag("mcp-config") as string | undefined) ?? earlyConfigPath;
     const sessionConfig = loadMcpConfig(configPath, ctx.cwd, ctx.isProjectTrusted());
     const sessionCache = loadMetadataCache();
+    hasConfiguredServers = Object.keys(sessionConfig.mcpServers).length > 0;
     const registered = registerConfiguredTools(sessionConfig, sessionCache);
     // Session replacement can reuse the factory. Retire definitions from its prior config.
     const active = pi.getActiveTools().filter(name => !registeredDirectTools.has(name) && name !== "mcp");
@@ -343,6 +346,14 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     }
 
     startSessionInit(generation, pi, ctx);
+  });
+
+  // The engine (with zod and the MCP SDK) costs about 250 ms to import, which a lazy server's
+  // first call would wait for. In the TUI, import it once the first answer is done.
+  pi.on("agent_end", (_event, ctx) => {
+    if (enginePreloadStarted || ctx.mode !== "tui" || !hasConfiguredServers) return;
+    enginePreloadStarted = true;
+    setTimeout(() => void loadHeavyModules().catch(() => {}), 0);
   });
 
   pi.on("session_shutdown", async () => {
