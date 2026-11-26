@@ -43,6 +43,7 @@ class FakeChild extends EventEmitter {
 	stdin = new PassThrough();
 	stdout = new PassThrough();
 	stderr = new PassThrough();
+	pid: number | undefined = 4242;
 	exitCode: number | null = null;
 	signalCode: NodeJS.Signals | null = null;
 	killed = false;
@@ -167,6 +168,18 @@ describe("LSP owned client lifecycle", () => {
 		expect(log).not.toHaveBeenCalled();
 	});
 
+	it("shuts down at once after a failed spawn that Bun reports without an exit code", async () => {
+		const { client, child } = setup();
+		const starting = expect(client.start()).rejects.toThrow(/Failed to spawn/);
+		// Bun leaves exitCode null for a command it could not find; the child never got a pid.
+		child.pid = undefined;
+		child.emit("error", Object.assign(new Error('Executable not found in $PATH: "missing"'), { code: "ENOENT" }));
+		await starting;
+		const started = Date.now();
+		await client.shutdown();
+		expect(Date.now() - started).toBeLessThan(500);
+		expect(child.kill).not.toHaveBeenCalled();
+	});
 	it("cancels initialization and cannot initialize after a late server reply", async () => {
 		const { client, child } = setup();
 		const initialize = deferred<{ capabilities: object }>();

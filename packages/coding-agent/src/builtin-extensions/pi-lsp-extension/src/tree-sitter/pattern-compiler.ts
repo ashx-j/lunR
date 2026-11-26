@@ -139,6 +139,10 @@ export async function compilePattern(
     );
   }
 
+  if (!(await treeSitter.getLanguage(languageId))) {
+    throw new Error(`${treeSitter.grammarFailure(languageId) ?? `The ${languageId} grammar did not load`}.`);
+  }
+
   const { preprocessed, placeholders } = preprocessMetavars(source);
 
   // Language-specific wrappers for fragments that aren't full programs

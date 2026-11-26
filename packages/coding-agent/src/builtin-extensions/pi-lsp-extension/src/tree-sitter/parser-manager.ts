@@ -5,14 +5,17 @@
  * The build copies the grammars mapped below into ./grammars (scripts/copy-tree-sitter-grammars.mjs):
  * the newer build in ./vendored-grammars when there is one (see its README), otherwise the
  * tree-sitter-wasms file. Source runs (tests, tsx) have no ./grammars and pick per file the same way.
+ * A standalone binary keeps the same grammars, and web-tree-sitter's tree-sitter.wasm, beside the
+ * executable (getPackageDir()), because its import.meta.url points into Bun's virtual filesystem.
  */
 
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setFlagsFromString } from "node:v8";
 import Parser from "web-tree-sitter";
+import { getPackageDir } from "../../../../config.js";
 
 const require = createRequire(import.meta.url);
 import { getLanguageIdFromPath } from "../shared/language-map.js";
@@ -75,6 +78,15 @@ function raiseWasmTieringBudget(): void {
 
 const VENDORED_GRAMMARS = fileURLToPath(new URL("./vendored-grammars", import.meta.url));
 
+/** web-tree-sitter's runtime; a standalone binary has no node_modules and ships it beside the executable. */
+function webTreeSitterWasm(): string {
+  try {
+    return resolve(dirname(require.resolve("web-tree-sitter/package.json")), "tree-sitter.wasm");
+  } catch {
+    return join(getPackageDir(), "tree-sitter.wasm");
+  }
+}
+
 /** Where a grammar comes from in a source run: the vendored build, else tree-sitter-wasms. */
 function sourceGrammarPath(file: string): string | undefined {
   const vendored = resolve(VENDORED_GRAMMARS, file);
@@ -105,9 +117,17 @@ export class TreeSitterManager {
   /** The folder the build copied the grammars into, or undefined in a source run. */
   private copiedGrammars: string | undefined;
 
+  /** Grammar files that failed to load, by language, so a missing file is reported and not retried. */
+  private failedGrammars: Map<string, string> = new Map();
+
   constructor() {
-    const copied = fileURLToPath(new URL("./grammars", import.meta.url));
-    this.copiedGrammars = existsSync(copied) ? copied : undefined;
+    const copied = [fileURLToPath(new URL("./grammars", import.meta.url)), join(getPackageDir(), "grammars")];
+    this.copiedGrammars = copied.find((dir) => existsSync(dir));
+  }
+
+  /** Why a mapped language has no grammar loaded, after getLanguage returned null for it. */
+  grammarFailure(languageId: string): string | undefined {
+    return this.failedGrammars.get(languageId);
   }
 
   /** The grammar file a language loads from, or undefined when the language has none. */
@@ -124,14 +144,11 @@ export class TreeSitterManager {
       await this.initializing;
       return;
     }
+    const runtimeWasm = webTreeSitterWasm();
+    // Emscripten never settles init() when its wasm file is missing, so check first.
+    if (!existsSync(runtimeWasm)) throw new Error(`tree-sitter runtime not found: ${runtimeWasm}`);
     raiseWasmTieringBudget();
-    this.initializing = Parser.init({
-      locateFile: (scriptName: string) => {
-        // Use module resolution to find web-tree-sitter regardless of install layout
-        const webTsPkgJson = require.resolve("web-tree-sitter/package.json");
-        return resolve(dirname(webTsPkgJson), scriptName);
-      },
-    });
+    this.initializing = Parser.init({ locateFile: () => runtimeWasm });
     await this.initializing;
     this.initialized = true;
   }
@@ -160,16 +177,34 @@ export class TreeSitterManager {
     const loading = this.loadingLanguages.get(languageId);
     if (loading) return loading;
 
+    if (!(languageId in LANGUAGE_TO_GRAMMAR) || this.failedGrammars.has(languageId)) return null;
     const grammarPath = this.grammarPath(languageId);
-    if (!grammarPath) return null;
+    if (!grammarPath) {
+      this.failedGrammars.set(
+        languageId,
+        `tree-sitter grammar files are missing: lunR expected them in ${join(getPackageDir(), "grammars")}. Reinstall lunR`,
+      );
+      return null;
+    }
 
     const loadPromise = (async (): Promise<Language | null> => {
+      // A missing runtime or grammar costs only tree-sitter features, not the other LSP tools.
       await this.init();
       try {
+        if (!existsSync(grammarPath)) {
+          this.failedGrammars.set(
+            languageId,
+            this.copiedGrammars
+              ? `tree-sitter grammar file not found: ${grammarPath}. Reinstall lunR`
+              : `tree-sitter grammar file not found: ${grammarPath}`,
+          );
+          return null;
+        }
         const language = await Parser.Language.load(grammarPath);
         this.languages.set(languageId, language);
         return language;
-      } catch {
+      } catch (error) {
+        this.failedGrammars.set(languageId, `tree-sitter grammar ${grammarPath} did not load: ${error instanceof Error ? error.message : String(error)}`);
         return null;
       } finally {
         this.loadingLanguages.delete(languageId);

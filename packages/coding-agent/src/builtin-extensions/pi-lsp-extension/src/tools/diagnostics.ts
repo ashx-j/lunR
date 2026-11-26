@@ -124,6 +124,8 @@ export function createDiagnosticsTool(
           }
         } else if (treeSitter.parseTimedOut(absPath)) {
           text += `\n\nSyntax check skipped: ${relPath} took over ${PARSE_TIMEOUT_SECONDS} s to parse.`;
+        } else if (languageId && treeSitter.grammarFailure(languageId)) {
+          text += `\n\nNo syntax check: ${treeSitter.grammarFailure(languageId)}.`;
         }
       } catch {
         // No syntax check either; the text above says so.
