@@ -259,7 +259,7 @@ Customize these from `/settings` → Customize as well. The same menu controls `
 | `rollbackEnabled` | boolean | `false` | Enable `/rollback` snapshots |
 | `rollbackTurns` | number | `2` | How many user-turns of snapshots to retain |
 | `rollbackCapture` | string | `"copies"` | Snapshot capture mode: `"copies"`, or `"hybrid"`, which also deletes files created outside tools when `rollbackScope` is `"tree"` |
-| `rollbackScope` | string | `"tools"` | What to snapshot |
+| `rollbackScope` | string | `"tools"` | What to snapshot. `"tools"` restores edit and write changes; files a bash command changes are listed by `/rollback`, not restored (inside a git repository with at most 5,000 tracked files). `"tree"` also restores the dirty files it captures at turn start and end from git, bash changes included, the older method that cannot always reproduce the bytes that were on disk; bash-created files it leaves (`rollbackCapture: "copies"`) are listed |
 | `autoManageSubscriptions` | boolean | `false` | Shown as Auto-rotate API keys. When true, lunR switches to the next saved API key after a usage limit without asking |
 
 ### Resources
