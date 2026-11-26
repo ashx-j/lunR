@@ -600,7 +600,9 @@ export class LspClient {
       }
     }
     this.disposeConnection();
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    // A child that never started has no pid. Node reports exitCode -2 for it, but Bun leaves exitCode null,
+    // and signalling it would wait 3 s for an exit that never comes and hide the spawn error.
+    if (!child || child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
 
     // Signal delivery does not mean exit. Keep the captured child through escalation.
     await new Promise<void>((resolve, reject) => {

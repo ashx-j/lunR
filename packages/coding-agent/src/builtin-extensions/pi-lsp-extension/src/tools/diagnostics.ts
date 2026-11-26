@@ -12,7 +12,7 @@ import { truncateHead, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from "../../../../
 import { Text } from "@earendil-works/pi-tui";
 import type { LspManager } from "../lsp-manager.js";
 import type { SentDiagnostics } from "../lsp-client.js";
-import { DIAGNOSTIC_TOOL_WAIT_MS } from "../shared/timing.js";
+import { DIAGNOSTIC_TOOL_WAIT_MS, PARSE_TIMEOUT_SECONDS } from "../shared/timing.js";
 import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
 import { resolveProvider } from "../resolve-provider.js";
 import { getSyntaxErrors } from "../tree-sitter/symbol-extractor.js";
@@ -105,7 +105,10 @@ export function createDiagnosticsTool(
       const published = formatDiagnostics(lastPublished, relPath);
       text += `\n\nThe server's last published diagnostics, which may not match the current content:\n${published.text}`;
     }
-    if (treeSitter && resolveProvider(filePath, manager, treeSitter).type === "tree-sitter") {
+    const languageId = treeSitter?.getLanguageId(filePath);
+    if (treeSitter && languageId && !treeSitter.hasGrammar(languageId)) {
+      text += `\n\nNo syntax check either: lunR has no tree-sitter grammar for ${languageId}.`;
+    } else if (treeSitter && resolveProvider(filePath, manager, treeSitter).type === "tree-sitter") {
       try {
         const absPath = manager.resolvePath(filePath);
         const tree = await treeSitter.parse(absPath, await readFile(absPath, "utf-8"));
@@ -119,6 +122,10 @@ export function createDiagnosticsTool(
             const truncation = truncateHead(lines.join("\n"), { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
             text += `\n\n${syntaxErrors.length} syntax error(s) [tree-sitter, syntax only]\n\n${truncation.content}`;
           }
+        } else if (treeSitter.parseTimedOut(absPath)) {
+          text += `\n\nSyntax check skipped: ${relPath} took over ${PARSE_TIMEOUT_SECONDS} s to parse.`;
+        } else if (languageId && treeSitter.grammarFailure(languageId)) {
+          text += `\n\nNo syntax check: ${treeSitter.grammarFailure(languageId)}.`;
         }
       } catch {
         // No syntax check either; the text above says so.
