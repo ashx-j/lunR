@@ -54,7 +54,7 @@ function createMode() {
 		defaultEditor: {},
 		clearStatusIndicator: vi.fn(),
 		stopSmoothStreaming: vi.fn(),
-		maybeAutoNameSession: vi.fn(),
+		autoNamer: { maybeAutoNameSession: vi.fn() },
 		showStatus: vi.fn(),
 		flushCompactionQueue: vi.fn(),
 		setThinkingAnimation: vi.fn(),

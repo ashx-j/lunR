@@ -13,7 +13,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { collectUsageRequests, totalRequestUsage } from "../src/core/usage-accounting.ts";
 import { collectUsageHistory, resetUsageHistoryCache } from "../src/core/usage-history.ts";
 import { renderUsageBox } from "../src/modes/interactive/components/usage-view.ts";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { SessionAutoNamer, type SessionAutoNamerHost } from "../src/modes/interactive/session-naming.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { createHarness, type Harness } from "./suite/harness.ts";
 
@@ -349,18 +349,14 @@ describe("durable request accounting", () => {
 				}),
 		);
 		const setSessionName = vi.fn();
-		const mode = Object.create(InteractiveMode.prototype) as { generateSessionTitle(text: string): Promise<void> };
-		Reflect.set(mode, "runtimeHost", {
-			session: {
-				model: h.models[0],
-				sessionManager: manager,
-				settingsManager: { getModelTiersEnabled: () => false },
-				modelRuntime: { complete },
-				setSessionName,
-			},
-		});
+		const namer = new SessionAutoNamer({
+			session: { model: h.models[0], modelRuntime: { complete }, setSessionName },
+			sessionManager: manager,
+			settingsManager: { getModelTiersEnabled: () => false },
+			resolveModelReference: () => undefined,
+		} as unknown as SessionAutoNamerHost) as unknown as { generateSessionTitle(text: string): Promise<void> };
 		try {
-			const pending = mode.generateSessionTitle("review tokens");
+			const pending = namer.generateSessionTitle("review tokens");
 			expect(complete).toHaveBeenCalledTimes(1);
 			manager.newSession();
 			const response = assistant(Date.now());
