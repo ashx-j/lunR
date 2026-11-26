@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { UrlElicitationRequiredError, type ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { ResourceFetchError, ResourceParseError } from "./errors.ts";
@@ -17,7 +16,11 @@ interface ResourceContentRecord {
 export class UiResourceHandler {
   private log = logger.child({ component: "UiResourceHandler" });
 
-  constructor(private manager: McpServerManager) {}
+  private manager: McpServerManager;
+
+  constructor(manager: McpServerManager) {
+    this.manager = manager;
+  }
 
   async readUiResource(serverName: string, uri: string): Promise<UiResourceContent> {
     const log = this.log.child({ server: serverName, uri });

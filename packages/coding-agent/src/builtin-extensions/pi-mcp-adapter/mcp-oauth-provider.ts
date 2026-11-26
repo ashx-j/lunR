@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * MCP OAuth Provider
  * 
@@ -98,13 +97,24 @@ export class McpOAuthProvider implements OAuthClientProvider {
   private flowClientInfo?: StoredClientInfo
   private flowClientInfoLoaded = false
 
+  private serverName: string
+  private serverUrl: string
+  private config: McpOAuthConfig
+  private callbacks: McpOAuthCallbacks
+  private flowState: McpOAuthFlowState | undefined
+
   constructor(
-    private serverName: string,
-    private serverUrl: string,
-    private config: McpOAuthConfig,
-    private callbacks: McpOAuthCallbacks,
-    private flowState?: McpOAuthFlowState,
+    serverName: string,
+    serverUrl: string,
+    config: McpOAuthConfig,
+    callbacks: McpOAuthCallbacks,
+    flowState?: McpOAuthFlowState,
   ) {
+    this.serverName = serverName
+    this.serverUrl = serverUrl
+    this.config = config
+    this.callbacks = callbacks
+    this.flowState = flowState
     if (flowState) {
       const info = flowState.clientInfo
       this.flowClientInfo = info?.clientSecretExpiresAt && info.clientSecretExpiresAt < Date.now() / 1000
