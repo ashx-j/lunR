@@ -9,14 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { CLAUDE_CODE_HISTORY_REPLAYED_NOTE, claudeCodeHistoryReplayed } from "@earendil-works/pi-ai";
-import {
-	type Api,
-	type AssistantMessage,
-	getSupportedThinkingLevels,
-	type ImageContent,
-	type Message,
-	type Model,
-} from "@earendil-works/pi-ai/compat";
+import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -71,12 +64,10 @@ import type {
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { globalBridge } from "../../core/global-bridge.ts";
-import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
+import { configureHttpDispatcher } from "../../core/http-dispatcher.ts";
 import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
-import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/model-instructions.ts";
-import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
 import { registerApprovalHandler } from "../../core/permissions.ts";
@@ -85,11 +76,9 @@ import {
 	captureTreeChanges,
 	clearRollback,
 	initRollback,
-	isRollbackSessionForceEnabled,
 	beginTurn as rollbackBeginTurn,
 	setRollbackWarningHandler,
 } from "../../core/rollback.ts";
-import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
 import { formatMissingSessionCwdPrompt, type MissingSessionCwdError } from "../../core/session-cwd.ts";
 import {
 	cancelSessionHandoff,
@@ -104,7 +93,6 @@ import type { SourceInfo } from "../../core/source-info.ts";
 import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/subagent-cancellation.ts";
 import { sweepStaleTempFiles } from "../../core/temp-files.ts";
 import { time } from "../../core/timings.ts";
-import { notifyTodosEnabledChanged } from "../../core/todo-settings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
@@ -133,7 +121,6 @@ import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { InjectedPromptMessageComponent } from "./components/injected-prompt-message.ts";
 import { formatKeyText, keyDisplayText, keyText } from "./components/keybinding-hints.ts";
-import { ModelSelectorComponent } from "./components/model-selector.ts";
 import { type AuthSelectorProvider, formatAuthSelectorProviderType } from "./components/oauth-selector.ts";
 import {
 	buildOnboardingOptions,
@@ -146,7 +133,6 @@ import {
 	WELCOME_TEXT,
 } from "./components/onboarding.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
-import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
 	CompactionStatusIndicator,
@@ -176,11 +162,9 @@ import {
 	showOAuthSelector,
 } from "./login-flow.ts";
 import {
-	countSubscriptions,
 	getModelCandidates,
 	handleModelCommand,
 	handleRefreshCommand,
-	listSubscriptionRows,
 	type ModelCommandHost,
 	showModelSelector,
 	showModelsSelector,
@@ -206,6 +190,7 @@ import {
 	showTreeSelector,
 	showUserMessageSelector,
 } from "./session-navigation.ts";
+import { type SettingsScreenHost, showSettingsSelector } from "./settings-screen.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
 import {
 	findArgumentlessSlashCommand,
@@ -229,7 +214,6 @@ import {
 } from "./smooth-streaming.ts";
 import { logStrayOutput } from "./stray-output.ts";
 import {
-	getAvailableThemes,
 	getAvailableThemesWithPaths,
 	getEditorTheme,
 	getMarkdownTheme,
@@ -569,6 +553,8 @@ export class InteractiveMode {
 	private readonly approvalDialogHost: ApprovalDialogHost = this.createApprovalDialogHost();
 	// Passed to rollback-command.ts for /rollback.
 	private readonly rollbackCommandHost: RollbackCommandHost = this.createRollbackCommandHost();
+	// Passed to settings-screen.ts for /settings.
+	private readonly settingsScreenHost: SettingsScreenHost = this.createSettingsScreenHost();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -4413,471 +4399,6 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private async showSettingsSelector(): Promise<void> {
-		// lunr: prefetch the pool size for the API keys row label (render paths stay sync).
-		const subscriptionCount = await countSubscriptions(this.session);
-		this.showSelector((done) => {
-			const selector = new SettingsSelectorComponent(
-				{
-					autoCompact: this.session.autoCompactionEnabled,
-					compactionCeilingTokens: this.settingsManager.getCompactionCeilingTokens(),
-					compactionCeilingFloorTokens: this.session.getCompactionCeilingFloor().floor,
-					compactionCeilingKeptTokens: this.session.getCompactionCeilingFloor().keptTokens,
-					showImages: this.settingsManager.getShowImages(),
-					imageWidthCells: this.settingsManager.getImageWidthCells(),
-					autoResizeImages: this.settingsManager.getImageAutoResize(),
-					blockImages: this.settingsManager.getBlockImages(),
-					enableSkillCommands: this.settingsManager.getEnableSkillCommands(),
-					skillTagCharacter: this.settingsManager.getSkillTagCharacter(),
-					steeringMode: this.session.steeringMode,
-					followUpMode: this.session.followUpMode,
-					transport: this.settingsManager.getTransport(),
-					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
-					thinkingLevel: this.session.thinkingLevel,
-					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
-					currentTheme: this.settingsManager.getThemeSetting() || "moon",
-					terminalTheme: this.themeController.getTerminalTheme(),
-					availableThemes: getAvailableThemes(),
-					hideThinkingBlock: this.hideThinkingBlock,
-					thinkingCollapse: this.thinkingCollapse,
-					reasoningDisplay: this.settingsManager.getReasoningDisplay(),
-					cacheRetention: this.settingsManager.getCacheRetention() ?? "short",
-					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
-					treeFilterMode: this.settingsManager.getTreeFilterMode(),
-					showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
-					showCacheMissNotices: this.settingsManager.getShowCacheMissNotices(),
-					defaultProjectTrust: this.settingsManager.getDefaultProjectTrust(),
-					editorPaddingX: this.settingsManager.getEditorPaddingX(),
-					outputPad: this.settingsManager.getOutputPad(),
-					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
-					quietStartup: this.settingsManager.getQuietStartup(),
-					smoothStreaming: this.settingsManager.getSmoothStreaming(),
-					subagentSpinner: this.settingsManager.getSubagentSpinner(),
-					sessionRetentionDays: this.settingsManager.getSessionRetentionDays(),
-					clearOnShrink: this.settingsManager.getClearOnShrink(),
-					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
-					attentionNotification: this.settingsManager.getAttentionNotification(),
-					modelTiers: this.settingsManager.getModelTiers(),
-					modelInstructions: this.settingsManager.getModelInstructions(),
-					globalInstructionsPath: getGlobalInstructionsPath(getAgentDir()),
-					modelInstructionsPath: getModelInstructionsPath(
-						getAgentDir(),
-						this.session.model?.id ?? "no-model-selected",
-					),
-					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
-					clientScopedModelsOnly: this.settingsManager.getClientScopedModelsOnly(),
-					computerUse: this.settingsManager.getComputerUse(),
-					computerForeground: this.settingsManager.getComputerForeground(),
-					subagentCommunicationEnabled: this.settingsManager.getSubagentCommunicationEnabled(),
-					automaticSubagentDelegation: this.settingsManager.getAutomaticSubagentDelegation(),
-					browserEnabled: this.settingsManager.getBrowserEnabled(),
-					prWatchDurationMs: this.settingsManager.getPrWatchDurationMs(),
-					memoryEnabled: this.settingsManager.getMemoryEnabled(),
-					memoryCharCap: this.settingsManager.getMemoryCharCap(),
-					todosEnabled: this.settingsManager.getTodosEnabled(),
-					deferredToolsEnabled: this.settingsManager.getDeferredToolsEnabled(),
-					searchCurator: getSearchCuratorSetting(),
-					// lunr: TUI customize settings
-					footerMcp: this.settingsManager.getFooterMcp(),
-					footerLsp: this.settingsManager.getFooterLsp(),
-					footerContext: this.settingsManager.getFooterContext(),
-					footerTokens: this.settingsManager.getFooterTokens(),
-					footerCacheHitRate: this.settingsManager.getFooterCacheHitRate(),
-					footerTps: this.settingsManager.getFooterTps(),
-					footerStatuses: this.settingsManager.getFooterStatuses(),
-					footerGit: this.settingsManager.getFooterGit(),
-					footerPlan: this.settingsManager.getFooterPlan(),
-					footerPlanBar: this.settingsManager.getFooterPlanBar(),
-					planUsageWindow: this.settingsManager.getPlanUsageWindow(),
-					defaultPermissionMode: this.settingsManager.getDefaultPermissionMode(),
-					autoReviewModel: this.settingsManager.getAutoReviewModel(),
-					rollbackEnabled: this.settingsManager.getRollbackEnabled(),
-					rollbackTurns: this.settingsManager.getRollbackTurns(),
-					rollbackCapture: this.settingsManager.getRollbackCapture(),
-					rollbackScope: this.settingsManager.getRollbackScope(),
-					// lunr: multi-subscription pools
-					autoManageSubscriptions: this.settingsManager.getAutoManageSubscriptions(),
-					subscriptionCount,
-				},
-				{
-					onAutoCompactChange: (enabled) => {
-						this.session.setAutoCompactionEnabled(enabled);
-						this.footer.setAutoCompactEnabled(enabled);
-					},
-					onCompactionCeilingChange: (ceilingTokens) => {
-						this.settingsManager.setCompactionCeilingTokens(ceilingTokens);
-					},
-					onShowImagesChange: (enabled) => {
-						this.settingsManager.setShowImages(enabled);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setShowImages(enabled);
-							}
-						}
-					},
-					onImageWidthCellsChange: (width) => {
-						this.settingsManager.setImageWidthCells(width);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setImageWidthCells(width);
-							}
-						}
-					},
-					onAutoResizeImagesChange: (enabled) => {
-						this.settingsManager.setImageAutoResize(enabled);
-					},
-					onBlockImagesChange: (blocked) => {
-						this.settingsManager.setBlockImages(blocked);
-					},
-					onEnableSkillCommandsChange: (enabled) => {
-						this.settingsManager.setEnableSkillCommands(enabled);
-						this.setupAutocompleteProvider();
-					},
-					onSkillTagCharacterChange: (character) => {
-						this.settingsManager.setSkillTagCharacter(character);
-						this.setupAutocompleteProvider();
-					},
-					onSteeringModeChange: (mode) => {
-						this.session.setSteeringMode(mode);
-					},
-					onFollowUpModeChange: (mode) => {
-						this.session.setFollowUpMode(mode);
-					},
-					onTransportChange: (transport) => {
-						this.settingsManager.setTransport(transport);
-						this.session.agent.transport = transport;
-					},
-					onHttpIdleTimeoutMsChange: (timeoutMs) => {
-						this.settingsManager.setHttpIdleTimeoutMs(timeoutMs);
-						configureHttpDispatcher(timeoutMs);
-						this.showStatus(`HTTP idle timeout: ${formatHttpIdleTimeoutMs(timeoutMs)}`);
-					},
-					onThinkingLevelChange: (level) => {
-						this.session.setThinkingLevel(level);
-						this.footer.invalidate();
-						this.updateEditorBorderColor();
-					},
-					onThemeChange: (themeSetting) => {
-						this.settingsManager.setTheme(themeSetting);
-						void this.themeController.applyFromSettings();
-					},
-					onThemePreview: (themeName) => this.themeController.preview(themeName),
-					onHideThinkingBlockChange: (hidden) => {
-						this.hideThinkingBlock = hidden;
-						this.settingsManager.setHideThinkingBlock(hidden);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof AssistantMessageComponent) {
-								child.setHideThinkingBlock(hidden);
-							}
-						}
-						this.rebuildChatFromMessages();
-					},
-					onThinkingCollapseChange: (collapse) => {
-						this.thinkingCollapse = collapse;
-						this.settingsManager.setThinkingCollapse(collapse);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof AssistantMessageComponent) {
-								child.setThinkingCollapse(collapse);
-							}
-						}
-						this.rebuildChatFromMessages();
-					},
-					onReasoningDisplayChange: (display) => {
-						this.settingsManager.setReasoningDisplay(display);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof AssistantMessageComponent) {
-								child.setReasoningDisplay(this.settingsManager.getReasoningDisplay());
-							}
-						}
-						this.ui.requestRender();
-					},
-					onShowCacheMissNoticesChange: (shown) => {
-						this.settingsManager.setShowCacheMissNotices(shown);
-						this.rebuildChatFromMessages();
-					},
-					onCacheRetentionChange: (retention) => {
-						this.settingsManager.setCacheRetention(retention);
-					},
-					onQuietStartupChange: (enabled) => {
-						this.settingsManager.setQuietStartup(enabled);
-					},
-					onSmoothStreamingChange: (enabled) => {
-						this.applySmoothStreamingSettingChange(enabled);
-					},
-					onSubagentSpinnerChange: (spinner) => {
-						this.settingsManager.setSubagentSpinner(spinner);
-						this.ui.requestRender();
-					},
-					onSessionRetentionDaysChange: (days) => {
-						this.settingsManager.setSessionRetentionDays(days);
-					},
-					onDefaultProjectTrustChange: (defaultProjectTrust) => {
-						this.settingsManager.setDefaultProjectTrust(defaultProjectTrust);
-					},
-					onDoubleEscapeActionChange: (action) => {
-						this.settingsManager.setDoubleEscapeAction(action);
-					},
-					onTreeFilterModeChange: (mode) => {
-						this.settingsManager.setTreeFilterMode(mode);
-					},
-					onShowHardwareCursorChange: (enabled) => {
-						this.settingsManager.setShowHardwareCursor(enabled);
-						this.ui.setShowHardwareCursor(enabled);
-					},
-					onEditorPaddingXChange: (padding) => {
-						this.settingsManager.setEditorPaddingX(padding);
-						this.defaultEditor.setPaddingX(padding);
-						if (this.editor !== this.defaultEditor && this.editor.setPaddingX !== undefined) {
-							this.editor.setPaddingX(padding);
-						}
-					},
-					onOutputPadChange: (padding) => {
-						this.settingsManager.setOutputPad(padding);
-						this.outputPad = padding;
-						if (this.streamingComponent || this.session.isStreaming) {
-							for (const child of this.chatContainer.children) {
-								if (child instanceof AssistantMessageComponent || child instanceof UserMessageComponent) {
-									child.setOutputPad(padding);
-								}
-							}
-							if (this.streamingComponent) {
-								this.streamingComponent.setOutputPad(padding);
-							}
-							this.ui.requestRender();
-							return;
-						}
-						this.rebuildChatFromMessages();
-					},
-					onAutocompleteMaxVisibleChange: (maxVisible) => {
-						this.settingsManager.setAutocompleteMaxVisible(maxVisible);
-						this.defaultEditor.setAutocompleteMaxVisible(maxVisible);
-						if (this.editor !== this.defaultEditor && this.editor.setAutocompleteMaxVisible !== undefined) {
-							this.editor.setAutocompleteMaxVisible(maxVisible);
-						}
-					},
-					onClearOnShrinkChange: (enabled) => {
-						this.settingsManager.setClearOnShrink(enabled);
-						this.ui.setClearOnShrink(enabled);
-						if (!enabled && !this.activeStatusIndicator) {
-							this.statusContainer.clear();
-						}
-					},
-					onShowTerminalProgressChange: (enabled) => {
-						this.settingsManager.setShowTerminalProgress(enabled);
-						if (!enabled) this.ui.terminal.setProgress(false);
-					},
-					onAttentionNotificationChange: (mode) => {
-						this.settingsManager.setAttentionNotification(mode);
-						this.ui.setFocusReporting(mode !== "off");
-					},
-					onModelTiersEnabledChange: (enabled) => {
-						this.settingsManager.setModelTiersEnabled(enabled);
-						getModelTiersBridge()?.refreshToolDescription();
-					},
-					onModelTierModelChange: (tier, model) => {
-						this.settingsManager.setTierModel(tier, model);
-					},
-					onModelTierThinkingChange: (tier, level) => {
-						this.settingsManager.setTierThinking(tier, level);
-					},
-					onModelInstructionsEnabledChange: (enabled) => {
-						this.settingsManager.setModelInstructionsEnabled(enabled);
-						this.session.refreshToolRegistry();
-					},
-					onModelInstructionsModeChange: (mode) => {
-						this.settingsManager.setModelInstructionsMode(mode);
-						this.session.refreshToolRegistry();
-					},
-					onConfirmLargeSubagentLaunchesChange: (enabled) => {
-						this.settingsManager.setConfirmLargeSubagentLaunches(enabled);
-					},
-					onClientScopedModelsOnlyChange: (enabled) => {
-						this.settingsManager.setClientScopedModelsOnly(enabled);
-					},
-					onSubagentCommunicationChange: (enabled) => {
-						this.settingsManager.setSubagentCommunicationEnabled(enabled);
-					},
-					onAutomaticSubagentDelegationChange: (enabled) => {
-						this.settingsManager.setAutomaticSubagentDelegation(enabled);
-						this.session.refreshToolRegistry();
-					},
-					getTierThinkingLevels: (tier) => {
-						const model = this.resolveModelReference(this.settingsManager.getTierModel(tier));
-						if (model) return getSupportedThinkingLevels(model);
-						return this.session.getAvailableThinkingLevels();
-					},
-					onMemoryCharCapChange: (cap) => {
-						this.settingsManager.setMemoryCharCap(cap);
-					},
-					onComputerUseChange: (enabled) => {
-						this.settingsManager.setComputerUse(enabled);
-					},
-					onComputerForegroundChange: (enabled) => {
-						this.settingsManager.setComputerForeground(enabled);
-					},
-					onBrowserEnabledChange: (enabled) => {
-						this.settingsManager.setBrowserEnabled(enabled);
-						this.session.refreshToolRegistry();
-					},
-					onPrWatchDurationChange: (durationMs) => {
-						this.settingsManager.setPrWatchDurationMs(durationMs);
-					},
-					onMemoryEnabledChange: (enabled) => {
-						this.settingsManager.setMemoryEnabled(enabled);
-						this.session.refreshToolRegistry();
-						this.showStatus(`Agent memory: ${enabled ? "on" : "off"}`);
-					},
-					// lunr: saved only; a running session keeps its tool list.
-					onDeferredToolsEnabledChange: (enabled) => {
-						this.settingsManager.setDeferredToolsEnabled(enabled);
-					},
-					onTodosEnabledChange: (enabled) => {
-						this.settingsManager.setTodosEnabled(enabled);
-						notifyTodosEnabledChanged(enabled);
-						this.session.refreshToolRegistry();
-					},
-					onSearchCuratorChange: (setting) => {
-						if (!setSearchCuratorSetting(setting)) {
-							this.showError("pi-web-access is not loaded; curator setting unavailable.");
-						}
-					},
-					// lunr: TUI customize callbacks
-					onFooterMcpChange: (enabled) => {
-						this.settingsManager.setFooterMcp(enabled);
-					},
-					onFooterLspChange: (enabled) => {
-						this.settingsManager.setFooterLsp(enabled);
-					},
-					onFooterContextChange: (enabled) => {
-						this.settingsManager.setFooterContext(enabled);
-					},
-					onFooterTokensChange: (enabled) => {
-						this.settingsManager.setFooterTokens(enabled);
-					},
-					onFooterCacheHitRateChange: (enabled) => {
-						this.settingsManager.setFooterCacheHitRate(enabled);
-					},
-					onFooterTpsChange: (enabled) => {
-						this.settingsManager.setFooterTps(enabled);
-					},
-					onFooterStatusesChange: (enabled) => {
-						this.settingsManager.setFooterStatuses(enabled);
-					},
-					onFooterGitChange: (enabled) => {
-						this.settingsManager.setFooterGit(enabled);
-					},
-					onFooterPlanChange: (enabled) => {
-						this.settingsManager.setFooterPlan(enabled);
-					},
-					onFooterPlanBarChange: (enabled) => {
-						this.settingsManager.setFooterPlanBar(enabled);
-					},
-					onPlanUsageWindowChange: (window) => {
-						this.settingsManager.setPlanUsageWindow(window);
-					},
-					onGatewayAction: (action) => {
-						void (async () => {
-							if (this.session.isStreaming) {
-								this.showStatus("Wait for the current turn before managing the gateway.");
-								return;
-							}
-							if (action === "status") {
-								this.showStatus((await import("../../gateway/service.ts")).serviceStatusText());
-								return;
-							}
-							this.ui.stop();
-							try {
-								await new Promise<void>((resolve, reject) => {
-									const child = spawn(process.execPath, [process.argv[1], "gateway", ...action.split(" ")], {
-										stdio: "inherit",
-										env: process.env,
-									});
-									child.once("error", reject);
-									child.once("exit", (code) =>
-										code === 0
-											? resolve()
-											: reject(
-													new Error(`Gateway command exited with code ${code}. Run lunr gateway doctor.`),
-												),
-									);
-								});
-							} finally {
-								this.ui.start();
-								this.ui.requestRender(true);
-							}
-							this.showStatus((await import("../../gateway/service.ts")).serviceStatusText());
-						})().catch((error) => this.showStatus(error instanceof Error ? error.message : String(error)));
-					},
-					onDefaultPermissionModeChange: (mode) => {
-						this.settingsManager.setDefaultPermissionMode(mode);
-					},
-					onAutoReviewModelChange: (ref) => {
-						this.settingsManager.setAutoReviewModel(ref);
-					},
-					onChooseAutoReviewModel: () => {
-						done();
-						this.permissions.showAutoReviewModelPicker();
-					},
-					onRollbackEnabledChange: (enabled) => {
-						this.settingsManager.setRollbackEnabled(enabled);
-					},
-					onRollbackTurnsChange: (turns) => {
-						this.settingsManager.setRollbackTurns(turns);
-					},
-					onRollbackCaptureChange: (mode) => {
-						this.settingsManager.setRollbackCapture(mode);
-					},
-					onRollbackScopeChange: (scope) => {
-						this.settingsManager.setRollbackScope(scope);
-					},
-					isRollbackSessionForceEnabled: () => isRollbackSessionForceEnabled(this.sessionManager.getSessionId()),
-					// lunr: multi-subscription pool callbacks
-					onAutoManageSubscriptionsChange: (enabled) => {
-						this.settingsManager.setAutoManageSubscriptions(enabled);
-					},
-					subscriptions: {
-						list: () => listSubscriptionRows(this.session),
-						setActive: (providerId, id) =>
-							this.session.modelRuntime.subscriptionManager.setActive(providerId, id),
-						rename: (providerId, id, name) =>
-							this.session.modelRuntime.subscriptionManager.renameKey(providerId, id, name),
-						clearExhaustion: (providerId, id) =>
-							this.session.modelRuntime.subscriptionManager.clearExhaustion(providerId, id),
-						remove: (providerId, id) => this.session.modelRuntime.subscriptionManager.removeKey(providerId, id),
-						autoManage: () => this.settingsManager.getAutoManageSubscriptions(),
-						requestRender: () => this.ui.requestRender(),
-					},
-					requestRender: () => this.ui.requestRender(),
-					createModelTierPicker: (_tier, currentModelRef, done) => {
-						const selector = new ModelSelectorComponent(
-							this.ui,
-							this.resolveModelReference(currentModelRef),
-							this.settingsManager,
-							this.session.modelRuntime,
-							this.session.scopedModels,
-							(model) => {
-								done(`${model.provider}/${model.id}`);
-								this.ui.requestRender();
-							},
-							() => {
-								done();
-								this.ui.requestRender();
-							},
-							undefined,
-							{ persistDefault: false },
-						);
-						return selector;
-					},
-					onCancel: () => {
-						done();
-						this.ui.requestRender();
-					},
-				},
-			);
-			return { component: selector, focus: selector.getSettingsList() };
-		});
-	}
-
 	/** Resolve a "provider/model" settings string to a runtime model, if it still exists. */
 	private resolveModelReference(reference: string | undefined): Model<Api> | undefined {
 		if (!reference) return undefined;
@@ -5185,6 +4706,77 @@ export class InteractiveMode {
 		};
 	}
 
+	// Builds the SettingsScreenHost. Every field member is a getter (see the note above the host fields);
+	// the 3 display flags are getter/setter pairs because rows change them.
+	private createSettingsScreenHost(): SettingsScreenHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get statusContainer() {
+				return mode.statusContainer;
+			},
+			get footer() {
+				return mode.footer;
+			},
+			get themeController() {
+				return mode.themeController;
+			},
+			get defaultEditor() {
+				return mode.defaultEditor;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get streamingComponent() {
+				return mode.streamingComponent;
+			},
+			get activeStatusIndicator() {
+				return mode.activeStatusIndicator;
+			},
+			get hideThinkingBlock() {
+				return mode.hideThinkingBlock;
+			},
+			set hideThinkingBlock(hidden) {
+				mode.hideThinkingBlock = hidden;
+			},
+			get thinkingCollapse() {
+				return mode.thinkingCollapse;
+			},
+			set thinkingCollapse(collapse) {
+				mode.thinkingCollapse = collapse;
+			},
+			get outputPad() {
+				return mode.outputPad;
+			},
+			set outputPad(padding) {
+				mode.outputPad = padding;
+			},
+			showStatus: (message) => this.showStatus(message),
+			showError: (message) => this.showError(message),
+			showSelector: (create) => this.showSelector(create),
+			rebuildChatFromMessages: () => this.rebuildChatFromMessages(),
+			setupAutocompleteProvider: () => this.setupAutocompleteProvider(),
+			updateEditorBorderColor: () => this.updateEditorBorderColor(),
+			applySmoothStreamingSettingChange: (enabled) => this.applySmoothStreamingSettingChange(enabled),
+			resolveModelReference: (reference) => this.resolveModelReference(reference),
+			showAutoReviewModelPicker: () => this.permissions.showAutoReviewModelPicker(),
+		};
+	}
+
 	// Builds the PermissionControllerHost. `session` stays a getter because /new, /resume and /fork replace it.
 	private createPermissionControllerHost(): PermissionControllerHost {
 		const mode = this;
@@ -5216,7 +4808,7 @@ export class InteractiveMode {
 			},
 			loginFlowHost: this.loginFlowHost,
 			handleClipboardPaste: (options) => this.handleClipboardPaste(options),
-			showSettingsSelector: () => this.showSettingsSelector(),
+			showSettingsSelector: () => showSettingsSelector(this.settingsScreenHost),
 			showModelsSelector: () => showModelsSelector(this.modelCommandHost),
 			handleModelCommand: (searchTerm) => handleModelCommand(this.modelCommandHost, searchTerm),
 			handleRefreshCommand: () => handleRefreshCommand(this.modelCommandHost),

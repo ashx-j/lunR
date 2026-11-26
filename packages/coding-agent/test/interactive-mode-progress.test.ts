@@ -17,6 +17,7 @@ vi.mock("../src/modes/interactive/components/settings-selector.ts", () => ({
 }));
 
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { type SettingsScreenHost, showSettingsSelector } from "../src/modes/interactive/settings-screen.ts";
 
 function createMode() {
 	let enabled = true;
@@ -70,9 +71,6 @@ const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
 	this: ReturnType<typeof createMode>["mode"],
 	event: AgentSessionEvent,
 ) => Promise<void>;
-const showSettings = Reflect.get(InteractiveMode.prototype, "showSettingsSelector") as (
-	this: ReturnType<typeof createMode>["mode"],
-) => Promise<void>;
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -87,7 +85,7 @@ describe("InteractiveMode progress cleanup", () => {
 		try {
 			await handleEvent.call(mode, { type: "agent_start" });
 			expect(vi.getTimerCount()).toBe(1);
-			await showSettings.call(mode);
+			await showSettingsSelector(mode as unknown as SettingsScreenHost);
 			captured.callbacks?.onShowTerminalProgressChange(false);
 			expect(setShowTerminalProgress).toHaveBeenCalledWith(false);
 			expect(vi.getTimerCount()).toBe(0);
