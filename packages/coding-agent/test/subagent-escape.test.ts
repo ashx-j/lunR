@@ -6,11 +6,19 @@ import {
 	SubagentEscapeSequence,
 } from "../src/core/subagent-cancellation.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { showTreeSelector } from "../src/modes/interactive/session-navigation.ts";
+
+vi.mock("../src/modes/interactive/session-navigation.ts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/modes/interactive/session-navigation.ts")>()),
+	showTreeSelector: vi.fn(),
+	showUserMessageSelector: vi.fn(),
+}));
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
 	for (const cleanup of cleanups.splice(0)) cleanup();
 	vi.useRealTimers();
+	vi.mocked(showTreeSelector).mockClear();
 });
 
 function fixture(active = true) {
@@ -33,8 +41,6 @@ function fixture(active = true) {
 		restoreQueuedMessagesToEditor: vi.fn(),
 		showStatus: vi.fn(),
 		showError: vi.fn(),
-		showTreeSelector: vi.fn(),
-		showUserMessageSelector: vi.fn(),
 		settingsManager: { getDoubleEscapeAction: () => "tree" },
 		ui: { addInputListener: vi.fn() },
 	};
@@ -95,7 +101,7 @@ describe("Escape with async children", () => {
 		editor.onEscape!();
 		await Promise.resolve();
 		expect(stop).toHaveBeenCalledOnce();
-		expect(mode.showTreeSelector).not.toHaveBeenCalled();
+		expect(showTreeSelector).not.toHaveBeenCalled();
 		expect(editor.setText).not.toHaveBeenCalled();
 		expect(mode.showStatus).toHaveBeenCalledWith("Stopping 2 async runs");
 	});
@@ -113,7 +119,7 @@ describe("Escape with async children", () => {
 		editor.getText = () => "";
 		editor.onEscape!();
 		editor.onEscape!();
-		expect(mode.showTreeSelector).toHaveBeenCalledOnce();
+		expect(showTreeSelector).toHaveBeenCalledOnce();
 		expect(stop).not.toHaveBeenCalled();
 	});
 	it("expires the second-press window and never carries it into another session", () => {

@@ -72,7 +72,6 @@ import { startCatalogRefreshPolling } from "../../core/catalog-refresh-polling.t
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
-	ExtensionCommandContext,
 	ExtensionContext,
 	ExtensionRunner,
 	ExtensionUIContext,
@@ -167,11 +166,9 @@ import {
 } from "./components/onboarding.ts";
 import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
-import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
-	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
 	IdleStatus,
 	RetryStatusIndicator,
@@ -180,10 +177,8 @@ import {
 } from "./components/status-indicator.ts";
 import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/thinking-summary.ts";
 import { applySameToolGrouping, applyToolRunSpacing, ToolExecutionComponent } from "./components/tool-execution.ts";
-import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
-import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { ExitConfirmation } from "./exit-confirmation.ts";
 import {
 	orderedExtensionWidgets,
@@ -212,6 +207,17 @@ import {
 } from "./model-commands.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { type PermissionControllerHost, PermissionModeController } from "./permission-controller.ts";
+import {
+	handleCloneCommand,
+	handleEditCommand,
+	handleRedoCommand,
+	handleResumeSession,
+	handleUndoCommand,
+	type SessionNavigationHost,
+	showSessionSelector,
+	showTreeSelector,
+	showUserMessageSelector,
+} from "./session-navigation.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
 import {
 	findArgumentlessSlashCommand,
@@ -566,6 +572,8 @@ export class InteractiveMode {
 	private readonly modelCommandHost: ModelCommandHost = this.createModelCommandHost();
 	// Passed to the usage-commands.ts and help-commands.ts views.
 	private readonly chatViewHost: UsageCommandHost & HelpCommandHost = this.createChatViewHost();
+	// Passed to the session-navigation.ts functions for /tree, /fork, /clone, /resume, /undo, /edit and /redo.
+	private readonly sessionNavigationHost: SessionNavigationHost = this.createSessionNavigationHost();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -1395,7 +1403,7 @@ export class InteractiveMode {
 					return { cancelled: false };
 				},
 				switchSession: async (sessionPath, options) => {
-					return this.handleResumeSession(sessionPath, options);
+					return handleResumeSession(this.sessionNavigationHost, sessionPath, options);
 				},
 				reload: async () => {
 					await this.handleReloadCommand();
@@ -2366,9 +2374,9 @@ export class InteractiveMode {
 					const now = Date.now();
 					if (now - this.lastEscapeTime < 500) {
 						if (action === "tree") {
-							this.showTreeSelector();
+							showTreeSelector(this.sessionNavigationHost);
 						} else {
-							this.showUserMessageSelector();
+							showUserMessageSelector(this.sessionNavigationHost);
 						}
 						this.lastEscapeTime = 0;
 					} else {
@@ -2398,9 +2406,9 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
-		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
-		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
-		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
+		this.defaultEditor.onAction("app.session.tree", () => showTreeSelector(this.sessionNavigationHost));
+		this.defaultEditor.onAction("app.session.fork", () => showUserMessageSelector(this.sessionNavigationHost));
+		this.defaultEditor.onAction("app.session.resume", () => showSessionSelector(this.sessionNavigationHost));
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -4965,289 +4973,6 @@ export class InteractiveMode {
 		});
 	}
 
-	private showUserMessageSelector(): void {
-		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		const userMessages = this.session.getUserMessagesForForking();
-
-		if (userMessages.length === 0) {
-			this.showStatus("No messages to fork from");
-			return;
-		}
-
-		const initialSelectedId = userMessages[userMessages.length - 1]?.entryId;
-
-		this.showSelector((done) => {
-			const selector = new UserMessageSelectorComponent(
-				userMessages.map((m) => ({ id: m.entryId, text: m.text })),
-				async (entryId) => {
-					done();
-					try {
-						const result = await this.runtimeHost.fork(entryId);
-						if (result.cancelled) {
-							this.ui.requestRender();
-							return;
-						}
-
-						this.editor.setText(result.selectedText ?? "");
-						this.showStatus("Forked to new session");
-					} catch (error: unknown) {
-						this.showError(error instanceof Error ? error.message : String(error));
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				initialSelectedId,
-			);
-			return { component: selector, focus: selector.getMessageList() };
-		});
-	}
-
-	private async handleCloneCommand(): Promise<void> {
-		const leafId = this.sessionManager.getLeafId();
-		if (!leafId) {
-			this.showStatus("Nothing to clone yet");
-			return;
-		}
-
-		try {
-			const result = await this.runtimeHost.fork(leafId, { position: "at" });
-			if (result.cancelled) {
-				this.ui.requestRender();
-				return;
-			}
-
-			this.editor.setText("");
-			this.showStatus("Cloned to new session");
-		} catch (error: unknown) {
-			this.showError(error instanceof Error ? error.message : String(error));
-		}
-	}
-
-	private showTreeSelector(initialSelectedId?: string): void {
-		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /tree.");
-			return;
-		}
-		const tree = this.sessionManager.getTree();
-		const realLeafId = this.sessionManager.getLeafId();
-		const initialFilterMode = this.settingsManager.getTreeFilterMode();
-
-		if (tree.length === 0) {
-			this.showStatus("No entries in session");
-			return;
-		}
-
-		this.showSelector((done) => {
-			const selector = new TreeSelectorComponent(
-				tree,
-				realLeafId,
-				this.ui.terminal.rows,
-				async (entryId) => {
-					// Selecting the current leaf is a no-op (already there)
-					if (entryId === realLeafId) {
-						done();
-						this.showStatus("Already at this point");
-						return;
-					}
-
-					// Ask about summarization
-					done(); // Close selector first
-
-					// Loop until user makes a complete choice or cancels to tree
-					let wantsSummary = false;
-					let customInstructions: string | undefined;
-
-					// Check if we should skip the prompt (user preference to always default to no summary)
-					if (!this.settingsManager.getBranchSummarySkipPrompt()) {
-						while (true) {
-							const summaryChoice = await this.showExtensionSelector("Summarize branch?", [
-								"No summary",
-								"Summarize",
-								"Summarize with custom prompt",
-							]);
-
-							if (summaryChoice === undefined) {
-								// User pressed escape - re-show tree selector with same selection
-								this.showTreeSelector(entryId);
-								return;
-							}
-
-							wantsSummary = summaryChoice !== "No summary";
-
-							if (summaryChoice === "Summarize with custom prompt") {
-								customInstructions = await this.showExtensionEditor("Custom summarization instructions");
-								if (customInstructions === undefined) {
-									// User cancelled - loop back to summary selector
-									continue;
-								}
-							}
-
-							// User made a complete choice
-							break;
-						}
-					}
-
-					// Set up escape handler and status indicator if summarizing
-					let showingSummaryIndicator = false;
-					const originalOnEscape = this.defaultEditor.onEscape;
-
-					if (wantsSummary) {
-						this.defaultEditor.onEscape = () => {
-							this.session.abortBranchSummary();
-						};
-						this.chatContainer.addChild(new Spacer(1));
-						this.showStatusIndicator(new BranchSummaryStatusIndicator(this.ui));
-						showingSummaryIndicator = true;
-						this.ui.requestRender();
-					}
-
-					try {
-						const result = await this.session.navigateTree(entryId, {
-							summarize: wantsSummary,
-							customInstructions,
-						});
-
-						if (result.aborted) {
-							// Summarization aborted - re-show tree selector with same selection
-							this.showStatus("Branch summarization cancelled");
-							this.showTreeSelector(entryId);
-							return;
-						}
-						if (result.cancelled) {
-							this.showStatus("Navigation cancelled");
-							return;
-						}
-
-						// Update UI
-						this.clearChatContainer();
-						this.renderInitialMessages();
-						if (result.editorText && !this.editor.getText().trim()) {
-							this.restoreEditorFromTreeResult(result);
-						}
-						this.showStatus("Navigated to selected point");
-						void this.flushCompactionQueue({ willRetry: false });
-					} catch (error) {
-						this.showError(error instanceof Error ? error.message : String(error));
-					} finally {
-						if (showingSummaryIndicator) {
-							this.clearStatusIndicator("branchSummary");
-						}
-						this.defaultEditor.onEscape = originalOnEscape;
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				(entryId, label) => {
-					this.sessionManager.appendLabelChange(entryId, label);
-					this.ui.requestRender();
-				},
-				initialSelectedId,
-				initialFilterMode,
-			);
-			selector.onCopy = async (text) => {
-				if (!text) {
-					this.showError("Selected entry has no text to copy");
-					return;
-				}
-				try {
-					await copyToClipboard(text);
-					this.showStatus("Copied selected message to clipboard");
-				} catch (error) {
-					this.showError(error instanceof Error ? error.message : String(error));
-				}
-			};
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private showSessionSelector(): void {
-		this.showSelector((done) => {
-			const selector = new SessionSelectorComponent(
-				(onProgress) =>
-					SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir(), onProgress),
-				(onProgress) =>
-					this.sessionManager.usesDefaultSessionDir()
-						? SessionManager.listAll(onProgress)
-						: SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress),
-				async (sessionPath) => {
-					done();
-					await this.handleResumeSession(sessionPath);
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				() => {
-					void this.shutdown();
-				},
-				() => this.ui.requestRender(),
-				{
-					renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
-						const next = (nextName ?? "").trim();
-						if (!next) return;
-						if (sessionFilePath === this.sessionManager.getSessionFile() && !this.runtimeHost.isDetached) {
-							this.sessionManager.appendSessionInfo(next);
-							return;
-						}
-						const mgr = SessionManager.open(sessionFilePath);
-						try {
-							mgr.appendSessionInfo(next);
-						} finally {
-							mgr.dispose();
-						}
-					},
-					showRenameHint: true,
-					keybindings: this.keybindings,
-				},
-
-				this.sessionManager.getSessionFile(),
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private async handleResumeSession(
-		sessionPath: string,
-		options?: Parameters<ExtensionCommandContext["switchSession"]>[1],
-	): Promise<{ cancelled: boolean }> {
-		this.clearStatusIndicator();
-		try {
-			const result = await this.runtimeHost.switchSession(sessionPath, {
-				withSession: options?.withSession,
-				projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
-			});
-			if (result.cancelled) {
-				return result;
-			}
-			this.showStatus("Resumed session");
-			return result;
-		} catch (error: unknown) {
-			if (error instanceof MissingSessionCwdError) {
-				const selectedCwd = await this.promptForMissingSessionCwd(error);
-				if (!selectedCwd) {
-					this.showStatus("Resume cancelled");
-					return { cancelled: true };
-				}
-				const result = await this.runtimeHost.switchSession(sessionPath, {
-					cwdOverride: selectedCwd,
-					withSession: options?.withSession,
-					projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
-				});
-				if (result.cancelled) {
-					return result;
-				}
-				this.showStatus("Resumed session in current cwd");
-				return result;
-			}
-			return this.handleFatalRuntimeError("Failed to resume session", error);
-		}
-	}
-
 	// Builds the LoginFlowHost without making InteractiveMode members public. `session` and `editor`
 	// stay getters because /new, /resume and /fork replace the session and extensions can replace the editor.
 	private createLoginFlowHost(): LoginFlowHost {
@@ -5327,6 +5052,61 @@ export class InteractiveMode {
 		};
 	}
 
+	// Builds the SessionNavigationHost. `session`, `editor` and `chatContainer` stay getters because
+	// /new, /resume and /fork replace the session and extensions can replace the editor.
+	private createSessionNavigationHost(): SessionNavigationHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			get runtimeHost() {
+				return mode.runtimeHost;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get keybindings() {
+				return mode.keybindings;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get defaultEditor() {
+				return mode.defaultEditor;
+			},
+			get redoStack() {
+				return mode.redoStack;
+			},
+			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+			showSelector: (create) => this.showSelector(create),
+			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
+			showExtensionEditor: (title, prefill) => this.showExtensionEditor(title, prefill),
+			showStatusIndicator: (indicator) => this.showStatusIndicator(indicator),
+			clearStatusIndicator: (kind) => this.clearStatusIndicator(kind),
+			clearChatContainer: () => this.clearChatContainer(),
+			renderInitialMessages: () => this.renderInitialMessages(),
+			restoreEditorFromTreeResult: (result) => this.restoreEditorFromTreeResult(result),
+			flushCompactionQueue: (options) => this.flushCompactionQueue(options),
+			createProjectTrustContext: (cwd) => this.createProjectTrustContext(cwd),
+			promptForMissingSessionCwd: (error) => this.promptForMissingSessionCwd(error),
+			handleFatalRuntimeError: (prefix, error) => this.handleFatalRuntimeError(prefix, error),
+			shutdown: () => this.shutdown(),
+		};
+	}
+
 	// Builds the PermissionControllerHost. `session` stays a getter because /new, /resume and /fork replace it.
 	private createPermissionControllerHost(): PermissionControllerHost {
 		const mode = this;
@@ -5373,12 +5153,12 @@ export class InteractiveMode {
 			handlePlanCommand: (args) => this.permissions.handlePlanCommand(args),
 			handleHotkeysCommand: () => handleHotkeysCommand(this.chatViewHost),
 			handleHelpCommand: () => handleHelpCommand(this.chatViewHost),
-			showUserMessageSelector: () => this.showUserMessageSelector(),
-			handleCloneCommand: () => this.handleCloneCommand(),
-			showTreeSelector: () => this.showTreeSelector(),
-			handleUndoCommand: () => this.handleUndoCommand(),
-			handleEditCommand: () => this.handleEditCommand(),
-			handleRedoCommand: () => this.handleRedoCommand(),
+			showUserMessageSelector: () => showUserMessageSelector(this.sessionNavigationHost),
+			handleCloneCommand: () => handleCloneCommand(this.sessionNavigationHost),
+			showTreeSelector: () => showTreeSelector(this.sessionNavigationHost),
+			handleUndoCommand: () => handleUndoCommand(this.sessionNavigationHost),
+			handleEditCommand: () => handleEditCommand(this.sessionNavigationHost),
+			handleRedoCommand: () => handleRedoCommand(this.sessionNavigationHost),
 			handleModeCommand: (args) => this.permissions.handleModeCommand(args),
 			applyPermissionMode: (permissionMode) => this.permissions.applyPermissionMode(permissionMode),
 			showProcessesSelector: () => this.showProcessesSelector(),
@@ -5390,7 +5170,7 @@ export class InteractiveMode {
 			handleReloadCommand: () => this.handleReloadCommand(),
 			handleInitCommand: () => this.handleInitCommand(),
 			handleDebugCommand: () => this.handleDebugCommand(),
-			showSessionSelector: () => this.showSessionSelector(),
+			showSessionSelector: () => showSessionSelector(this.sessionNavigationHost),
 			shutdown: () => this.shutdown(),
 		};
 	}
@@ -5478,111 +5258,6 @@ export class InteractiveMode {
 
 		await this.sendUserMessageAfterDeferredBuiltins(prompt);
 		this.showStatus("AGENTS.md is being generated — run /reload when it finishes to load it into context.");
-	}
-
-	// lunr: /undo and /edit rewind the same session via navigateTree (no fork).
-	// /undo leaves the editor alone; /edit pastes the undone user text. /redo
-	// pops the previous leaf and navigates back.
-	private async rewindLastTurn(
-		command: "undo" | "edit",
-	): Promise<{ editorText?: string; editorImages?: ImageContent[] } | undefined> {
-		if (this.session.isStreaming) {
-			this.showWarning(`Wait for the current response to finish before running /${command}.`);
-			return undefined;
-		}
-
-		const nothingLabel = command === "undo" ? "Nothing to undo" : "Nothing to edit";
-		const branch = this.sessionManager.getBranch();
-		let lastUserIndex = -1;
-		for (let i = branch.length - 1; i >= 0; i--) {
-			const entry = branch[i];
-			if (entry.type === "message" && entry.message.role === "user") {
-				lastUserIndex = i;
-				break;
-			}
-		}
-		if (lastUserIndex === -1) {
-			this.showStatus(nothingLabel);
-			return undefined;
-		}
-
-		const lastUser = branch[lastUserIndex];
-		const leafId = this.sessionManager.getLeafId();
-		let targetId: string;
-		if (lastUser.id === leafId) {
-			if (!lastUser.parentId) {
-				this.showStatus(nothingLabel);
-				return undefined;
-			}
-			targetId = lastUser.parentId;
-		} else {
-			targetId = lastUser.id;
-		}
-
-		try {
-			const result = await this.session.navigateTree(targetId, {});
-			if (result.cancelled) {
-				this.showStatus(command === "undo" ? "Undo cancelled" : "Edit cancelled");
-				return undefined;
-			}
-			if (leafId) {
-				this.redoStack.push(leafId);
-			}
-			this.clearChatContainer();
-			this.renderInitialMessages();
-			void this.flushCompactionQueue({ willRetry: false });
-			return { editorText: result.editorText, editorImages: result.editorImages };
-		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
-			return undefined;
-		}
-	}
-
-	private async handleUndoCommand(): Promise<void> {
-		const result = await this.rewindLastTurn("undo");
-		if (!result) return;
-		this.showStatus("Conversation rewound. Files are unchanged; /rollback restores them. /redo to restore the turn.");
-	}
-
-	private async handleEditCommand(): Promise<void> {
-		const result = await this.rewindLastTurn("edit");
-		if (!result) return;
-		this.restoreEditorFromTreeResult({
-			editorText: result.editorText ?? "",
-			editorImages: result.editorImages,
-		});
-		this.showStatus("Editing last message. /redo to restore.");
-	}
-
-	private async handleRedoCommand(): Promise<void> {
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /redo.");
-			return;
-		}
-
-		const targetId = this.redoStack.pop();
-		if (!targetId) {
-			this.showStatus("Nothing to redo");
-			return;
-		}
-
-		try {
-			const result = await this.session.navigateTree(targetId, {});
-			if (result.cancelled) {
-				this.redoStack.push(targetId);
-				this.showStatus("Navigation cancelled");
-				return;
-			}
-			this.clearChatContainer();
-			this.renderInitialMessages();
-			if (result.editorText && !this.editor.getText().trim()) {
-				this.restoreEditorFromTreeResult(result);
-			}
-			this.showStatus("Redone");
-			void this.flushCompactionQueue({ willRetry: false });
-		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
-		}
 	}
 
 	private async handleReloadCommand(): Promise<void> {

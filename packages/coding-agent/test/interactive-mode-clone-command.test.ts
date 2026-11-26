@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { handleCloneCommand, type SessionNavigationHost } from "../src/modes/interactive/session-navigation.ts";
 
 type CloneCommandContext = {
 	sessionManager: { getLeafId: () => string | null };
@@ -12,12 +12,6 @@ type CloneCommandContext = {
 	showError: (message: string) => void;
 	ui: { requestRender: () => void };
 };
-
-type InteractiveModePrototype = {
-	handleCloneCommand(this: CloneCommandContext): Promise<void>;
-};
-
-const interactiveModePrototype = InteractiveMode.prototype as unknown as InteractiveModePrototype;
 
 describe("InteractiveMode /clone", () => {
 	it("clones the current leaf into a new session", async () => {
@@ -38,7 +32,7 @@ describe("InteractiveMode /clone", () => {
 			ui: { requestRender },
 		};
 
-		await interactiveModePrototype.handleCloneCommand.call(context);
+		await handleCloneCommand(context as unknown as SessionNavigationHost);
 
 		expect(fork).toHaveBeenCalledWith("leaf-123", { position: "at" });
 		expect(renderCurrentSessionState).not.toHaveBeenCalled();
@@ -63,7 +57,7 @@ describe("InteractiveMode /clone", () => {
 			ui: { requestRender: vi.fn() },
 		};
 
-		await interactiveModePrototype.handleCloneCommand.call(context);
+		await handleCloneCommand(context as unknown as SessionNavigationHost);
 
 		expect(fork).not.toHaveBeenCalled();
 		expect(showStatus).toHaveBeenCalledWith("Nothing to clone yet");
