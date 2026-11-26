@@ -1,11 +1,8 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SessionCompaction } from "../../../src/core/session-compaction.ts";
 import type { ExtensionFactory } from "../../../src/index.ts";
 import { createHarness, type Harness } from "../harness.ts";
-
-type SessionWithCompactionInternals = {
-	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
-};
 
 interface RecordedCompactionEvent {
 	type: "session_before_compact" | "session_compact";
@@ -69,9 +66,9 @@ describe("issue #5217 compaction reason on extension events", () => {
 		const recorded: RecordedCompactionEvent[] = [];
 		const harness = await createCompactionHarness(recorded);
 		harnesses.push(harness);
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = (harness.session as unknown as { _compaction: SessionCompaction })._compaction;
 
-		await sessionInternals._runAutoCompaction("threshold", false);
+		await sessionInternals.runAutoCompaction("threshold", false);
 
 		expect(recorded).toEqual([
 			{ type: "session_before_compact", reason: "threshold", willRetry: false },
@@ -83,9 +80,9 @@ describe("issue #5217 compaction reason on extension events", () => {
 		const recorded: RecordedCompactionEvent[] = [];
 		const harness = await createCompactionHarness(recorded);
 		harnesses.push(harness);
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = (harness.session as unknown as { _compaction: SessionCompaction })._compaction;
 
-		await sessionInternals._runAutoCompaction("overflow", true);
+		await sessionInternals.runAutoCompaction("overflow", true);
 
 		expect(recorded).toEqual([
 			{ type: "session_before_compact", reason: "overflow", willRetry: true },

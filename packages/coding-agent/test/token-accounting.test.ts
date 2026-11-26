@@ -9,6 +9,7 @@ import { registerSlashCommands } from "../src/builtin-extensions/pi-subagents/sr
 import { renderSubagentResult } from "../src/builtin-extensions/pi-subagents/src/tui/render.ts";
 import { estimateContextTokens } from "../src/core/compaction/compaction.ts";
 import { computeContextBreakdown } from "../src/core/context-breakdown.ts";
+import type { SessionCompaction } from "../src/core/session-compaction.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { collectUsageRequests, totalRequestUsage } from "../src/core/usage-accounting.ts";
 import { collectUsageHistory, resetUsageHistoryCache } from "../src/core/usage-history.ts";
@@ -191,7 +192,9 @@ describe("accounting integration probes", () => {
 			assistant(100),
 			{ role: "user" as const, content: "tail", timestamp: 300 },
 		];
-		const compact = vi.spyOn(h.session as never, "_runAutoCompaction").mockResolvedValue(false as never);
+		const compact = vi
+			.spyOn((h.session as unknown as { _compaction: SessionCompaction })._compaction, "runAutoCompaction")
+			.mockResolvedValue(false);
 		await h.session.agent.prepareNextTurnWithContext!({
 			context: { systemPrompt: "system", tools: [], messages },
 		} as never);
