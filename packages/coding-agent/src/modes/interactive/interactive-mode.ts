@@ -1,4 +1,3 @@
-import { collectUsageRequests, usageTokens } from "../../core/usage-accounting.ts";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -22,7 +21,6 @@ import type {
 	AutocompleteItem,
 	AutocompleteProvider,
 	EditorComponent,
-	Keybinding,
 	KeyId,
 	MarkdownTheme,
 	OverlayHandle,
@@ -38,7 +36,6 @@ import {
 	formatImageMarker,
 	fuzzyFilter,
 	isFocusable,
-	Markdown,
 	matchesKey,
 	ProcessTerminal,
 	Spacer,
@@ -70,15 +67,8 @@ import {
 	SIGNAL_DISPOSE_LIMIT_MS,
 } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
-import {
-	CACHE_TTL_MS,
-	type CacheMiss,
-	collectCacheMisses,
-	computeCacheWaste,
-	detectCacheMiss,
-} from "../../core/cache-stats.ts";
+import { CACHE_TTL_MS, type CacheMiss, collectCacheMisses, detectCacheMiss } from "../../core/cache-stats.ts";
 import { startCatalogRefreshPolling } from "../../core/catalog-refresh-polling.ts";
-import { computeContextBreakdown } from "../../core/context-breakdown.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -139,7 +129,7 @@ import { notifyTodosEnabledChanged } from "../../core/todo-settings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
-import { getAllPlanUsageResults, getUsageServiceBridge } from "../../core/usage-service.ts";
+import { getUsageServiceBridge } from "../../core/usage-service.ts";
 import type { InteractiveView } from "../../startup/interactive-view.ts";
 import { markStartupMilestone } from "../../startup/startup-milestones.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
@@ -153,7 +143,6 @@ import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BootScreenComponent, type BootScreenRow } from "./components/boot-screen.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
-import { renderContextBox } from "./components/context-view.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
@@ -193,7 +182,6 @@ import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/t
 import { applySameToolGrouping, applyToolRunSpacing, ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
-import { renderUsageBox } from "./components/usage-view.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { ExitConfirmation } from "./exit-confirmation.ts";
@@ -202,6 +190,7 @@ import {
 	replaceExtensionWidget,
 	widgetSeparatorNeedsSpacer,
 } from "./extension-widget-order.ts";
+import { type HelpCommandHost, handleHelpCommand, handleHotkeysCommand } from "./help-commands.ts";
 import { type LoadedResourcesOptions, showLoadedResources } from "./loaded-resources.ts";
 import {
 	getLoginProviderOptions,
@@ -231,7 +220,6 @@ import {
 	type SlashCommandHost,
 } from "./slash-dispatch.ts";
 import {
-	buildHelpLines,
 	findUnknownSlashCommand,
 	formatArgumentlessSlashCommandStatus,
 	formatUnknownSlashCommandStatus,
@@ -260,6 +248,12 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
+import {
+	handleContextCommand,
+	handleSessionCommand,
+	handleUsageCommand,
+	type UsageCommandHost,
+} from "./usage-commands.ts";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
@@ -570,6 +564,8 @@ export class InteractiveMode {
 	// Owns permission mode changes and their history; see permission-controller.ts.
 	private readonly permissions = new PermissionModeController(this.createPermissionControllerHost());
 	private readonly modelCommandHost: ModelCommandHost = this.createModelCommandHost();
+	// Passed to the usage-commands.ts and help-commands.ts views.
+	private readonly chatViewHost: UsageCommandHost & HelpCommandHost = this.createChatViewHost();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -5306,6 +5302,31 @@ export class InteractiveMode {
 		};
 	}
 
+	// Builds the host for /usage, /context, /session, /help and /hotkeys. `session` stays a getter because
+	// /new, /resume and /fork replace it.
+	private createChatViewHost(): UsageCommandHost & HelpCommandHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get keybindings() {
+				return mode.keybindings;
+			},
+			showStatus: (message) => this.showStatus(message),
+			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
+		};
+	}
+
 	// Builds the PermissionControllerHost. `session` stays a getter because /new, /resume and /fork replace it.
 	private createPermissionControllerHost(): PermissionControllerHost {
 		const mode = this;
@@ -5345,13 +5366,13 @@ export class InteractiveMode {
 			handleImportCommand: (text) => this.handleImportCommand(text),
 			handleCopyCommand: () => this.handleCopyCommand(),
 			handleNameCommand: (text) => this.handleNameCommand(text),
-			handleSessionCommand: () => this.handleSessionCommand(),
-			handleUsageCommand: () => this.handleUsageCommand(),
+			handleSessionCommand: () => handleSessionCommand(this.chatViewHost),
+			handleUsageCommand: () => handleUsageCommand(this.chatViewHost),
 			handleFastCommand: (arg) => this.handleFastCommand(arg),
-			handleContextCommand: () => this.handleContextCommand(),
+			handleContextCommand: () => handleContextCommand(this.chatViewHost),
 			handlePlanCommand: (args) => this.permissions.handlePlanCommand(args),
-			handleHotkeysCommand: () => this.handleHotkeysCommand(),
-			handleHelpCommand: () => this.handleHelpCommand(),
+			handleHotkeysCommand: () => handleHotkeysCommand(this.chatViewHost),
+			handleHelpCommand: () => handleHelpCommand(this.chatViewHost),
 			showUserMessageSelector: () => this.showUserMessageSelector(),
 			handleCloneCommand: () => this.handleCloneCommand(),
 			showTreeSelector: () => this.showTreeSelector(),
@@ -5867,105 +5888,6 @@ export class InteractiveMode {
 		}
 	}
 
-	private handleSessionCommand(): void {
-		const stats = this.session.getSessionStats();
-		const sessionName = this.sessionManager.getSessionName();
-		const entries = this.sessionManager.getEntries();
-		const cacheWaste = computeCacheWaste(entries, this.session.modelRuntime);
-
-		// Cost/token totals per provider/model actually used (e.g. OpenRouter `auto`
-		// resolves to a concrete responseModel), sorted by cost descending.
-		const perModelMap = new Map<string, { key: string; cost: number; tokens: number }>();
-		for (const request of collectUsageRequests(entries)) {
-			const key = `${request.provider}/${request.model}`;
-			const bucket = perModelMap.get(key) ?? { key, cost: 0, tokens: 0 };
-			bucket.cost += request.usage.cost.total;
-			bucket.tokens += usageTokens(request.usage);
-			perModelMap.set(key, bucket);
-		}
-		const perModel = Array.from(perModelMap.values()).sort((a, b) => b.cost - a.cost);
-
-		let info = `${theme.bold("Session Info")}\n\n`;
-		if (sessionName) {
-			info += `${theme.fg("dim", "Name:")} ${sessionName}\n`;
-		}
-		info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? "In-memory"}\n`;
-		info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n\n`;
-		info += `${theme.bold("Messages")}\n`;
-		info += `${theme.fg("dim", "Total:")} ${stats.totalMessages}\n`;
-		info += `${theme.fg("dim", "User:")} ${stats.userMessages}\n`;
-		info += `${theme.fg("dim", "Assistant:")} ${stats.assistantMessages}\n`;
-		info += `${theme.fg("dim", "Tools:")} ${stats.toolCalls} calls, ${stats.toolResults} results\n\n`;
-		info += `${theme.bold("Parent tokens including auxiliary requests")}\n`;
-		// "Input" is the full prompt volume. With cache activity, split it into
-		// cached (served from cache) vs uncached (everything else) - the only
-		// provider-independent split. Cache writes, where reported, are a detail
-		// of the uncached portion.
-		const { input, cacheRead, cacheWrite } = stats.tokens;
-		const promptTokens = input + cacheRead + cacheWrite;
-		info += `${theme.fg("dim", "Input:")} ${promptTokens.toLocaleString()}\n`;
-		if (promptTokens > 0 && (cacheRead > 0 || cacheWrite > 0)) {
-			const hitRate = theme.fg("dim", `(${((cacheRead / promptTokens) * 100).toFixed(1)}%)`);
-			info += `  ${theme.fg("dim", "Cached:")} ${cacheRead.toLocaleString()} ${hitRate}\n`;
-			const written =
-				cacheWrite > 0 ? ` ${theme.fg("dim", `(${cacheWrite.toLocaleString()} written to cache)`)}` : "";
-			info += `  ${theme.fg("dim", "Uncached:")} ${(input + cacheWrite).toLocaleString()}${written}\n`;
-		}
-		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
-		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
-		if (stats.childUsage?.total) {
-			info += `Children: ${stats.childUsage.total.toLocaleString()} tokens, $${stats.childUsage.cost.toFixed(3)}\n`;
-			info += `Combined: ${stats.combinedUsage?.total.toLocaleString()} tokens, $${stats.combinedUsage?.cost.toFixed(3)}\n`;
-		}
-		if (stats.parentUsage?.unknownRequests)
-			info += `Usage unavailable for ${stats.parentUsage.unknownRequests} request(s).\n`;
-		if (stats.parentUsage?.partialRequests)
-			info += `Usage incomplete for ${stats.parentUsage.partialRequests} request(s).\n`;
-		if (stats.parentUsage?.unknownCosts)
-			info += `Pricing unavailable for ${stats.parentUsage.unknownCosts} request(s).\n`;
-		info += "Costs use catalog estimates unless the provider reports its account charge.\n";
-
-		if (stats.cost > 0 || cacheWaste.missedTokens > 0) {
-			info += `\n${theme.bold("Cost")}\n`;
-			info += `${theme.fg("dim", "Total:")} $${stats.cost.toFixed(3)}`;
-			if (perModel.length > 1) {
-				for (const entry of perModel) {
-					info += `\n  ${theme.fg("dim", `${entry.key}:`)} $${entry.cost.toFixed(3)} ${theme.fg("dim", `(${formatTokens(entry.tokens)} tokens)`)}`;
-				}
-			}
-			if (cacheWaste.missedTokens > 0) {
-				const missLabel = cacheWaste.missCount === 1 ? "1 miss" : `${cacheWaste.missCount} misses`;
-				const detail = `${cacheWaste.missedTokens.toLocaleString()} tokens, ${missLabel}`;
-				info +=
-					cacheWaste.missedCost >= 0.0001
-						? `\n${theme.fg("dim", "Estimated cache misses:")} $${cacheWaste.missedCost.toFixed(3)} ${theme.fg("dim", `(${detail})`)}`
-						: `\n${theme.fg("dim", "Estimated cache misses:")} ${detail}`;
-			}
-		}
-
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(info, 1, 0));
-		this.ui.requestRender();
-	}
-
-	private collectUsageBreakdown(): ReturnType<typeof computeContextBreakdown> | undefined {
-		const model = this.session.model;
-		const contextWindow = model?.contextWindow ?? 0;
-		if (!model || contextWindow <= 0) return undefined;
-		const tools = this.session
-			.getActiveToolNames()
-			.map((name) => this.session.getToolDefinition(name))
-			.filter((definition) => definition !== undefined);
-		return computeContextBreakdown({
-			systemPrompt: this.session.systemPrompt,
-			tools,
-			messages: this.session.messages,
-			contextWindow,
-			globalAgentsPath: getGlobalInstructionsPath(getAgentDir()),
-			modelAgentsPath: getModelInstructionsPath(getAgentDir(), model.id),
-		});
-	}
-
 	private handleFastCommand(arg: string): void {
 		if (this.session.model?.provider !== "openai-codex") {
 			this.showStatus("Fast mode is for OpenAI Codex subscriptions.");
@@ -5985,85 +5907,6 @@ export class InteractiveMode {
 		const enabled = normalized === "on" || (normalized === "" && !this.session.openaiFastMode);
 		this.session.setOpenAIFastMode(enabled);
 		this.showStatus(`Fast mode ${enabled ? "enabled" : "disabled"}.`);
-		this.ui.requestRender();
-	}
-
-	// lunr: /usage — current session only: token totals, live context split,
-	// context-window bar, and subscription plan usage.
-	private async handleUsageCommand(): Promise<void> {
-		const stats = this.session.getSessionStats();
-		const sessionTotals =
-			stats.tokens.total > 0 ||
-			stats.parentUsage?.requests ||
-			stats.parentUsage?.unknownRequests ||
-			stats.parentUsage?.partialRequests
-				? {
-						input: stats.tokens.input,
-						output: stats.tokens.output,
-						cacheRead: stats.tokens.cacheRead,
-						cacheWrite: stats.tokens.cacheWrite,
-						total: stats.tokens.total,
-						requests: stats.parentUsage?.requests,
-						unknownRequests: stats.parentUsage?.unknownRequests,
-						partialRequests: stats.parentUsage?.partialRequests,
-					}
-				: undefined;
-
-		const context = this.session.getContextUsage();
-		const provider = this.session.model?.provider;
-		const planResult = await getAllPlanUsageResults(provider, this.session.modelRuntime);
-		const breakdown = this.collectUsageBreakdown();
-
-		const lines = renderUsageBox(
-			{
-				sessionTotals,
-				childTotals: stats.childUsage,
-				combinedTotals: stats.combinedUsage,
-				context,
-				plan: planResult.usages,
-				breakdown,
-			},
-			this.ui.terminal.columns,
-		);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
-		if (planResult.errors.length > 0) this.showStatus(planResult.errors.join("\n"));
-		this.ui.requestRender();
-	}
-
-	// lunr: /context — estimated breakdown of what consumes the context window
-	// (system prompt incl. project context files, tool definitions, and the live
-	// session messages). Uses session.messages, so post-compaction renders match
-	// the context the model actually sees.
-	private handleContextCommand(): void {
-		const model = this.session.model;
-		const contextWindow = model?.contextWindow ?? 0;
-		if (!model || contextWindow <= 0) {
-			this.showStatus("No model selected or context window unknown.");
-			return;
-		}
-
-		const breakdown = this.collectUsageBreakdown();
-		if (!breakdown) {
-			this.showStatus("No model selected or context window unknown.");
-			return;
-		}
-
-		const lastReply = [...this.session.messages].reverse().find((message) => message.role === "assistant");
-		const lines = renderContextBox(
-			{
-				breakdown,
-				model: `${model.provider}/${model.id}`,
-				compactionCeiling: this.session.getCompactionCeiling(),
-				notice:
-					lastReply?.role === "assistant" && claudeCodeHistoryReplayed(lastReply)
-						? CLAUDE_CODE_HISTORY_REPLAYED_NOTE
-						: undefined,
-			},
-			this.ui.terminal.columns,
-		);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
 		this.ui.requestRender();
 	}
 
@@ -6310,148 +6153,6 @@ export class InteractiveMode {
 	 */
 	private getAppKeyDisplay(action: AppKeybinding): string {
 		return keyDisplayText(action);
-	}
-
-	/**
-	 * Get capitalized display string for an editor keybinding action.
-	 */
-	private getEditorKeyDisplay(action: Keybinding): string {
-		return keyDisplayText(action);
-	}
-
-	/** Prints the short /help block: the commands and keys a new user needs first. */
-	private handleHelpCommand(): void {
-		const lines = buildHelpLines(
-			{
-				cyclePermissionMode: this.getAppKeyDisplay("app.mode.cycle"),
-				interrupt: this.getAppKeyDisplay("app.interrupt"),
-			},
-			(title) => theme.bold(theme.fg("accent", title)),
-		);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.ui.requestRender();
-	}
-
-	private handleHotkeysCommand(): void {
-		// Navigation keybindings
-		const cursorUp = this.getEditorKeyDisplay("tui.editor.cursorUp");
-		const cursorDown = this.getEditorKeyDisplay("tui.editor.cursorDown");
-		const cursorLeft = this.getEditorKeyDisplay("tui.editor.cursorLeft");
-		const cursorRight = this.getEditorKeyDisplay("tui.editor.cursorRight");
-		const cursorWordLeft = this.getEditorKeyDisplay("tui.editor.cursorWordLeft");
-		const cursorWordRight = this.getEditorKeyDisplay("tui.editor.cursorWordRight");
-		const cursorLineStart = this.getEditorKeyDisplay("tui.editor.cursorLineStart");
-		const cursorLineEnd = this.getEditorKeyDisplay("tui.editor.cursorLineEnd");
-		const jumpForward = this.getEditorKeyDisplay("tui.editor.jumpForward");
-		const jumpBackward = this.getEditorKeyDisplay("tui.editor.jumpBackward");
-		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
-		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
-
-		// Editing keybindings
-		const submit = this.getEditorKeyDisplay("tui.input.submit");
-		const newLine = this.getEditorKeyDisplay("tui.input.newLine");
-		const deleteWordBackward = this.getEditorKeyDisplay("tui.editor.deleteWordBackward");
-		const deleteWordForward = this.getEditorKeyDisplay("tui.editor.deleteWordForward");
-		const deleteToLineStart = this.getEditorKeyDisplay("tui.editor.deleteToLineStart");
-		const deleteToLineEnd = this.getEditorKeyDisplay("tui.editor.deleteToLineEnd");
-		const yank = this.getEditorKeyDisplay("tui.editor.yank");
-		const yankPop = this.getEditorKeyDisplay("tui.editor.yankPop");
-		const undo = this.getEditorKeyDisplay("tui.editor.undo");
-		const tab = this.getEditorKeyDisplay("tui.input.tab");
-
-		// App keybindings
-		const interrupt = this.getAppKeyDisplay("app.interrupt");
-		const clear = this.getAppKeyDisplay("app.clear");
-		const exit = this.getAppKeyDisplay("app.exit");
-		const suspend = this.getAppKeyDisplay("app.suspend");
-		const cycleThinkingLevel = this.getAppKeyDisplay("app.thinking.cycle");
-		const cyclePermissionMode = this.getAppKeyDisplay("app.mode.cycle");
-		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
-		const selectModel = this.getAppKeyDisplay("app.model.select");
-		const expandTools = "click";
-		const toggleThinking = this.getAppKeyDisplay("app.thinking.toggle");
-		const externalEditor = this.getAppKeyDisplay("app.editor.external");
-		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
-		const copyMessage = this.getAppKeyDisplay("app.message.copy");
-		const followUp = this.getAppKeyDisplay("app.message.followUp");
-		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
-		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
-
-		let hotkeys = `
-**Navigation**
-| Key | Action |
-|-----|--------|
-| \`${cursorUp}\` / \`${cursorDown}\` / \`${cursorLeft}\` / \`${cursorRight}\` | Move cursor / browse history |
-| \`${cursorWordLeft}\` / \`${cursorWordRight}\` | Move by word |
-| \`${cursorLineStart}\` | Start of line |
-| \`${cursorLineEnd}\` | End of line |
-| \`${jumpForward}\` | Jump forward to character |
-| \`${jumpBackward}\` | Jump backward to character |
-| \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
-| Mouse wheel | Scroll session (Ctrl+wheel pages) |
-
-**Editing**
-| Key | Action |
-|-----|--------|
-| \`${submit}\` | Send message |
-| \`${newLine}\` | New line${process.platform === "win32" ? " (Ctrl+Enter on Windows Terminal)" : ""} |
-| \`${deleteWordBackward}\` | Delete word backwards |
-| \`${deleteWordForward}\` | Delete word forwards |
-| \`${deleteToLineStart}\` | Delete to start of line |
-| \`${deleteToLineEnd}\` | Delete to end of line |
-| \`${yank}\` | Paste the most-recently-deleted text |
-| \`${yankPop}\` | Cycle through the deleted text after pasting |
-| \`${undo}\` | Undo |
-
-**Other**
-| Key | Action |
-|-----|--------|
-| \`${tab}\` | Path completion / accept autocomplete |
-| \`${interrupt}\` | Cancel autocomplete / abort streaming |
-| \`${clear}\` | Clear editor (first) / exit (second) |
-| \`${exit}\` twice | Exit (when editor is empty) |
-| \`${suspend}\` | Suspend to background |
-| \`${cyclePermissionMode}\` | Cycle permission mode |
-${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
-| \`${selectModel}\` | Open model selector |
-| \`${expandTools}\` | Expand or collapse a thinking/tool card |
-${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |\n` : ""}| \`${externalEditor}\` | Edit message in external editor |
-| \`${copyMessage}\` | Copy last assistant message |
-| \`${followUp}\` | Queue follow-up message |
-| \`${dequeue}\` | Restore queued messages |
-| \`${pasteImage}\` | Paste image or text from clipboard |
-| \`/paste-image\` | Paste image without a terminal shortcut |
-| \`/\` | Slash commands |
-| \`!\` | Run bash command |
-| \`!!\` | Run bash command (excluded from context) |
-`;
-
-		// Add extension-registered shortcuts
-		const extensionRunner = this.session.extensionRunner;
-		const shortcuts = extensionRunner.getShortcuts(this.keybindings.getEffectiveConfig());
-		if (shortcuts.size > 0) {
-			hotkeys += `
-**Extensions**
-| Key | Action |
-|-----|--------|
-`;
-			for (const [key, shortcut] of shortcuts) {
-				const description = shortcut.description ?? shortcut.extensionPath;
-				const keyDisplay = formatKeyText(key, { capitalize: true });
-				hotkeys += `| \`${keyDisplay}\` | ${description} |\n`;
-			}
-		}
-
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Keyboard Shortcuts")), 1, 0));
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Markdown(hotkeys.trim(), 1, 1, this.getMarkdownThemeWithSettings()));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.ui.requestRender();
 	}
 
 	private async handleClearCommand(): Promise<void> {
