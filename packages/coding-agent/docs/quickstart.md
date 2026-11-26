@@ -85,14 +85,15 @@ Once lunR starts, type a request and press Enter:
 Summarize this repository and tell me how to run its checks.
 ```
 
-By default, lunR gives the model four tools:
+By default, lunR gives the model these core tools:
 
 - `read` - read files
 - `write` - create or overwrite files
 - `edit` - patch files
-- `bash` - run shell commands
+- `bash` - run shell commands, in the background with `run_in_background`
+- `bash_job` - read or stop a background command
 
-Additional built-in read-only tools (`grep`, `find`, `ls`) exist but start off. lunR runs in your current working directory and can modify files there. Use git for easy undo. `/rollback` also restores the last turn's file changes, but it is off by default. Turn it on in `/settings` → Rollback.
+Additional built-in read-only tools (`grep`, `find`, `ls`) exist but start off. The [built-in features](features.md) add their own tools, such as `todo`, `subagent`, `web_search` and `browser`. lunR runs in your current working directory and can modify files there. Use git for easy undo. `/rollback` also restores the last turn's file changes, but it is off by default. Turn it on in `/settings` → Rollback.
 
 Permission modes are `yolo | auto | ask | read-only`. Shift+Tab cycles that order. The TUI displays read-only as `read`; `/plan` enters read-only mode and `present_plan` is available there for approval.
 

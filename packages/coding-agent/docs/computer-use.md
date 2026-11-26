@@ -29,7 +29,8 @@ require an image-capable model. There is no text-only accessibility fallback.
 Gateway sessions operate the gateway host, not the chat client's device.
 
 `computer_end` releases without approval. Read-only allows relevant observation
-and release, but blocks mutation. Yolo and Auto permit input. Auto allows
+and release, but blocks mutation. Yolo and Auto permit input. Ask asks you
+before each input action. Auto allows
 requested, implied, or necessary GUI work without lunR per-call prompts. In
 Yolo, ask before introducing GUI work into an otherwise non-GUI task. These
 intent rules are agent guidance, not a natural-language authorization classifier.

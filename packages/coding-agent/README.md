@@ -89,7 +89,7 @@ lunr uninstall npm:@foo/bar   # remove an extension package (alias for lunr remo
 
 Config lives in `~/.lunr/agent` (global) and project `.lunr/`. Override the agent dir with `PI_CODING_AGENT_DIR`.
 
-Then just talk to lunR. By default it gives the model four tools: `read`, `write`, `edit`, and `bash`. `grep`, `find`, and `ls` exist but start off. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, read-only planning, cron, and the gateway.
+Then just talk to lunR. The core tools on by default are `read`, `write`, `edit`, `bash` and `bash_job`, which reads or stops a command `bash` started in the background. `grep`, `find`, and `ls` exist but start off. The built-in features add their own tools, such as `todo`, `subagent`, `web_search`, `browser`, the `lsp_*` tools and `mcp`. Add more via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages). See [built-in features](docs/features.md) for MCP, subagents, read-only planning, cron, and the gateway.
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -187,6 +187,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/new` | Start a new session |
 | `/name` | Set session display name |
 | `/session` | Show session info |
+| `/handoff [cancel]`, `/reclaim` | Mark this session for continuing on your phone through the gateway, or take it back. See [features.md](docs/features.md#continue-between-desktop-and-phone) |
 | `/tree` | Jump to any point in the session (`ctrl+o` cycles filters) |
 | `/undo`, `/edit`, `/redo` | Same-session rewind; `/edit` pastes the last prompt |
 | `/rollback` | Undo the last turn's file changes (forks). Off by default; turn it on in `/settings` → Rollback |
@@ -552,7 +553,7 @@ lunr update --self                 # Same as lunr update
 | `--mode acp` | Agent Client Protocol for T3 Code and other ACP clients (see [docs/acp.md](docs/acp.md)) |
 | `--export <in> [out]` | Export session to HTML |
 
-In print mode, lunR also reads piped stdin and merges it into the initial prompt:
+In print mode, lunR also reads piped stdin and puts it before the initial prompt, separated by a blank line. `-p` needs a prompt argument, an `@file` or piped stdin. [docs/usage.md](docs/usage.md#modes) has the rules for how long lunR waits for stdin:
 
 ```bash
 cat README.md | lunr -p "Summarize this text"
@@ -591,7 +592,7 @@ cat README.md | lunr -p "Summarize this text"
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools by default but keep extension/custom tools enabled |
 | `--no-tools`, `-nt` | Disable all tools by default |
 
-Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
+Available built-in tools: `read`, `bash`, `bash_job`, `edit`, `write`, `grep`, `find`, `ls`. `bash_job` is on whenever `bash` is.
 
 ### Resource Options
 

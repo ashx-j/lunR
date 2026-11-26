@@ -84,12 +84,14 @@ Built-in commands:
 | `/init` | Generate a starter AGENTS.md for this project |
 | `/compact` | Manually compact the session context |
 | `/resume` | Browse and resume sessions |
+| `/handoff [cancel]` | Mark this session for continuing on your phone through the gateway, or remove the mark |
+| `/reclaim` | Reopen a session here after the phone released it |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
 | `/quit` | Quit lunR |
 
 Hidden commands run when typed but stay out of the `/` list and the command lists sent to RPC and ACP clients: the aliases `/auth`, `/deauth`, `/sessions`, `/title` and `/exit`, the mode shortcuts `/read`, `/yolo`, `/auto` and `/ask`, `/debug`, the `/thinking` aliases `/effort` and `/reasoning`, and `/websearch`, `/chain-workflows` and `/chain-prompts`, which moved into `/search` and `/chain`. Extensions can hide their own commands with `hidden: true` in `registerCommand`.
 
-Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/cron`, `/goal`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/search`. See [Built-in features](features.md).
+Notable extension-registered commands (always available unless you disable those built-ins): `/thinking`, `/cron`, `/goal`, `/run`, `/chain`, `/parallel`, `/mcp`, `/mcp-auth`, `/lsp`, `/lsp-restart`, `/search`, `/pr-watch`, `/intercom` and `/computer`. See [Built-in features](features.md).
 
 ## Message Queue
 
