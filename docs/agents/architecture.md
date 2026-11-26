@@ -2,7 +2,7 @@
 
 Read before adding features, extensions or bridges, or before syncing from upstream pi.
 
-- **Features = baked-in extensions + bridges.** `builtin-extensions/` (factories registered in `builtin-extensions/index.ts`; hidden; vendored; 16 files still `// @ts-nocheck`: pi-subagents 10, pi-web-access 3, pi-mcp-adapter 2, pi-intercom 1; biome-excluded).
+- **Features = baked-in extensions + bridges.** `builtin-extensions/` (factories registered in `builtin-extensions/index.ts`; hidden; vendored; 15 files still `// @ts-nocheck`: pi-subagents 10, pi-web-access 3, pi-mcp-adapter 1, pi-intercom 1; biome-excluded).
   - Light roster: simple-pi-memory, pi-tps, ashxj-tui, ashxj-spinners, ashxj-thinking, lunr-local-providers, lunr-todos, lunr-plan-tools, lunr-tool-loader, lunr-skill-creator.
   - Deferred (interactive after paint; print/RPC/gateway before first turn): pi-ollama-cloud, narumiruna-pi-goal, lunr-cron, lunr-pr-watch, pi-intercom, pi-prompt-template-model, pi-subagents, pi-web-access, lunr-browser, pi-lsp-extension, pi-mcp-adapter, lunr-computer-use.
   - Removed: lunr-settings-tools, lunr-behavior, context-mode, MattDevy + narumiruna collections. Extension absorption was rolled back; **never merge `archive/extension-absorption-DO-NOT-MERGE`.**

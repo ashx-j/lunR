@@ -1,5 +1,4 @@
-// @ts-nocheck
-import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
+import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import type { McpExtensionState } from "./state.ts";
 import type { DirectToolSpec, McpConfig } from "./types.ts";
 import type { MetadataCache } from "./metadata-cache.ts";
@@ -220,7 +219,14 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   }
 
   function createLazyDirectToolExecute(spec: DirectToolSpec) {
-    return async function execute(toolCallId, params, incomingSignal, onUpdate, ctx) {
+    // Typed by hand: registerTool is called through a cast below, so nothing types this contextually.
+    return async function execute(
+      toolCallId: string,
+      params: Record<string, unknown>,
+      incomingSignal: AbortSignal | undefined,
+      onUpdate: AgentToolUpdateCallback<Record<string, unknown>> | undefined,
+      ctx: ExtensionContext,
+    ) {
       const signal = incomingSignal ? AbortSignal.any([incomingSignal, sessionAbort.signal]) : sessionAbort.signal;
       const currentSpec = currentDirectSpecs.get(spec.prefixedName);
       if (!currentSpec || JSON.stringify(currentSpec) !== JSON.stringify(spec)) {
@@ -468,7 +474,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         action: Type.Optional(Type.String({ description: "Action: 'ui-messages', 'auth-start', or 'auth-complete'" })),
       }),
       renderResult: renderMcpToolResult,
-      async execute(_toolCallId, params: {
+      async execute(_toolCallId: string, params: {
         tool?: string;
         args?: string;
         connect?: string;
@@ -478,7 +484,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         includeSchemas?: boolean;
         server?: string;
         action?: string;
-      }, incomingSignal, _onUpdate, ctx) {
+      }, incomingSignal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
         const signal = incomingSignal ? AbortSignal.any([incomingSignal, sessionAbort.signal]) : sessionAbort.signal;
         let parsedArgs: Record<string, unknown> | undefined;
         if (params.args) {
