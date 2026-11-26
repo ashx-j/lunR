@@ -46,26 +46,14 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { spawn } from "child_process";
-import {
-	APP_NAME,
-	APP_TITLE,
-	appendDebugLog,
-	CONFIG_DIR_NAME,
-	getAgentDir,
-	getDebugLogPath,
-	VERSION,
-} from "../../config.ts";
+import { APP_NAME, APP_TITLE, CONFIG_DIR_NAME, getAgentDir, getDebugLogPath, VERSION } from "../../config.ts";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
 	NothingToCompactError,
 	parseSkillBlock,
 } from "../../core/agent-session.ts";
-import {
-	type AgentSessionRuntime,
-	SessionImportFileNotFoundError,
-	SIGNAL_DISPOSE_LIMIT_MS,
-} from "../../core/agent-session-runtime.ts";
+import { type AgentSessionRuntime, SIGNAL_DISPOSE_LIMIT_MS } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import { CACHE_TTL_MS, type CacheMiss, collectCacheMisses, detectCacheMiss } from "../../core/cache-stats.ts";
 import { startCatalogRefreshPolling } from "../../core/catalog-refresh-polling.ts";
@@ -110,7 +98,7 @@ import {
 	setRollbackWarningHandler,
 } from "../../core/rollback.ts";
 import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
-import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
+import { formatMissingSessionCwdPrompt, type MissingSessionCwdError } from "../../core/session-cwd.ts";
 import {
 	cancelSessionHandoff,
 	markSessionHandoff,
@@ -118,7 +106,7 @@ import {
 	registerTransferHandler,
 	requestSessionTransfer,
 } from "../../core/session-handoff.ts";
-import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+import { type SessionEntry, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/subagent-cancellation.ts";
@@ -207,6 +195,13 @@ import {
 } from "./model-commands.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { type PermissionControllerHost, PermissionModeController } from "./permission-controller.ts";
+import { handleExportCommand, handleImportCommand, type SessionFileCommandHost } from "./session-files.ts";
+import {
+	handleNameCommand,
+	SessionAutoNamer,
+	type SessionAutoNamerHost,
+	type SessionNameHost,
+} from "./session-naming.ts";
 import {
 	handleCloneCommand,
 	handleEditCommand,
@@ -508,9 +503,6 @@ export class InteractiveMode {
 	// new user message, never persisted — undone turns reappear after restart)
 	private redoStack: string[] = [];
 
-	// lunr: one-shot guard for the session auto-name LLM call (first assistant response)
-	private autoNameTriggered = false;
-
 	// Track current bash execution component
 	private bashComponent: BashExecutionComponent | undefined = undefined;
 
@@ -574,6 +566,10 @@ export class InteractiveMode {
 	private readonly chatViewHost: UsageCommandHost & HelpCommandHost = this.createChatViewHost();
 	// Passed to the session-navigation.ts functions for /tree, /fork, /clone, /resume, /undo, /edit and /redo.
 	private readonly sessionNavigationHost: SessionNavigationHost = this.createSessionNavigationHost();
+	// Passed to the session-files.ts and session-naming.ts functions for /export, /import and /name.
+	private readonly sessionCommandHost: SessionFileCommandHost & SessionNameHost & SessionAutoNamerHost =
+		this.createSessionCommandHost();
+	private readonly autoNamer = new SessionAutoNamer(this.sessionCommandHost);
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -3099,7 +3095,7 @@ export class InteractiveMode {
 				this.pendingTools.clear();
 				this.browserActivityComponent = undefined;
 
-				this.maybeAutoNameSession();
+				this.autoNamer.maybeAutoNameSession();
 
 				// lunr: capture tree-scope changes at turn boundary (bash side-effects).
 				captureTreeChanges(this.sessionManager.getCwd(), this.sessionManager.getSessionId());
@@ -5107,6 +5103,40 @@ export class InteractiveMode {
 		};
 	}
 
+	// Builds the host for /export, /import, /name and auto-naming. `session` stays a getter because
+	// /new, /resume and /fork replace it.
+	private createSessionCommandHost(): SessionFileCommandHost & SessionNameHost & SessionAutoNamerHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			get runtimeHost() {
+				return mode.runtimeHost;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+			showExtensionConfirm: (title, message) => this.showExtensionConfirm(title, message),
+			clearStatusIndicator: () => this.clearStatusIndicator(),
+			promptForMissingSessionCwd: (error) => this.promptForMissingSessionCwd(error),
+			handleFatalRuntimeError: (prefix, error) => this.handleFatalRuntimeError(prefix, error),
+			resolveModelReference: (reference) => this.resolveModelReference(reference),
+		};
+	}
+
 	// Builds the PermissionControllerHost. `session` stays a getter because /new, /resume and /fork replace it.
 	private createPermissionControllerHost(): PermissionControllerHost {
 		const mode = this;
@@ -5142,10 +5172,10 @@ export class InteractiveMode {
 			showModelsSelector: () => showModelsSelector(this.modelCommandHost),
 			handleModelCommand: (searchTerm) => handleModelCommand(this.modelCommandHost, searchTerm),
 			handleRefreshCommand: () => handleRefreshCommand(this.modelCommandHost),
-			handleExportCommand: (text) => this.handleExportCommand(text),
-			handleImportCommand: (text) => this.handleImportCommand(text),
+			handleExportCommand: (text) => handleExportCommand(this.sessionCommandHost, text),
+			handleImportCommand: (text) => handleImportCommand(this.sessionCommandHost, text),
 			handleCopyCommand: () => this.handleCopyCommand(),
-			handleNameCommand: (text) => this.handleNameCommand(text),
+			handleNameCommand: (text) => handleNameCommand(this.sessionCommandHost, text),
 			handleSessionCommand: () => handleSessionCommand(this.chatViewHost),
 			handleUsageCommand: () => handleUsageCommand(this.chatViewHost),
 			handleFastCommand: (arg) => this.handleFastCommand(arg),
@@ -5366,95 +5396,6 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleExportCommand(text: string): Promise<void> {
-		const outputPath = this.getPathCommandArgument(text, "/export");
-
-		try {
-			if (outputPath?.endsWith(".jsonl")) {
-				const filePath = this.session.exportToJsonl(outputPath);
-				this.showStatus(`Session exported to: ${filePath}`);
-			} else {
-				const filePath = await this.session.exportToHtml(outputPath);
-				this.showStatus(`Session exported to: ${filePath}`);
-			}
-		} catch (error: unknown) {
-			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
-		}
-	}
-
-	private getPathCommandArgument(text: string, command: "/export" | "/import"): string | undefined {
-		if (text === command) {
-			return undefined;
-		}
-		if (!text.startsWith(`${command} `)) {
-			return undefined;
-		}
-
-		const argsString = text.slice(command.length + 1).trimStart();
-		if (!argsString) {
-			return undefined;
-		}
-
-		const firstChar = argsString[0];
-		if (firstChar === '"' || firstChar === "'") {
-			const closingQuoteIndex = argsString.indexOf(firstChar, 1);
-			if (closingQuoteIndex < 0) {
-				return undefined;
-			}
-			return argsString.slice(1, closingQuoteIndex);
-		}
-
-		const firstWhitespaceIndex = argsString.search(/\s/);
-		if (firstWhitespaceIndex < 0) {
-			return argsString;
-		}
-		return argsString.slice(0, firstWhitespaceIndex);
-	}
-
-	private async handleImportCommand(text: string): Promise<void> {
-		const inputPath = this.getPathCommandArgument(text, "/import");
-		if (!inputPath) {
-			this.showError("Usage: /import <path.jsonl>");
-			return;
-		}
-
-		const confirmed = await this.showExtensionConfirm("Import session", `Replace current session with ${inputPath}?`);
-		if (!confirmed) {
-			this.showStatus("Import cancelled");
-			return;
-		}
-
-		try {
-			this.clearStatusIndicator();
-			const result = await this.runtimeHost.importFromJsonl(inputPath);
-			if (result.cancelled) {
-				this.showStatus("Import cancelled");
-				return;
-			}
-			this.showStatus(`Session imported from: ${inputPath}`);
-		} catch (error: unknown) {
-			if (error instanceof MissingSessionCwdError) {
-				const selectedCwd = await this.promptForMissingSessionCwd(error);
-				if (!selectedCwd) {
-					this.showStatus("Import cancelled");
-					return;
-				}
-				const result = await this.runtimeHost.importFromJsonl(inputPath, selectedCwd);
-				if (result.cancelled) {
-					this.showStatus("Import cancelled");
-					return;
-				}
-				this.showStatus(`Session imported from: ${inputPath}`);
-				return;
-			}
-			if (error instanceof SessionImportFileNotFoundError) {
-				this.showError(`Failed to import session: ${error.message}`);
-				return;
-			}
-			await this.handleFatalRuntimeError("Failed to import session", error);
-		}
-	}
-
 	private async handleCopyCommand(): Promise<void> {
 		const text = this.session.getLastAssistantText();
 		if (!text) {
@@ -5467,99 +5408,6 @@ export class InteractiveMode {
 			this.showStatus("Copied last agent message to clipboard");
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
-		}
-	}
-
-	private handleNameCommand(text: string): void {
-		const name = text.replace(/^\/(?:name|title)\s*/, "").trim();
-		if (!name) {
-			const currentName = this.sessionManager.getSessionName();
-			if (currentName) {
-				this.chatContainer.addChild(new Spacer(1));
-				this.chatContainer.addChild(new Text(theme.fg("dim", `Session name: ${currentName}`), 1, 0));
-			} else {
-				this.showWarning("Usage: /name <name>");
-			}
-			this.ui.requestRender();
-			return;
-		}
-
-		this.session.setSessionName(name);
-		const sessionName = this.sessionManager.getSessionName();
-		if (sessionName !== name) {
-			this.showWarning(`Session name was normalized from ${JSON.stringify(name)} to ${JSON.stringify(sessionName)}`);
-		}
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
-		this.ui.requestRender();
-	}
-
-	/**
-	 * lunr: fire-and-forget session auto-naming. After the FIRST assistant response in an
-	 * unnamed session, asks the model for a short title derived from the first user message.
-	 * Uses the light tier model when model tiers are enabled; otherwise the session model.
-	 * Never blocks the UI; failures are swallowed to the debug log. Skipped entirely when
-	 * the user has already named the session (via /name, /title, or --name).
-	 */
-	private maybeAutoNameSession(): void {
-		if (this.autoNameTriggered) return;
-		if (this.sessionManager.getSessionName()) return;
-		const userMessages = this.session.getUserMessagesForForking();
-		if (userMessages.length === 0) return; // No real turn yet; try again on the next agent_end.
-		if (userMessages.length > 1) {
-			// Resumed/older unnamed session — only auto-name fresh sessions.
-			this.autoNameTriggered = true;
-			return;
-		}
-		this.autoNameTriggered = true;
-		void this.generateSessionTitle(userMessages[0].text);
-	}
-
-	private async generateSessionTitle(firstUserText: string): Promise<void> {
-		try {
-			let model = this.session.model;
-			if (this.settingsManager.getModelTiersEnabled()) {
-				const tierModel = this.resolveModelReference(this.settingsManager.getTierModel("light"));
-				if (tierModel) {
-					model = tierModel;
-				}
-			}
-			if (!model) return;
-			const prompt =
-				"Generate a title of at most 6 words summarizing this request. " +
-				"Reply with the title only — no quotes, no trailing punctuation, no prefix.\n\n" +
-				`Request:\n${firstUserText.slice(0, 2000)}`;
-			const requestSessionId = this.sessionManager.getSessionId();
-			const requestSessionFile = this.sessionManager.getSessionFile();
-			const response = await this.session.modelRuntime.complete(model, {
-				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
-			});
-			if (this.sessionManager.getSessionId() !== requestSessionId) {
-				if (requestSessionFile) {
-					const target = SessionManager.open(requestSessionFile);
-					try {
-						target.appendRequestUsage("title", response);
-					} finally {
-						target.dispose();
-					}
-				}
-				return;
-			}
-			this.sessionManager.appendRequestUsage("title", response);
-			let title = response.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join(" ")
-				.replace(/\s+/g, " ")
-				.trim();
-			title = title.replace(/^["'`]+|["'`.!?]+$/g, "").trim();
-			if (!title) return;
-			if (this.sessionManager.getSessionName()) return; // User named it while the request was in flight.
-			this.session.setSessionName(title);
-		} catch (error) {
-			appendDebugLog(
-				`auto-name: title generation failed: ${error instanceof Error ? error.message : String(error)}`,
-			);
 		}
 	}
 
