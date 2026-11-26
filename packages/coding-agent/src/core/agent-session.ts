@@ -42,13 +42,10 @@ import type {
 	TextContent,
 } from "@earendil-works/pi-ai/compat";
 import {
-	clampThinkingLevel,
 	cleanupSessionResources,
 	estimateContextTokens as estimateRequestContextTokens,
-	getSupportedThinkingLevels,
 	isContextOverflow,
 	isRetryableAssistantError,
-	modelsAreEqual,
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
@@ -85,7 +82,6 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
-import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ToolHtmlRenderer } from "./export-html/index.ts";
 import {
 	type ContextUsage,
@@ -121,6 +117,15 @@ import { convertToLlm } from "./messages.ts";
 import { isUserInstructionsPath, loadSelectedUserInstructions } from "./model-instructions.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import {
+	cycleModel,
+	cycleThinkingLevel,
+	getAvailableThinkingLevels,
+	type ModelSelectionHost,
+	resolvedCatalogModel,
+	setModel,
+	setThinkingLevel,
+} from "./model-selection.ts";
 import { type CompiledPermissionRules, compilePermissionRules } from "./permission-rules.ts";
 import {
 	AUTONOMOUS_ADDENDUM,
@@ -398,9 +403,6 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 // Constants
 // ============================================================================
 
-/** Standard thinking levels (no-model fallback). Live models use getSupportedThinkingLevels. */
-const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
 /** Thrown by `compact()` before any compaction event when the branch has nothing old enough to summarize. */
 export class NothingToCompactError extends Error {
 	constructor() {
@@ -446,6 +448,9 @@ export class AgentSession {
 	private _manualCompactionPromise: Promise<CompactionResult> | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+
+	// Passed to the model-selection.ts functions behind setModel, cycleModel and the thinking level methods.
+	private readonly _modelSelectionHost: ModelSelectionHost = this.createModelSelectionHost();
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -628,6 +633,44 @@ export class AgentSession {
 			);
 		}
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
+	}
+
+	// Builds the ModelSelectionHost. Members stay getters because the model, the thinking level
+	// and the extension runner change over the session's life.
+	private createModelSelectionHost(): ModelSelectionHost {
+		const session = this;
+		return {
+			get agent() {
+				return session.agent;
+			},
+			get sessionManager() {
+				return session.sessionManager;
+			},
+			get settingsManager() {
+				return session.settingsManager;
+			},
+			get extensionRunner() {
+				return session._extensionRunner;
+			},
+			get modelRuntime() {
+				return session._modelRuntime;
+			},
+			get model() {
+				return session.model;
+			},
+			get thinkingLevel() {
+				return session.thinkingLevel;
+			},
+			get scopedModels() {
+				return session._scopedModels;
+			},
+			emit: (event) => this._emit(event),
+			syncOpenAIServiceTier: () => this._syncOpenAIServiceTier(),
+			refreshSystemPromptForCurrentModel: () => this._refreshSystemPromptForCurrentModel(),
+			setThinkingLevel: (level) => this.setThinkingLevel(level),
+			getAvailableThinkingLevels: () => this.getAvailableThinkingLevels(),
+			supportsThinking: () => this.supportsThinking(),
+		};
 	}
 
 	private async _getSummarizationRequestAuth(model: Model<Api>): Promise<{
@@ -2456,42 +2499,13 @@ export class AgentSession {
 	// Model Management
 	// =========================================================================
 
-	private async _emitModelSelect(
-		nextModel: Model<Api>,
-		previousModel: Model<Api> | undefined,
-		source: "set" | "cycle" | "restore",
-	): Promise<void> {
-		if (modelsAreEqual(previousModel, nextModel)) return;
-		await this._extensionRunner.emit({
-			type: "model_select",
-			model: nextModel,
-			previousModel,
-			source,
-		});
-	}
-
 	/**
 	 * Set model directly.
 	 * Validates that auth is configured, saves to session and settings.
 	 * @throws Error if no auth is configured for the model
 	 */
 	async setModel(model: Model<Api>): Promise<void> {
-		if (!(await this._modelRuntime.checkAuth(model.provider))) {
-			throw new Error(`No API key for ${model.provider}/${model.id}`);
-		}
-
-		const previousModel = this.model;
-		const thinkingLevel = this._getThinkingLevelForModelSwitch();
-		this.agent.state.model = model;
-		this._syncOpenAIServiceTier();
-		this._refreshSystemPromptForCurrentModel();
-		this.sessionManager.appendModelChange(model.provider, model.id);
-		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
-
-		// Re-clamp thinking level for new model's capabilities
-		this.setThinkingLevel(thinkingLevel);
-
-		await this._emitModelSelect(model, previousModel, "set");
+		return setModel(this._modelSelectionHost, model);
 	}
 
 	/**
@@ -2501,74 +2515,7 @@ export class AgentSession {
 	 * @returns The new model info, or undefined if only one model available
 	 */
 	async cycleModel(direction: "forward" | "backward" = "forward"): Promise<ModelCycleResult | undefined> {
-		if (this._scopedModels.length > 0) {
-			return this._cycleScopedModel(direction);
-		}
-		return this._cycleAvailableModel(direction);
-	}
-
-	private async _cycleScopedModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
-		const checks = await Promise.all(
-			this._scopedModels.map(async (scoped) => ({
-				scoped,
-				auth: await this._modelRuntime.checkAuth(scoped.model.provider),
-			})),
-		);
-		const scopedModels = checks.filter(({ auth }) => auth !== undefined).map(({ scoped }) => scoped);
-		if (scopedModels.length <= 1) return undefined;
-
-		const currentModel = this.model;
-		let currentIndex = scopedModels.findIndex((sm) => modelsAreEqual(sm.model, currentModel));
-
-		if (currentIndex === -1) currentIndex = 0;
-		const len = scopedModels.length;
-		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
-		const next = scopedModels[nextIndex];
-		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.thinkingLevel);
-
-		// Apply model
-		this.agent.state.model = next.model;
-		this._syncOpenAIServiceTier();
-		this._refreshSystemPromptForCurrentModel();
-		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
-		this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
-
-		// Apply thinking level.
-		// - Explicit scoped model thinking level overrides current session level
-		// - Undefined scoped model thinking level inherits the current session preference
-		// setThinkingLevel clamps to model capabilities.
-		this.setThinkingLevel(thinkingLevel);
-
-		await this._emitModelSelect(next.model, currentModel, "cycle");
-
-		return { model: next.model, thinkingLevel: this.thinkingLevel, isScoped: true };
-	}
-
-	private async _cycleAvailableModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
-		const availableModels = await this._modelRuntime.getAvailable();
-		if (availableModels.length <= 1) return undefined;
-
-		const currentModel = this.model;
-		let currentIndex = availableModels.findIndex((m) => modelsAreEqual(m, currentModel));
-
-		if (currentIndex === -1) currentIndex = 0;
-		const len = availableModels.length;
-		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
-		const nextModel = availableModels[nextIndex];
-
-		const thinkingLevel = this._getThinkingLevelForModelSwitch();
-		this.agent.state.model = nextModel;
-		this._syncOpenAIServiceTier();
-		this._refreshSystemPromptForCurrentModel();
-		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
-		this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
-
-		// Re-clamp thinking level for new model's capabilities
-		this.setThinkingLevel(thinkingLevel);
-
-		await this._emitModelSelect(nextModel, currentModel, "cycle");
-
-		return { model: nextModel, thinkingLevel: this.thinkingLevel, isScoped: false };
+		return cycleModel(this._modelSelectionHost, direction);
 	}
 
 	// =========================================================================
@@ -2581,27 +2528,7 @@ export class AgentSession {
 	 * Saves to session and settings only if the level actually changes.
 	 */
 	setThinkingLevel(level: ThinkingLevel): void {
-		const availableLevels = this.getAvailableThinkingLevels();
-		const effectiveLevel = availableLevels.includes(level) ? level : this._clampThinkingLevel(level, availableLevels);
-
-		// Only persist if actually changing
-		const previousLevel = this.agent.state.thinkingLevel;
-		const isChanging = effectiveLevel !== previousLevel;
-
-		this.agent.state.thinkingLevel = effectiveLevel;
-
-		if (isChanging) {
-			this.sessionManager.appendThinkingLevelChange(effectiveLevel);
-			if (this.supportsThinking() || effectiveLevel !== "off") {
-				this.settingsManager.setDefaultThinkingLevel(effectiveLevel);
-			}
-			this._emit({ type: "thinking_level_changed", level: effectiveLevel });
-			void this._extensionRunner.emit({
-				type: "thinking_level_select",
-				level: effectiveLevel,
-				previousLevel,
-			});
-		}
+		setThinkingLevel(this._modelSelectionHost, level);
 	}
 
 	/**
@@ -2609,15 +2536,7 @@ export class AgentSession {
 	 * @returns New level, or undefined if model doesn't support thinking
 	 */
 	cycleThinkingLevel(): ThinkingLevel | undefined {
-		if (!this.supportsThinking()) return undefined;
-
-		const levels = this.getAvailableThinkingLevels();
-		const currentIndex = levels.indexOf(this.thinkingLevel);
-		const nextIndex = (currentIndex + 1) % levels.length;
-		const nextLevel = levels[nextIndex];
-
-		this.setThinkingLevel(nextLevel);
-		return nextLevel;
+		return cycleThinkingLevel(this._modelSelectionHost);
 	}
 
 	/**
@@ -2625,9 +2544,7 @@ export class AgentSession {
 	 * Uses the registry row when /refresh has a newer copy than the session object.
 	 */
 	getAvailableThinkingLevels(): ThinkingLevel[] {
-		const model = this.resolvedCatalogModel();
-		if (!model) return THINKING_LEVELS;
-		return getSupportedThinkingLevels(model) as ThinkingLevel[];
+		return getAvailableThinkingLevels(this._modelSelectionHost);
 	}
 
 	/** Replace the session model with the current registry copy after a catalog refresh. */
@@ -2635,42 +2552,11 @@ export class AgentSession {
 		this._refreshCurrentModelFromRegistry();
 	}
 
-	private resolvedCatalogModel(): Model<Api> | undefined {
-		const current = this.model;
-		if (!current) return undefined;
-		const registry = this._modelRuntime.getModel(current.provider, current.id);
-		if (!registry || registry === current) return current;
-		const thinkingLevelMap =
-			current.thinkingLevelMap || registry.thinkingLevelMap
-				? { ...current.thinkingLevelMap, ...registry.thinkingLevelMap }
-				: current.thinkingLevelMap;
-		return {
-			...current,
-			...registry,
-			compat: { ...current.compat, ...registry.compat },
-			thinkingLevelMap,
-		};
-	}
-
 	/**
 	 * Check if current model supports thinking/reasoning.
 	 */
 	supportsThinking(): boolean {
 		return !!this.model?.reasoning;
-	}
-
-	private _getThinkingLevelForModelSwitch(explicitLevel?: ThinkingLevel): ThinkingLevel {
-		if (explicitLevel !== undefined) {
-			return explicitLevel;
-		}
-		if (!this.supportsThinking()) {
-			return this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
-		}
-		return this.thinkingLevel;
-	}
-
-	private _clampThinkingLevel(level: ThinkingLevel, _availableLevels: ThinkingLevel[]): ThinkingLevel {
-		return this.model ? (clampThinkingLevel(this.model, level) as ThinkingLevel) : "off";
 	}
 
 	// =========================================================================
@@ -3512,7 +3398,7 @@ export class AgentSession {
 				setThinkingLevel: (level) => this.setThinkingLevel(level),
 			},
 			{
-				getModel: () => this.resolvedCatalogModel(),
+				getModel: () => resolvedCatalogModel(this._modelSelectionHost),
 				isIdle: () => this.isIdle,
 				promptWithCompletion: (text, options) => this.promptWithCompletion(text, options),
 				sendMessage: (message, options) => this.sendCustomMessage(message, options),
