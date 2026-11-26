@@ -15,13 +15,22 @@ interface SlashSnapshot {
 	version: number;
 }
 
-interface SequentialChainStepLike {
-	agent: string;
+interface ChildLike {
+	agent?: string;
+	description?: string;
 	task?: string;
 }
 
+type SequentialChainStepLike = ChildLike;
+
 interface ParallelChainStepLike {
-	parallel: Array<{ agent: string; task?: string }>;
+	parallel: ChildLike[];
+}
+
+// Prompt-driven children carry a description and no agent; the child reports its
+// progress under that description, so placeholders use the same label.
+function childLabel(child: ChildLike): string {
+	return child.description ?? child.agent ?? "subagent";
 }
 
 type ChainStepLike = SequentialChainStepLike | ParallelChainStepLike;
@@ -77,14 +86,14 @@ function createPlaceholderResult(
 function buildParallelInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
 	const tasks = params.tasks ?? [];
 	return {
-		content: [{ type: "text", text: tasks.map((task) => `${task.agent}: ${task.task}`).join("\n\n") }],
+		content: [{ type: "text", text: tasks.map((task) => `${childLabel(task)}: ${task.task}`).join("\n\n") }],
 		details: {
 			mode: "parallel",
 			...(params.context ? { context: params.context } : {}),
-			results: tasks.map((task, index) => createPlaceholderResult(task.agent, task.task, "running", index)),
+			results: tasks.map((task, index) => createPlaceholderResult(childLabel(task), task.task, "running", index)),
 			progress: tasks.map((task, index) => ({
 				index,
-				agent: task.agent,
+				agent: childLabel(task),
 				status: "running" as const,
 				task: task.task,
 				recentTools: [],
@@ -103,9 +112,9 @@ function isParallelChainStep(step: ChainStepLike): step is ParallelChainStepLike
 
 function chainStepLabel(step: ChainStepLike): string {
 	if (isParallelChainStep(step)) {
-		return `[${step.parallel.map((entry) => entry.agent).join("+")}]`;
+		return `[${step.parallel.map((entry) => childLabel(entry)).join("+")}]`;
 	}
-	return step.agent;
+	return childLabel(step);
 }
 
 function flattenChainResults(chain: ChainStepLike[], fallbackTask: string | undefined): SingleResult[] {
@@ -114,12 +123,12 @@ function flattenChainResults(chain: ChainStepLike[], fallbackTask: string | unde
 	for (const step of chain) {
 		if (isParallelChainStep(step)) {
 			for (const task of step.parallel) {
-				results.push(createPlaceholderResult(task.agent, task.task ?? fallbackTask ?? "", results.length === 0 ? "running" : "pending", flatIndex));
+				results.push(createPlaceholderResult(childLabel(task), task.task ?? fallbackTask ?? "", results.length === 0 ? "running" : "pending", flatIndex));
 				flatIndex++;
 			}
 			continue;
 		}
-		results.push(createPlaceholderResult(step.agent, step.task ?? fallbackTask ?? "", results.length === 0 ? "running" : "pending", flatIndex));
+		results.push(createPlaceholderResult(childLabel(step), step.task ?? fallbackTask ?? "", results.length === 0 ? "running" : "pending", flatIndex));
 		flatIndex++;
 	}
 	return results;
@@ -156,7 +165,7 @@ function buildChainInitialResult(params: SubagentParamsLike): AgentToolResult<De
 }
 
 function buildSingleInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
-	const agent = params.agent ?? "subagent";
+	const agent = childLabel(params);
 	const task = params.task ?? "";
 	return {
 		content: [{ type: "text", text: task }],
