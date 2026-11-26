@@ -602,3 +602,38 @@ describe("shell expansion and redirection tricks", () => {
 		expect(isMutatingBashCommand(command)).toBe(false);
 	});
 });
+
+describe("cd to the session directory", () => {
+	const cwd = "/work/project";
+
+	// Models often start a line with `cd <project> &&`. That is no change of directory, so git and
+	// npm after it read the same config as without it.
+	it.each([
+		"cd /work/project && git status && git log --oneline -5",
+		"cd /work/project; git diff; ls; cat package.json",
+		"cd '/work/project' && npm ls",
+		"cd /work/project/ && git status --short | head",
+		"cd . && git status",
+		"cd /work/project/src/.. && git status",
+	])("allows %s", (command) => {
+		expect(isMutatingBashCommand(command, cwd)).toBe(false);
+	});
+
+	it.each([
+		"cd /work/project/src && git status",
+		"cd /work && git status",
+		"cd /work/project2 && git status",
+		"cd src && cd /work/project && git status",
+		"cd src && cd .. && git status",
+		"cd /work/project && cd src && git status",
+		"cd ~ && git status",
+		"cd /work/project && touch x",
+		"cd /work/project && git commit -m x",
+	])("still blocks %s", (command) => {
+		expect(isMutatingBashCommand(command, cwd)).toBe(true);
+	});
+
+	it("blocks git after any cd when the session directory is unknown", () => {
+		expect(isMutatingBashCommand("cd /work/project && git status")).toBe(true);
+	});
+});
