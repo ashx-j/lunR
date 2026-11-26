@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { parseSessionRequests, parseSessionUsage, sessionUsageDelta } from "../../shared/session-tokens.ts";
 /**
  * Core execution logic for running subagents
@@ -92,11 +91,11 @@ import {
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
 
-function emptyUsage(): Usage {
+function emptyUsage(): Required<Usage> {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, unknownRequests: 0, partialRequests: 0, unknownCosts: 0 };
 }
 
-function sumUsage(target: Usage, source: Usage): void {
+function sumUsage(target: Required<Usage>, source: Usage): void {
 	target.input += source.input;
 	target.output += source.output;
 	target.cacheRead += source.cacheRead;
@@ -270,7 +269,8 @@ async function runSingleAttempt(
 	});
 
 	const thinkingFromModel = modelArg ? splitKnownThinkingSuffix(modelArg).thinkingSuffix.slice(1) || undefined : undefined;
-	const result: SingleResult = {
+	// messages and usage start filled in here and are only replaced by full values.
+	const result: SingleResult & { messages: Message[]; usage: Required<Usage> } = {
 		childId: spec.childId,
 		description: spec.description,
 		permissions: spec.effectivePermissions,
@@ -775,10 +775,7 @@ async function runSingleAttempt(
 					current: childWatchdogState,
 					event: evt,
 					runId: options.runId,
-					childId: spec.childId,
-		description: spec.description,
-		permissions: spec.effectivePermissions,
-		agent: spec.description,
+					agent: spec.description,
 					childIndex: options.index ?? 0,
 				});
 				if (!next) return;
