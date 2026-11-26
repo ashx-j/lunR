@@ -50,3 +50,13 @@ it("sweeps lunR temp entries older than a day and keeps the rest", async () => {
 
 	expect(readdirSync(dir).sort()).toEqual(["lunr-bash-fedcba9876543210.log", "other.log"]);
 });
+
+it("sweeps Claude Code process dirs whose owner pid is gone", async () => {
+	const dir = root();
+	const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
+	for (const owner of [Number(dead.stdout), process.pid]) mkdirSync(join(dir, `lunr-claude-code-${owner}-abc123`));
+
+	await sweepStaleTempFiles(dir);
+
+	expect(readdirSync(dir)).toEqual([`lunr-claude-code-${process.pid}-abc123`]);
+});
