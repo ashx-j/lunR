@@ -1,7 +1,9 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { streamClaudeCode } from "../src/api/anthropic-claude-code-bridge.ts";
 import type { ExternalClaudeCodeCredential } from "../src/auth/types.ts";
@@ -12,12 +14,14 @@ import type { AssistantMessage, Context, Message } from "../src/types.ts";
 /**
  * Stand-in for Claude Code 2.1.310 on the one-request route: the body comes from `--settings`, or from an
  * `apply_flag_settings` control request, which it confirms with a `control_response` (unless its directory
- * ends in "deaf", which ignores it, or "refuses", which answers with an error). When stdin ends it sends
- * one request with that body and prints each SSE event as a `stream_event` line. Each process appends its
- * pid to `started` when it starts, and `{ pid, fileBody, appliedBody }` to `spawns` when it sends.
+ * ends in "deaf", which ignores it, or "refuses", which answers with an error; "slow-once" answers the first
+ * control request of the fixture after 3 s; "dies" exits without output when the query frame arrives after
+ * a confirmed body). When stdin ends it sends one request with that body and prints each SSE event as a
+ * `stream_event` line. Each process appends its pid to `started` when it starts, and
+ * `{ pid, fileBody, appliedBody }` to `spawns` when it sends.
  */
 const FAKE_CLAUDE_CODE = `#!/usr/bin/env node
-const { appendFileSync, readFileSync } = require("node:fs");
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const argv = process.argv.slice(2);
 const flag = (name) => argv[argv.indexOf(name) + 1];
@@ -33,12 +37,18 @@ process.stdin.on("data", (chunk) => {
 	for (let index = buffer.indexOf("\\n"); index >= 0; index = buffer.indexOf("\\n")) {
 		const message = JSON.parse(buffer.slice(0, index));
 		buffer = buffer.slice(index + 1);
-		if (message.type !== "control_request") frames.push(message);
-		else if (__dirname.endsWith("refuses")) line({ type: "control_response", response: { subtype: "error", request_id: message.request_id, error: "unsupported" } });
+		if (message.type !== "control_request") {
+			if (__dirname.endsWith("dies") && appliedBody) process.exit(1);
+			frames.push(message);
+		} else if (__dirname.endsWith("refuses")) line({ type: "control_response", response: { subtype: "error", request_id: message.request_id, error: "unsupported" } });
 		else if (!__dirname.endsWith("deaf") && message.request.subtype === "apply_flag_settings") {
 			body = message.request.settings.env.CLAUDE_CODE_EXTRA_BODY;
 			appliedBody = true;
-			line({ type: "control_response", response: { subtype: "success", request_id: message.request_id } });
+			const reply = () => line({ type: "control_response", response: { subtype: "success", request_id: message.request_id } });
+			const slow = __dirname.endsWith("slow-once") && !existsSync(join(__dirname, "slowed"));
+			if (slow) writeFileSync(join(__dirname, "slowed"), "");
+			if (slow) setTimeout(reply, 3000);
+			else reply();
 		}
 	}
 });
@@ -170,7 +180,8 @@ function running(fixture: Fixture): number[] {
 
 /** Waits briefly for `check` to hold, for processes that are being stopped. */
 async function settled(check: () => boolean): Promise<boolean> {
-	for (let attempt = 0; attempt < 50 && !check(); attempt++) await new Promise((r) => setTimeout(r, 20));
+	// Generous, since a loaded machine can take seconds to start or stop a process.
+	for (let attempt = 0; attempt < 500 && !check(); attempt++) await new Promise((r) => setTimeout(r, 20));
 	return check();
 }
 
@@ -273,4 +284,89 @@ describe.skipIf(process.platform === "win32")("Claude Code spare processes", () 
 		stop();
 		expect(await settled(() => running(fixture).length === 0)).toBe(true);
 	});
+
+	it("runs one request cold after a late confirmation and keeps using spares", async () => {
+		const fixture = await setup(4, "slow-once");
+		await run(fixture, 3);
+		// Cold; the late spare's request ran cold; the next request ran on a spare again.
+		expect(fixture.spawns().map(({ appliedBody }) => appliedBody)).toEqual([false, false, true]);
+		expect(fixture.bodies).toHaveLength(3);
+	});
+
+	it("does not count an abort during the confirmation against spares", async () => {
+		const fixture = await setup(5, "slow-once");
+		const { messages } = await run(fixture, 1);
+		expect(await settled(() => fixture.started().length === 2)).toBe(true);
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), 300);
+		const aborted = await streamClaudeCode(
+			ANTHROPIC_MODELS["claude-opus-4-8"],
+			{ systemPrompt: "You are lunR.", messages, tools },
+			{ externalClaudeCode: fixture.connection, sessionId: "session-a", signal: controller.signal },
+			true,
+			fixture.upstream,
+		).result();
+		expect(aborted.stopReason).toBe("aborted");
+		await run(fixture, 2, { messages: [{ role: "user", content: "Again", timestamp: 1 }] });
+		expect(fixture.spawns().map(({ appliedBody }) => appliedBody)).toEqual([false, false, true]);
+	});
+
+	it("reruns a request cold when its spare dies after confirming the body", async () => {
+		const fixture = await setup(2, "dies");
+		const { last } = await run(fixture, 2);
+		expect(last.stopReason).toBe("stop");
+		expect(fixture.spawns().map(({ fileBody }) => fileBody)).toEqual([true, true]);
+		expect(fixture.bodies).toHaveLength(2);
+	});
+
+	it.each(["exit", "kill"])(
+		"leaves no process directory behind after lunR's %s",
+		async (how) => {
+			// Every answer is a tool call, so each lunR keeps a spare.
+			const fixture = await setup(100);
+			const temp = mkdtempSync(join(tmpdir(), "lunr-spare-tmp-"));
+			directories.push(temp);
+			const bridge = pathToFileURL(join(import.meta.dirname, "../src/api/anthropic-claude-code-bridge.ts")).href;
+			const models = pathToFileURL(join(import.meta.dirname, "../src/providers/anthropic.models.ts")).href;
+			// One tool turn of a session, which leaves a spare waiting; then exit, or wait to be killed.
+			// Waits until `processes` fake Claude Code processes have started, so this lunR's spare exists.
+			const script = (end: string, processes = 2) => `
+			const { streamClaudeCode } = await import(${JSON.stringify(bridge)});
+			const { ANTHROPIC_MODELS } = await import(${JSON.stringify(models)});
+			const tools = ${JSON.stringify(tools)};
+			await streamClaudeCode(ANTHROPIC_MODELS["claude-opus-4-8"], { systemPrompt: "x", messages: [{ role: "user", content: "hi", timestamp: 1 }], tools },
+				{ externalClaudeCode: ${JSON.stringify(fixture.connection)}, sessionId: "s" }, true, ${JSON.stringify(fixture.upstream)}).result();
+			const { readFileSync } = await import("node:fs");
+			while (readFileSync(${JSON.stringify(join(fixture.connection.command, "../started"))}, "utf8").trim().split("\\n").length < ${processes}) await new Promise((r) => setTimeout(r, 20));
+			${end}`;
+			const env = { ...process.env, TMPDIR: temp };
+			const lunrDirectories = () => readdirSync(temp).filter((name) => name.startsWith("lunr-claude-code-"));
+			// Asynchronous, so this process keeps serving the fixture upstream meanwhile.
+			const start = (end: string, processes?: number) =>
+				spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script(end, processes)], {
+					env,
+					stdio: ["ignore", "pipe", "inherit"],
+				});
+			const closed = (child: ReturnType<typeof start>) =>
+				new Promise<number | null>((resolve) => child.once("close", resolve));
+			if (how === "exit") {
+				expect(await closed(start("process.exit(0);"))).toBe(0);
+			} else {
+				const child = start("console.log('ready'); setInterval(() => {}, 1000);");
+				await new Promise<void>((resolve) => child.stdout.once("data", () => resolve()));
+				expect(lunrDirectories()).toHaveLength(1);
+				child.kill("SIGKILL");
+				await closed(child);
+				// The next lunR's first Claude Code start sweeps what the killed one left, in the background.
+				const swept = `const { readdirSync } = await import("node:fs");
+					const others = () => readdirSync(process.env.TMPDIR).filter((name) => name.startsWith("lunr-claude-code-") && !name.startsWith("lunr-claude-code-" + process.pid + "-"));
+					for (let i = 0; i < 250 && others().length; i++) await new Promise((r) => setTimeout(r, 20));
+					process.exit(0);`;
+				// Its own cold process and spare are the third and fourth.
+				expect(await closed(start(swept, 4))).toBe(0);
+			}
+			expect(lunrDirectories()).toEqual([]);
+		},
+		60_000,
+	);
 });
