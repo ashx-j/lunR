@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
@@ -291,6 +291,11 @@ export async function spawnBrokerIfNeeded(brokerCommand: string, brokerArgs: str
           cleanup();
           resolve();
         }, (error) => {
+          // On Windows the launcher waits on its broker, so its process tree still holds a broker
+          // that never listened. cleanup() kills only the launcher, so end the tree first.
+          if (launch.kind === "windows-launcher" && child.pid && child.exitCode === null && child.signalCode === null) {
+            spawnSync("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true });
+          }
           cleanup();
           // A broker that never listened can be stuck in Node's own startup, for example when a
           // pids cgroup limit refuses its threads. It runs no code that could exit, so kill it.

@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import lspExtension from "../src/builtin-extensions/pi-lsp-extension/src/index.ts";
 import { CREDENTIAL_BLOCK_REASON, credentialWalkFilter } from "../src/core/credential-files.ts";
@@ -43,9 +44,28 @@ afterEach(async () => {
 });
 
 const gate = (toolName: string, input: Record<string, unknown>) => gateToolCall(toolName, input, project);
-/** Tables name the scratch profile `<profile>` so test titles stay readable. */
-const withProfile = (input: Record<string, unknown>): Record<string, unknown> =>
-	JSON.parse(JSON.stringify(input).replaceAll("<profile>", agentDir));
+/**
+ * Tables name the scratch profile `<profile>` so test titles stay readable. Bash gets it with `/`
+ * separators, since an unquoted `\` is an escape there. `<native>` keeps the platform's separators,
+ * `<url>` is the file URL and `<msys>` is the Git Bash spelling (`/d/a/agent` for `D:\a\agent`).
+ * On POSIX all but `<url>` are the same path.
+ */
+function withProfile(input: Record<string, unknown>, toolName: string): Record<string, unknown> {
+	const slashed = agentDir.replaceAll(sep, "/");
+	const swap = (value: unknown): unknown => {
+		if (typeof value === "string") {
+			return value
+				.replaceAll("<profile>", toolName === "bash" ? slashed : agentDir)
+				.replaceAll("<native>", agentDir)
+				.replaceAll("<url>", pathToFileURL(agentDir).href)
+				.replaceAll("<msys>", slashed.replace(/^([a-z]):/i, (_, drive: string) => `/${drive.toLowerCase()}`));
+		}
+		if (Array.isArray(value)) return value.map(swap);
+		if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, swap(v)]));
+		return value;
+	};
+	return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, swap(value)]));
+}
 const textOf = (result: { content: Array<{ type: string; text?: string }> }) =>
 	result.content.map((part) => part.text ?? "").join("");
 
@@ -116,15 +136,17 @@ describe("lunR's saved logins", () => {
 	it.each<[string, Record<string, unknown>]>([
 		["mcp", { tool: "fs_read", args: { path: "<profile>/auth.json" } }],
 		["some_extension_tool", { files: ["readme.md", "profile/mcp-oauth"] }],
-		["fetch_content", { url: "file://<profile>/subscriptions.json" }],
+		["fetch_content", { url: "<url>/subscriptions.json" }],
 		["read", { path: "@<profile>/auth.json" }],
 		["bash", { command: "cat ../agent/auth.json" }],
 		["bash", { command: "jq . <profile/subscriptions.json | head" }],
 		["bash", { command: "cd <profile> && cat auth.json" }],
 		["bash", { command: "cd profile/mcp-oauth; base64 --input=sha256-ab/tokens.json" }],
 		["bash", { command: "ls -la <profile>/mcp-oauth" }],
+		["bash", { command: `cat "${join("<native>", "auth.json")}"` }],
+		["bash", { command: "cat <msys>/subscriptions.json" }],
 	])("refuses %s %j", async (toolName, input) => {
-		expect(await gate(toolName, withProfile(input))).toEqual({ block: true, reason: CREDENTIAL_BLOCK_REASON });
+		expect(await gate(toolName, withProfile(input, toolName))).toEqual({ block: true, reason: CREDENTIAL_BLOCK_REASON });
 	});
 
 	it.each<[string, Record<string, unknown>]>([
@@ -135,7 +157,7 @@ describe("lunR's saved logins", () => {
 		["bash", { command: "cat auth.json; git log -- src/auth.json" }],
 		["bash", { command: "ls <profile>" }],
 	])("allows %s %j, which reads no saved login", async (toolName, input) => {
-		expect(await gate(toolName, withProfile(input))).toBeUndefined();
+		expect(await gate(toolName, withProfile(input, toolName))).toBeUndefined();
 	});
 
 	it("refuses a read through a symlink under another name", async () => {

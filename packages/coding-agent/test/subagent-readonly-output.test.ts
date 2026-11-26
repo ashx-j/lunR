@@ -151,7 +151,9 @@ describe("subagent output in read-only mode", () => {
 		const result = await launch(child(join(root, "src.ts")), sessionFile);
 		expect(result).toMatchObject({ isError: true });
 		const text = JSON.stringify(result.content);
-		expect(text).toContain(`run's directory ${join(root, "agent", "sessions", "subagent-artifacts", "outputs")}`);
+		// Encoded like `text`, so a Windows path's backslashes match their escaped form.
+		const runDir = JSON.stringify(`run's directory ${join(root, "agent", "sessions", "subagent-artifacts", "outputs")}`);
+		expect(text).toContain(runDir.slice(1, -1));
 		expect(runSync).not.toHaveBeenCalled();
 		expect(existsSync(join(root, ".pi-subagents"))).toBe(false);
 	});
