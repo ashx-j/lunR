@@ -59,7 +59,7 @@ export function needsAutoReview(toolName: string, input: Record<string, unknown>
 	if (URL_FETCH_TOOLS.has(toolName)) return true;
 	if (toolName === "browser" && (input.action === "navigate" || input.action === "tabs")) return true;
 	if (toolName === "bash" && typeof input.command === "string" && SHELL_ENV_PREFIX.test(input.command)) return true;
-	if (!readOnlyModeBlock(toolName, input)) return false;
+	if (!readOnlyModeBlock(toolName, input, cwd)) return false;
 	if (PROJECT_EDIT_TOOLS.has(toolName) && typeof input.path === "string" && isOrdinaryProjectFile(input.path, cwd)) {
 		return false;
 	}

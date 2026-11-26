@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { computerPolicy } from "./computer-use/policy.ts";
 
 /**
@@ -180,8 +181,9 @@ export function isCodeRewriteMutating(input: unknown): boolean {
 
 /**
  * Returns the block reason when read-only mode should block this tool call, else undefined.
+ * `cwd` is the session's working directory, when the caller knows it (see `isMutatingBashCommand`).
  */
-export function readOnlyModeBlockReason(toolName: string, input: unknown): string | undefined {
+export function readOnlyModeBlockReason(toolName: string, input: unknown, cwd?: string): string | undefined {
 	if (toolName.startsWith("computer_")) {
 		try {
 			return computerPolicy(toolName, {})?.observation ? undefined : READ_ONLY_MODE_BLOCK_MESSAGE;
@@ -200,7 +202,7 @@ export function readOnlyModeBlockReason(toolName: string, input: unknown): strin
 	}
 	if (toolName === "bash") {
 		const command = readBashCommand(input);
-		if (command && isMutatingBashCommand(command)) {
+		if (command && isMutatingBashCommand(command, cwd)) {
 			return `${READ_ONLY_MODE_BLOCK_MESSAGE} Blocked command: ${command}`;
 		}
 	}
@@ -216,8 +218,12 @@ function readBashCommand(input: unknown): string {
  * Read-only bash allowlist. A command is mutating unless every segment is a
  * known read-only command used safely (no redirects, no command substitution,
  * no process substitution, no executing-interpreter flags).
+ *
+ * With `cwd`, the session's working directory, a first `cd .` or `cd <cwd as an absolute path>`
+ * counts as no change of directory. Models often start a line with `cd <project> &&`, and without this every
+ * `git status` after it was treated as running in an unknown directory.
  */
-export function isMutatingBashCommand(command: string): boolean {
+export function isMutatingBashCommand(command: string, cwd?: string): boolean {
 	if (!command.trim()) return false;
 
 	// Output redirects outside quotes can write a file, except to /dev/null or onto another descriptor.
@@ -234,7 +240,8 @@ export function isMutatingBashCommand(command: string): boolean {
 		const tokens = shellWords(segment);
 		if (tokens?.[0] === "cd") {
 			if (!isPlainCd(segment, tokens)) return true;
-			changedDir = true;
+			// Only the first directory change can be a no-op: after a real one, `.` means something else.
+			if (changedDir || !isCdToSessionDirectory(tokens[1], cwd)) changedDir = true;
 			continue;
 		}
 		if (isMutatingSegment(segment)) return true;
@@ -283,6 +290,19 @@ function joinLineContinuations(command: string): string {
 
 /** Allowed commands that load config, hooks or a program from the working directory. */
 const CWD_CONFIG_COMMANDS = new Set(["git", "gh", "npm", "pnpm", "bun"]);
+
+/**
+ * True when `cd <target>` stays in `cwd`: `.`, `./`, or `cwd` spelled as an absolute path. Other
+ * spellings are refused even when Node resolves them to `cwd`, because bash can read them
+ * differently: `~/..` expands first, a relative name is searched in `CDPATH`, and `..` after a
+ * symlink leaves the tree under `set -P`. Off on Windows, where Node and Git Bash disagree on `/`.
+ */
+function isCdToSessionDirectory(target: string, cwd: string | undefined): boolean {
+	if (cwd === undefined || process.platform === "win32") return false;
+	if (target === "." || target === "./") return true;
+	if (!target.startsWith("/") || target.split("/").includes("..")) return false;
+	return resolve(target) === resolve(cwd);
+}
 
 /** `cd <dir>` alone: one literal argument that isn't an option, `-` or a glob. */
 function isPlainCd(segment: string, tokens: string[]): boolean {
