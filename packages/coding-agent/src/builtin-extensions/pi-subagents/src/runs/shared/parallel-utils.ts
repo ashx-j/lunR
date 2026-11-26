@@ -1,3 +1,5 @@
+import type { Materialized } from "../../shared/settings.ts";
+
 export interface RunnerSubagentStep {
 	completionTask?: string;
 	/** Session id of the direct parent session for permission-system ask forwarding. */
@@ -72,13 +74,21 @@ export interface DynamicRunnerGroup {
 	phase?: string;
 	label?: string;
 	sessionFiles?: (string | undefined)[];
-	thinkingOverrides?: (string | undefined)[];
+	// false means no override, like undefined; the runner applies only truthy levels.
+	thinkingOverrides?: (string | false | undefined)[];
 	effectiveAcceptance?: import("../../shared/types.ts").ResolvedAcceptanceConfig;
 	acceptanceInput?: import("../../shared/types.ts").AcceptanceInput;
 	acceptanceRole?: import("../../shared/types.ts").AcceptanceRole;
 }
 
 export type RunnerStep = RunnerSubagentStep | ParallelStepGroup | DynamicRunnerGroup;
+
+/** A runner step as the async step builder creates it, with `agent` set on every child. */
+export type BuiltRunnerSubagentStep = Materialized<RunnerSubagentStep>;
+export type BuiltRunnerStep =
+	| BuiltRunnerSubagentStep
+	| (Omit<ParallelStepGroup, "parallel"> & { parallel: BuiltRunnerSubagentStep[] })
+	| DynamicRunnerGroup;
 
 export function isParallelGroup(step: RunnerStep): step is ParallelStepGroup {
 	return "parallel" in step && Array.isArray(step.parallel);

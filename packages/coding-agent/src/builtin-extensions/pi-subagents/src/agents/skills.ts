@@ -692,6 +692,9 @@ function escapeXmlText(value: string): string {
 		.replace(/>/g, "&gt;");
 }
 
+// Only `false` normalizes to false.
+export function normalizeSkillInput(input: string | string[] | true | undefined): string[] | undefined;
+export function normalizeSkillInput(input: string | string[] | boolean | undefined): string[] | false | undefined;
 export function normalizeSkillInput(
 	input: string | string[] | boolean | undefined,
 ): string[] | false | undefined {

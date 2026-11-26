@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Chain execution logic for subagent tool
  */
@@ -27,9 +26,9 @@ import {
 	isDynamicParallelStep,
 	isParallelStep,
 	type StepOverrides,
-	type ChainStep,
-	type ParallelStep,
-	type SequentialStep,
+	type MaterializedChainStep,
+	type MaterializedParallelStep,
+	type MaterializedSequentialStep,
 	type ParallelTaskResult,
 	type ResolvedStepBehavior,
 	type ResolvedTemplates,
@@ -85,7 +84,7 @@ interface ChainExecutionDetailsInput {
 	allArtifactPaths: ArtifactPaths[];
 	artifactsDir: string;
 	chainAgents: string[];
-	chainSteps: ChainStep[];
+	chainSteps: MaterializedChainStep[];
 	totalSteps: number;
 	currentStepIndex?: number;
 	runId: string;
@@ -97,7 +96,7 @@ interface ChainExecutionDetailsInput {
 
 interface ParallelChainRunInput {
 	communicationEnabled?: boolean;
-	step: ParallelStep;
+	step: MaterializedParallelStep;
 	parallelTemplates: string[];
 	parallelBehaviors: ResolvedStepBehavior[];
 	agents: ChildRuntimeConfig[];
@@ -143,7 +142,7 @@ interface ParallelChainRunInput {
 	allProgress: AgentProgress[];
 	outputs: ChainOutputMap;
 	chainAgents: string[];
-	chainSteps: ChainStep[];
+	chainSteps: MaterializedChainStep[];
 	totalSteps: number;
 	dynamicChildren?: ChainExecutionDetailsInput["dynamicChildren"];
 	dynamicGroupStatuses?: ChainExecutionDetailsInput["dynamicGroupStatuses"];
@@ -194,7 +193,7 @@ function buildChainExecutionErrorResult(message: string, input: ChainExecutionDe
 }
 
 /** Where each output the chain's steps name directly would be written. */
-function staticChainOutputPaths(chainSteps: ChainStep[], chainDir: string): string[] {
+function staticChainOutputPaths(chainSteps: MaterializedChainStep[], chainDir: string): string[] {
 	const outputs = chainSteps.flatMap((step) =>
 		isParallelStep(step)
 			? step.parallel.map((task) => task.output)
@@ -454,7 +453,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 
 interface ChainExecutionParams {
 	communicationEnabled?: boolean;
-	chain: ChainStep[];
+	modelScope?: ModelScopeConfig;
+	chain: MaterializedChainStep[];
 	task?: string;
 	agents: ChildRuntimeConfig[];
 	ctx: ExtensionContext;
@@ -514,7 +514,7 @@ interface ChainExecutionResult {
 	isError?: boolean;
 	/** User requested async execution via TUI - caller should dispatch to executeAsyncChain */
 	requestedAsync?: {
-		chain: ChainStep[];
+		chain: MaterializedChainStep[];
 		chainSkills: string[];
 	};
 }
@@ -565,7 +565,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			? `[${step.parallel.map((t) => t.description || t.label || t.agent || "child").join("+")}]`
 			: isDynamicParallelStep(step)
 				? `expand:${step.parallel.description || step.parallel.label || step.parallel.agent || "child"}`
-			: ((step as SequentialStep).description || (step as SequentialStep).label || (step as SequentialStep).agent || "child"),
+			: ((step as MaterializedSequentialStep).description || (step as MaterializedSequentialStep).label || (step as MaterializedSequentialStep).agent || "child"),
 	);
 	const totalSteps = chainSteps.length;
 
@@ -591,7 +591,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			? firstStep.parallel[0]!.task!
 			: isDynamicParallelStep(firstStep)
 				? firstStep.parallel.task!
-				: (firstStep as SequentialStep).task!);
+				: (firstStep as MaterializedSequentialStep).task!);
 	try {
 		validateChainOutputBindings(chainSteps, { maxItems: params.dynamicFanoutMaxItems });
 	} catch (error) {
@@ -622,7 +622,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	const availableSkills = discoverAvailableSkills(cwd ?? ctx.cwd);
 
 	if (shouldClarify) {
-		const seqSteps = chainSteps as SequentialStep[];
+		const seqSteps = chainSteps as MaterializedSequentialStep[];
 		const agentConfigs: ChildRuntimeConfig[] = [];
 		for (const step of seqSteps) {
 			const config = agents.find((a) => a.name === step.agent);
@@ -682,7 +682,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 		if (result.runInBackground) {
 			removeChainDir(chainDir);
-			const updatedChain: ChainStep[] = chainSteps.map((step, i) => {
+			const updatedChain: MaterializedChainStep[] = chainSteps.map((step, i) => {
 				if (isParallelStep(step)) return step;
 				const override = result.behaviorOverrides[i];
 				return {
@@ -955,7 +955,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				continue;
 			}
 
-			const dynamicParallelStep: ParallelStep = {
+			const dynamicParallelStep: MaterializedParallelStep = {
 				parallel: materialized.parallel,
 				concurrency: step.concurrency,
 				failFast: step.failFast,
@@ -1128,7 +1128,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			}));
 			prev = aggregateParallelOutputs(taskResults, (i, agent) => `=== Dynamic Item ${i + 1} (${agent}, key ${materialized.items[i]?.key ?? i}) ===`);
 		} else {
-			const seqStep = step as SequentialStep;
+			const seqStep = step as MaterializedSequentialStep;
 			const stepTemplate = stepTemplates as string;
 
 			const agentConfig = agents.find((a) => a.name === seqStep.agent);
