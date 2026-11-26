@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
@@ -237,7 +236,7 @@ function hasOwn<T extends object>(value: T, key: PropertyKey): boolean {
 
 function sanitizeOutputLines(lines: string[] | undefined): string[] {
 	if (!lines || lines.length === 0) return [];
-	return lines.filter((line): line is string => typeof line === "string" && line.trim() && line.trim() !== "(running...)");
+	return lines.filter((line): line is string => typeof line === "string" && !!line.trim() && line.trim() !== "(running...)");
 }
 
 function collectNewOutputLines(previous: string[] | undefined, next: string[] | undefined): string[] {
@@ -537,7 +536,8 @@ async function requestDelegatedRun(
 
 export async function executeSubagentPromptStep(options: DelegatedPromptOptions): Promise<DelegatedPromptOutcome | undefined> {
 	const { pi, ctx, currentModel, override, signal, inheritedModel, taskPreamble, allowPartialFailures } = options;
-	const isParallelRequest = "parallel" in options;
+	// Not `"parallel" in options`: the single-prompt type declares parallel?: never, so only a value narrows.
+	const isParallelRequest = options.parallel !== undefined;
 
 	const tasks = isParallelRequest
 		? options.parallel
