@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { getWebSearchConfigPath } from "./utils.ts";
 
 // Gemini Web, which searched through the user's signed-in Google browser session, was removed:
-// Google bans accounts used from automated tools. Its old opt-ins (`allowBrowserCookies` or
-// `chromeProfile` in web-search.json, or PI_ALLOW_BROWSER_COOKIES=1) are now ignored and left on disk.
+// Google bans accounts used from automated tools. Its old opt-ins (`allowBrowserCookies` in
+// web-search.json, or PI_ALLOW_BROWSER_COOKIES=1) are now ignored and left on disk. `chromeProfile`
+// only chose which profile to read and never turned Gemini Web on, so it alone shows no notice.
 
 let noticeShown = false;
 
@@ -12,8 +13,8 @@ function usedGeminiWeb(): boolean {
 	const path = getWebSearchConfigPath();
 	if (!existsSync(path)) return false;
 	try {
-		const raw: { allowBrowserCookies?: unknown; chromeProfile?: unknown } = JSON.parse(readFileSync(path, "utf-8"));
-		return raw.allowBrowserCookies === true || typeof raw.chromeProfile === "string";
+		const raw: { allowBrowserCookies?: unknown } = JSON.parse(readFileSync(path, "utf-8"));
+		return raw.allowBrowserCookies === true;
 	} catch {
 		// The search modules report a broken config themselves.
 		return false;
@@ -27,7 +28,7 @@ function usedGeminiWeb(): boolean {
 function takeGeminiWebRemovedNotice(): string | null {
 	if (noticeShown || !usedGeminiWeb()) return null;
 	noticeShown = true;
-	return `Gemini Web (search through your signed-in Google browser) was removed from lunR, so allowBrowserCookies is ignored. Set GEMINI_API_KEY, or geminiApiKey or another provider's key in ${getWebSearchConfigPath()}.`;
+	return `Gemini Web (search through your signed-in Google browser) was removed from lunR, so its browser cookie opt-in is ignored. Set GEMINI_API_KEY, or geminiApiKey or another provider's key in ${getWebSearchConfigPath()}.`;
 }
 
 /** Prepends the removal notice to an error message when it applies. */
