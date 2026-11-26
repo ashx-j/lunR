@@ -20,7 +20,8 @@ for (const file of await readdir(packs)) {
 	const path = join(packs, file);
 	const manifest = JSON.parse(execFileSync(tar, ["-xOf", path, "package/package.json"], { encoding: "utf8" }));
 	if (!manifest.name.startsWith("@ashx-j/lunr")) continue;
-	packages.set(manifest.name, { path, file, manifest, integrity: `sha512-${createHash("sha512").update(await readFile(path)).digest("base64")}` });
+	const shrinkwrap = execFileSync(tar, ["-tf", path], { encoding: "utf8", maxBuffer: 1 << 26 }).split(/\r?\n/).includes("package/npm-shrinkwrap.json");
+	packages.set(manifest.name, { path, file, manifest, shrinkwrap, integrity: `sha512-${createHash("sha512").update(await readFile(path)).digest("base64")}` });
 }
 assert.equal(packages.size, 7, "Pack all four public packages and three native payload packages first.");
 const cli = packages.get("@ashx-j/lunr") ?? packages.get("@ashx-j/lunr-dev");
@@ -32,7 +33,8 @@ const server = createServer((request, response) => {
 	const path = decodeURIComponent(new URL(request.url, "http://localhost").pathname).slice(1);
 	const item = packages.get(path);
 	if (item) {
-		const manifest = { ...item.manifest, dist: { tarball: `${registry}${item.manifest.name}/-/${item.file}`, integrity: item.integrity } };
+		// The registry marks shrinkwrapped versions; without it npm skips the shrinkwrap install path.
+		const manifest = { ...item.manifest, ...(item.shrinkwrap ? { _hasShrinkwrap: true } : {}), dist: { tarball: `${registry}${item.manifest.name}/-/${item.file}`, integrity: item.integrity } };
 		response.setHeader("Content-Type", "application/json");
 		response.end(JSON.stringify({ name: manifest.name, "dist-tags": { latest: manifest.version }, versions: { [manifest.version]: manifest } }));
 		return;
@@ -69,21 +71,18 @@ try {
 	await writeFile(join(install, "package.json"), JSON.stringify({ private: true, dependencies: { [cliName]: cli.manifest.version } }));
 	await run(npm, ["install", "--ignore-scripts", "--no-audit", "--no-fund"], install);
 	const host = release.artifacts.find((artifact) => artifact.platform === process.platform && artifact.arch === process.arch);
-	assert.deepEqual([...new Set(downloads.filter((name) => name.startsWith("@ashx-j/lunr-computer-")))], host ? [host.packageName] : []);
-	assert.equal(cli.manifest.optionalDependencies[host?.packageName ?? release.artifacts[0].packageName], cli.manifest.version);
+	// The CLI does not depend on the payloads; the runtime downloads the host's on first use.
+	assert.deepEqual(downloads.filter((name) => name.startsWith("@ashx-j/lunr-computer-")), []);
+	for (const artifact of release.artifacts) assert.equal(cli.manifest.optionalDependencies?.[artifact.packageName], undefined);
 	const relocated = join(root, "relocated");
 	await rename(install, relocated);
 	const packageRoot = join(relocated, "node_modules", cliName);
 	assert.deepEqual(await readdir(join(packageRoot, "native", "computer-use")), ["LICENSE.md"]);
 	const { resolveRuntimeArchive } = await import(pathToFileURL(join(packageRoot, "dist", "core", "computer-use", "runtime.js")).href);
-	if (host) {
-		const { archive } = await resolveRuntimeArchive(packageRoot);
-		assert.ok(archive.startsWith(relocated));
-		await verifyComputerUseArchive(dirname(archive), host);
-	}
+	if (host) await assert.rejects(resolveRuntimeArchive(packageRoot), /not downloaded yet/);
 	await assert.rejects(resolveRuntimeArchive(packageRoot, "linux", "x64"), /unsupported/);
 	await run(process.execPath, ["scripts/check-interactive-first-paint.mjs", join(packageRoot, cliEntry)], fileURLToPath(new URL("../", import.meta.url)));
-	console.log("Relocated public-name installation: ignore-scripts, host-only payload, archive hash and first requests passed.");
+	console.log("Relocated public-name installation: ignore-scripts, no payload packages and first requests passed.");
 
 	for (const [platform, arch] of [["win32", "x64"], ["win32", "arm64"], ["darwin", "arm64"], ["linux", "x64"]]) {
 		const directory = join(root, `selection-${platform}-${arch}`);
@@ -100,7 +99,7 @@ try {
 	await mkdir(omitted);
 	await writeFile(join(omitted, "package.json"), JSON.stringify({ version: cli.manifest.version, optionalDependencies: Object.fromEntries(release.artifacts.map((artifact) => [artifact.packageName, cli.manifest.version])) }));
 	await run(npm, ["install", "--ignore-scripts", "--omit=optional", "--no-audit", "--no-fund"], omitted);
-	await assert.rejects(resolveRuntimeArchive(omitted, "win32", "x64"), /payload is missing/);
+	await assert.rejects(resolveRuntimeArchive(omitted, "win32", "x64"), /not downloaded yet/);
 	console.log("OS/CPU selection for all supported targets and Linux, plus omitted optional dependencies passed.");
 
 	const installer = join(root, "installer");

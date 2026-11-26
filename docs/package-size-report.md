@@ -84,6 +84,15 @@ Not verified: npm 10 and Bun, and whether a dependency without a shrinkwrap of i
 | Global install, Linux x64 | 475 MB, 32,082 files | 448 MB, 32,061 files |
 | `@ashx-j/lunr` tarball | 4.89 MB packed, 21.7 MB unpacked | 7.25 MB packed, 45.6 MB unpacked |
 
+## Computer-use payloads removed from the shrinkwrap (2026-11-25)
+
+The CLI no longer lists the three `@ashx-j/lunr-computer-*` packages as optional dependencies or in its shrinkwrap. They are still published, and the runtime downloads the host's package on first use and checks the archive against the pinned SHA-256. Measured on `dev/tui` with npm 11.19.1, `npm i -g --prefix <dir> --ignore-scripts` of locally packed tarballs through a local registry that sets `_hasShrinkwrap`:
+
+| Install | Size | Files | Computer-use payloads |
+|---|---|---|---|
+| Before, Linux x64 and `--os=darwin --cpu=arm64` | 475 MB | 32,082 | all 3 |
+| After, Linux x64, `--os=darwin --cpu=arm64` and `--os=win32 --cpu=x64` | 354 MB | 32,073 | none |
+
 ## What the entry points load
 
 I ran each case with `strace -f -e trace=%file,execve` against the installed 0.2.38 package (no `src/` next to `dist/`), with a disposable `HOME` and `PI_CODING_AGENT_DIR` and `PI_OFFLINE=1`. Counts are package files opened, excluding `node_modules`.

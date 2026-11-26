@@ -24,7 +24,7 @@ lunr-dev update
 
 Stable lunR remains available as `lunr`. Both commands use `~/.lunr/agent`, so they share credentials, settings, and sessions.
 
-For computer use, run `/computer setup` in the local terminal. Windows x64/arm64 and Apple Silicon macOS receive only their matching optional runtime package. Keep optional dependencies enabled during installation. Screen and application content can enter model requests and saved sessions. GUI actions are outside file rollback.
+For computer use, run `/computer setup` in the local terminal. On Windows x64/arm64 and Apple Silicon macOS, the first use downloads the matching runtime package once and checks it against the pinned SHA-256. Screen and application content can enter model requests and saved sessions. GUI actions are outside file rollback.
 
 See [computer-use setup and limitations](https://github.com/ashx-j/lunR/blob/dev/tui/packages/coding-agent/docs/computer-use.md).
 

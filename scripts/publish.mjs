@@ -170,9 +170,9 @@ function copyPackageForPublish(directory) {
 	if (sourcePkg.name === "@earendil-works/pi-coding-agent") {
 		const shrinkwrapPath = join(dest, "npm-shrinkwrap.json");
 		const shrinkwrap = rewritePackageLockForNpm(JSON.parse(readFileSync(shrinkwrapPath, "utf8")), rewriteOptions);
-		addPayloadDependencies(rewritten, shrinkwrap);
+		// The payload packages stay out of the shrinkwrap: npm does not check os/cpu for a dependency's
+		// shrinkwrap, so every platform's payload would install. lunR downloads the host's on first use.
 		writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, "\t")}\n`);
-		writeFileSync(join(dest, "package.json"), `${JSON.stringify(rewritten, null, "\t")}\n`);
 		const installerPath = join(dest, "install-lock", "package-lock.json");
 		const installer = rewritePackageLockForNpm(JSON.parse(readFileSync(installerPath, "utf8")), rewriteOptions);
 		addPayloadDependencies({ version: rewritten.version, optionalDependencies: rewritten.optionalDependencies }, installer, `node_modules/${rewritten.name}`);

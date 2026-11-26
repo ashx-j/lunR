@@ -21,8 +21,19 @@ import { readOnlyModeBlockReason } from "../src/core/plan-mode.ts";
 vi.mock("../src/core/settings-manager.ts", () => ({
 	SettingsManager: { create: () => ({ getComputerUse: () => true, getComputerForeground: () => true }) },
 }));
-const setup = vi.hoisted(() => ({ install: vi.fn(), execute: vi.fn(), close: vi.fn(), adapter: vi.fn() }));
-vi.mock("../src/core/computer-use/runtime.ts", () => ({ installRuntime: setup.install }));
+const setup = vi.hoisted(() => ({
+	install: vi.fn(),
+	execute: vi.fn(),
+	close: vi.fn(),
+	adapter: vi.fn(),
+	ready: vi.fn(async () => true),
+	download: vi.fn(),
+}));
+vi.mock("../src/core/computer-use/runtime.ts", () => ({
+	installRuntime: setup.install,
+	runtimeArchiveReady: setup.ready,
+	startRuntimeDownload: setup.download,
+}));
 vi.mock("../src/core/computer-use/adapter.ts", () => ({
 	CuaAdapter: class {
 		constructor() {
@@ -44,6 +55,9 @@ afterEach(() => {
 	setup.execute.mockReset();
 	setup.close.mockReset();
 	setup.adapter.mockReset();
+	setup.ready.mockReset().mockResolvedValue(true);
+	setup.download.mockReset();
+	vi.useRealTimers();
 	Object.defineProperty(process, "platform", { value: originalPlatform });
 	Object.defineProperty(process, "arch", { value: originalArch });
 });
@@ -75,6 +89,40 @@ function fixture(platform = "win32") {
 }
 
 describe("computer extension lifecycle", () => {
+	it("tells the model a slow first-use download continues instead of timing out the tool call", async () => {
+		vi.useFakeTimers();
+		const f = fixture();
+		let finish = () => {};
+		const download = {
+			done: new Promise<string>((resolve) => {
+				finish = () => resolve("/home/.lunr/desktop/payload/archive.zip");
+			}),
+			progress: { received: 12e6, total: 29e6 },
+			listeners: new Set<(progress: { received: number; total: number }) => void>(),
+		};
+		setup.ready.mockResolvedValue(false);
+		setup.download.mockReturnValue(download);
+		const ui = { notify: vi.fn(), setStatus: vi.fn() };
+		const updates: string[] = [];
+		const ctx = { ...f.ctx, ui } as unknown as ExtensionContext;
+		const call = f.tools
+			.get("computer_observe")!
+			.execute("call", { desktop: true }, undefined, (update) => updates.push(JSON.stringify(update)), ctx);
+		await vi.advanceTimersByTimeAsync(1000);
+		download.progress = { received: 20e6, total: 29e6 };
+		for (const listener of download.listeners) listener(download.progress);
+		await vi.advanceTimersByTimeAsync(60_000);
+		const result = await call;
+		expect(JSON.stringify(result.content)).toContain("20.0 of 29.0 MB so far");
+		expect(JSON.stringify(result.content)).toContain("continues in the background");
+		expect(updates.join()).toContain("Downloading the computer-use runtime for this machine");
+		expect(ui.setStatus).toHaveBeenCalledWith("computer", expect.stringContaining("of 29.0 MB"));
+		expect(setup.execute).not.toHaveBeenCalled();
+		finish();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(ui.setStatus).toHaveBeenLastCalledWith("computer", undefined);
+		expect(ui.notify).toHaveBeenCalledWith("Computer-use runtime downloaded and verified.", "info");
+	});
 	it("keeps setup local and gives the user the exact signed app path for OS grants", async () => {
 		const f = fixture("darwin");
 		const notify = vi.fn();
