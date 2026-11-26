@@ -146,11 +146,12 @@ export type MaterializedChainStep = MaterializedSequentialStep | MaterializedPar
 // Type Guards
 // =============================================================================
 
-export function isParallelStep(step: ChainStep): step is ParallelStep {
+// Generic so a MaterializedChainStep narrows to its materialized member.
+export function isParallelStep<S extends ChainStep>(step: S): step is Extract<S, { parallel: unknown[] }> {
 	return "parallel" in step && Array.isArray((step as ParallelStep).parallel);
 }
 
-export function isDynamicParallelStep(step: ChainStep): step is DynamicParallelStep {
+export function isDynamicParallelStep<S extends ChainStep>(step: S): step is Extract<S, { expand: unknown }> {
 	return "expand" in step && "collect" in step && "parallel" in step && !Array.isArray((step as { parallel?: unknown }).parallel);
 }
 
