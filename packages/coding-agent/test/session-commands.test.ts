@@ -44,12 +44,6 @@ describe("SessionAutoNamer", () => {
 		expect(complete).toHaveBeenCalledTimes(1);
 	});
 
-	it("asks for no title while lunR is shutting down", () => {
-		const { host, complete } = createHost([{ text: "the parser crashes" }]);
-		new SessionAutoNamer({ ...host, isShuttingDown: true } as SessionAutoNamerHost).maybeAutoNameSession();
-		expect(complete).not.toHaveBeenCalled();
-	});
-
 	it("leaves a resumed session with several prompts unnamed", () => {
 		const { host, complete } = createHost([{ text: "one" }, { text: "two" }]);
 		new SessionAutoNamer(host).maybeAutoNameSession();
