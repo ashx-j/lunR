@@ -633,6 +633,63 @@ describe("pi-lsp-extension startup readiness", () => {
 		expect(replacement.manager.getLanguageId).not.toHaveBeenCalled();
 	});
 
+	it("gives a bash call one diagnostics note for its changed files, only from a server already running", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "lsp-bash-"));
+		dirs.push(cwd);
+		const mock = createMockServices(cwd);
+		const error = (line: number) => ({
+			severity: 1,
+			message: "Type 'string' is not assignable to type 'number'.",
+			source: "typescript",
+			range: { start: { line, character: 0 }, end: { line, character: 1 } },
+		});
+		const client = {
+			diagnosticsForSentVersion: vi.fn(async (uri: string) => ({
+				kind: "ready" as const,
+				diagnostics: uri.endsWith("b.ts") ? [] : [error(0), error(4)],
+			})),
+		};
+		const ensureServices = vi.spyOn(LspRuntimeHost.prototype, "ensureServices").mockResolvedValue(mock.services);
+		vi.spyOn(LspRuntimeHost.prototype, "getServicesIfReady").mockImplementation(() => mock.services);
+		const harness = createExtensionHarness();
+		harness.setCwd(cwd);
+		await harness.emit("session_start", {}, harness.ctx);
+		const [hook] = harness.hooks.get("tool_result") ?? [];
+		const bashResult = {
+			type: "tool_result",
+			toolName: "bash",
+			input: { command: "sed -i s/1/x/ a.ts b.ts c.ts" },
+			content: [{ type: "text", text: "(no output)" }],
+			details: {
+				fileChanges: {
+					files: [
+						{ path: "a.ts", kind: "modified" },
+						{ path: "b.ts", kind: "modified" },
+						{ path: "gone.ts", kind: "deleted" },
+					],
+					more: 0,
+				},
+			},
+			isError: false,
+		};
+
+		// No server running: nothing is synced, waited for or started.
+		expect(await hook(bashResult, harness.ctx)).toBeUndefined();
+		expect(mock.fileSync.handleFileWrite).not.toHaveBeenCalled();
+		expect(mock.manager.getClientForFile).not.toHaveBeenCalled();
+		expect(ensureServices).not.toHaveBeenCalled();
+
+		mock.manager.getRunningClient.mockImplementation((() => client) as never);
+		const result = (await hook(bashResult, harness.ctx)) as { content: Array<{ text: string }> };
+
+		expect(mock.fileSync.handleFileWrite.mock.calls).toEqual([["a.ts"], ["b.ts"]]);
+		expect(result.content.at(-1)?.text).toBe(
+			"\n\n⚠ LSP: 2 error(s) in 1 file(s) this command changed:\n" +
+				"a.ts:1:1 error: Type 'string' is not assignable to type 'number'. [typescript]\n" +
+				"a.ts:5:1 error: Type 'string' is not assignable to type 'number'. [typescript]",
+		);
+	});
+
 	it.each([true, false])("project LSP autoStart applies only with trust=%s", async (trusted) => {
 		const cwd = mkdtempSync(join(tmpdir(), "lsp-ext-autostart-"));
 		dirs.push(cwd);

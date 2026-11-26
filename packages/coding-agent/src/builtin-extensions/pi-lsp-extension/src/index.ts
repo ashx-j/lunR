@@ -28,6 +28,7 @@ import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-age
 import type { TSchema } from "typebox";
 import { awaitWithAbort } from "../../../utils/await-with-abort.ts";
 import {
+  isBashToolResult,
   isReadToolResult,
   isWriteToolResult,
   isEditToolResult,
@@ -53,6 +54,72 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DIAGNOSTIC_WAIT_CAP_MS } from "./shared/timing.js";
 import { LateDiagnostics } from "./late-diagnostics.js";
+import type { LspClient } from "./lsp-client.js";
+
+/** A bash call that changed more files gets diagnostics for the first ones only. */
+const MAX_BASH_DIAGNOSTIC_FILES = 20;
+/** Error lines in the one note a bash call gets, across all its files. */
+const MAX_BASH_ERROR_LINES = 20;
+
+type SentVersionDiagnostics = ReturnType<LspClient["diagnosticsForSentVersion"]>;
+
+/**
+ * Checks the files a bash call changed under one DIAGNOSTIC_WAIT_CAP_MS wait, counted from
+ * before the file sync, and returns one note for the call: errors by file, then the files that
+ * were not ready in time and how many were not checked. Exported for tests.
+ */
+export async function bashDiagnosticsNote(
+  files: string[],
+  io: {
+    sync: (file: string) => Promise<void>;
+    settle: (file: string) => { uri: string; settled: SentVersionDiagnostics } | undefined;
+    relPath: (file: string) => string;
+    late: (uri: string, relPath: string, settled: SentVersionDiagnostics) => void;
+  },
+): Promise<string | undefined> {
+  if (files.length === 0) return undefined;
+  const deadline = Date.now() + DIAGNOSTIC_WAIT_CAP_MS;
+  const checked = files.slice(0, MAX_BASH_DIAGNOSTIC_FILES);
+  for (const file of checked) await io.sync(file).catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"pending">((resolve) => (timer = setTimeout(resolve, Math.max(0, deadline - Date.now()), "pending")));
+  const results = await Promise.all(
+    checked.map(async (file) => {
+      const pending = io.settle(file);
+      return { file, pending, result: pending ? await Promise.race([pending.settled, timeout]) : undefined };
+    }),
+  );
+  clearTimeout(timer);
+  const errorLines: string[] = [];
+  let errorCount = 0;
+  let errorFiles = 0;
+  const notReady: string[] = [];
+  for (const { file, pending, result } of results) {
+    const relPath = io.relPath(file);
+    if (result === "pending" && pending) {
+      io.late(pending.uri, relPath, pending.settled);
+      notReady.push(relPath);
+    } else if (result && result !== "pending" && result.kind === "ready") {
+      const errors = result.diagnostics.filter((d) => d.severity === DiagnosticSeverity.Error);
+      if (errors.length === 0) continue;
+      errorCount += errors.length;
+      errorFiles++;
+      for (const d of errors) {
+        errorLines.push(`${relPath}:${d.range.start.line + 1}:${d.range.start.character + 1} error: ${d.message}${d.source ? ` [${d.source}]` : ""}`);
+      }
+    }
+  }
+  const parts: string[] = [];
+  if (errorCount > 0) {
+    const shown = errorLines.slice(0, MAX_BASH_ERROR_LINES);
+    if (errorLines.length > shown.length) shown.push(`... and ${errorLines.length - shown.length} more error(s)`);
+    parts.push(`⚠ LSP: ${errorCount} error(s) in ${errorFiles} file(s) this command changed:\n${shown.join("\n")}`);
+  }
+  if (notReady.length > 0) parts.push(`LSP: diagnostics were not ready in time for ${notReady.join(", ")}.`);
+  const unchecked = files.length - checked.length;
+  if (unchecked > 0) parts.push(`LSP: ${unchecked} more changed file(s) were not checked.`);
+  return parts.length > 0 ? `\n\n${parts.join("\n")}` : undefined;
+}
 
 /**
  * Project-level LSP config — loaded from `.pi-lsp.json` in the workspace root.
@@ -396,34 +463,60 @@ export default function lspExtension(pi: ExtensionAPI) {
 
     if (host.getGeneration() !== generation) return;
     const notes: string[] = [];
-    // Auto-append diagnostics for the changed file (write/edit only)
+    // Auto-append diagnostics for the changed files (write, edit, and files a bash call changed)
     const services = host.getServicesIfReady();
     const input = (isWriteToolResult(event) || isEditToolResult(event)) && !event.isError ? event.input.path : undefined;
     const path = typeof input === "string" && input ? input : undefined;
     const manager = services?.manager;
-    const languageId = path ? manager?.getLanguageId(path) : undefined;
     const inject = projectConfig?.autoInjectDiagnostics;
-    const client = manager && languageId && inject !== false && (!Array.isArray(inject) || inject.includes(languageId))
-      ? manager.getRunningClient(languageId)
-      : undefined;
-    const uri = manager && path ? manager.getFileUri(path) : undefined;
+    const runningClient = (file: string) => {
+      const languageId = manager?.getLanguageId(file);
+      const client = manager && languageId && inject !== false && (!Array.isArray(inject) || inject.includes(languageId))
+        ? manager.getRunningClient(languageId)
+        : undefined;
+      return client && languageId ? { client, languageId } : undefined;
+    };
+    // A bash call never starts a server: its files are checked only where one already runs.
+    if (services && manager && isBashToolResult(event)) {
+      const files = (event.details?.fileChanges?.files ?? [])
+        .filter((file) => file.kind !== "deleted" && runningClient(file.path))
+        .map((file) => file.path);
+      const note = await bashDiagnosticsNote(files, {
+        sync: (file) => services.fileSync.handleFileWrite(file),
+        settle: (file) => {
+          const uri = manager.getFileUri(file);
+          const found = runningClient(file);
+          return uri && found ? { uri, settled: found.client.diagnosticsForSentVersion(uri) } : undefined;
+        },
+        relPath: (file) => relative(manager.resolvePath("."), manager.resolvePath(file)),
+        late: (uri, relPath, settled) =>
+          lateDiagnostics.add(uri, relPath, settled.then((late) => (late.kind === "ready" ? late.diagnostics : undefined))),
+      });
+      if (host.getGeneration() !== generation) return;
+      if (note) notes.push(note);
+    }
     for (const late of lateDiagnostics.take()) {
       const summary = formatErrors(late.relPath, late.diagnostics);
       if (summary) notes.push(summary);
     }
 
-    if (manager && client && languageId && path && uri) {
+    const deadline = Date.now() + DIAGNOSTIC_WAIT_CAP_MS;
+    for (const target of path ? [path] : []) {
+      const found = runningClient(target);
+      const uri = manager?.getFileUri(target);
+      if (!manager || !found || !uri) continue;
+      const { client, languageId } = found;
       // Wait for the diagnostics of the version this edit sent, never an older version's.
       const settled = client.diagnosticsForSentVersion(uri);
       let timer: ReturnType<typeof setTimeout> | undefined;
       const result = await Promise.race([
         settled,
-        new Promise<"pending">((resolve) => (timer = setTimeout(resolve, DIAGNOSTIC_WAIT_CAP_MS, "pending"))),
+        new Promise<"pending">((resolve) => (timer = setTimeout(resolve, Math.max(0, deadline - Date.now()), "pending"))),
       ]);
       clearTimeout(timer);
       if (host.getGeneration() !== generation) return;
 
-      const relPath = relative(manager.resolvePath("."), manager.resolvePath(path));
+      const relPath = relative(manager.resolvePath("."), manager.resolvePath(target));
       if (result === "pending") {
         lateDiagnostics.add(uri, relPath, settled.then((late) => (late.kind === "ready" ? late.diagnostics : undefined)));
         notes.push(`\n\nLSP: diagnostics for ${relPath} were not ready in time.`);
