@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -733,6 +732,14 @@ function appendStepToAsyncChain(input: {
 			details: { mode: "management", results: [] },
 		};
 	}
+	// internalizePromptDrivenChildren would take the tasks branch and leave the chain step without its agent.
+	if ((input.params.tasks?.length ?? 0) > 0) {
+		return {
+			content: [{ type: "text", text: "action='append-step' takes chain only, not tasks." }],
+			isError: true,
+			details: { mode: "management", results: [] },
+		};
+	}
 	const acceptanceErrors = validateExecutionAcceptance(input.params);
 	if (acceptanceErrors.length > 0) {
 		return {
@@ -1075,6 +1082,11 @@ async function resumeAsyncRun(input: {
 	deps: ExecutorDeps;
 	absoluteDeadlineAt?: number;
 }): Promise<AgentToolResult<Details>> {
+	// Resolve passed turn and tool budgets like a fresh launch does: validate them and fill in defaults.
+	const resumeTurnBudget = resolveTurnBudgetConfig(input.params.turnBudget);
+	if (resumeTurnBudget.error) return { content: [{ type: "text", text: resumeTurnBudget.error }], isError: true, details: { mode: "management", results: [] } };
+	const resumeToolBudget = resolveToolBudget(input.params.toolBudget, "toolBudget");
+	if (resumeToolBudget.error) return { content: [{ type: "text", text: resumeToolBudget.error }], isError: true, details: { mode: "management", results: [] } };
 	const followUp = (input.params.message ?? input.params.task ?? "").trim();
 	const attachChain = (input.params.chain?.length ?? 0) > 0 ? input.params.chain as MaterializedChainStep[] : undefined;
 	if (!followUp && !attachChain) {
@@ -1352,8 +1364,8 @@ async function resumeAsyncRun(input: {
 		...(restoredAcceptance ? { restoredAcceptance } : {}),
 		...(input.params.timeoutMs !== undefined ? { timeoutMs: input.params.timeoutMs } : {}),
 		...(input.absoluteDeadlineAt !== undefined ? { absoluteDeadlineAt: input.absoluteDeadlineAt } : {}),
-		...(input.params.turnBudget !== undefined ? { turnBudget: input.params.turnBudget } : {}),
-		...(input.params.toolBudget !== undefined ? { toolBudget: input.params.toolBudget } : {}),
+		...(resumeTurnBudget.turnBudget ? { turnBudget: resumeTurnBudget.turnBudget } : {}),
+		...(resumeToolBudget.toolBudget ? { toolBudget: resumeToolBudget.toolBudget } : {}),
 	});
 	if (result.isError) return result;
 

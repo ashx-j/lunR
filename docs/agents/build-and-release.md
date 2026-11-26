@@ -10,7 +10,7 @@ Read before building, testing, packaging or publishing lunR.
 - Package builds are the production typecheck; the root check does not typecheck test fixtures. Coding-agent external dependencies are exact, and the standalone installer lock preserves workspace-local resolutions such as Zod 4. The relative-import check skips vendored `builtin-extensions/` and gitignored study trees, and also fails coding-agent `core/` imports from `modes/` outside its named allowlist.
 - Lint: `biome check packages/` (excludes `builtin-extensions/` and `*.generated.ts`).
 - Pre-commit runs `scripts/check-lockfile-commit.mjs` then `npm run check` (Biome `--write` plus `check:repo`: pinned deps, relative imports and core-to-modes imports, `@ts-nocheck` count, shrinkwrap, installer lock, publish-workflow policy, browser smoke), so it needs installed dependencies. CI runs `check:ci`, the same without `--write`, so unformatted code fails.
-- `@ts-nocheck` count: 31 files, all in coding-agent `builtin-extensions/` (pi-subagents 10, pi-mcp-adapter 9, pi-web-access 7, pi-prompt-template-model 3, pi-intercom 2). `npm run check:ts-nocheck` fails if the count rises; lower its constant when the count drops. 112 of the 122 pi-subagents files are type checked.
+- `@ts-nocheck` count: `docs/agents/architecture.md` (the Features line) keeps the number and its breakdown. `npm run check:ts-nocheck` fails if the count rises; lower its constant when the count drops.
 
 ## Test
 

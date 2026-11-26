@@ -519,11 +519,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		const targetNames = new Map(jobs.length === 1 ? jobs[0]!.steps?.map((step, index) => [step.index ?? index, childRowLabel(step)]) : []);
 		const result = await executor.execute(id, params, signal, onUpdate, ctx);
 		if (displayTitle && result.details) result.details.displayTitle = displayTitle;
-		if (isCommunication && result.details) {
+		if (isCommunication && result.details && typeof params.message === "string") {
 			const targets = result.details.steering?.targets.map((target) => targetNames.get(target.index) ?? `Subagent ${target.index + 1}`);
 			const peer = targets?.length ? targets.join(", ") : displayTitle || "Subagent";
-			// Non-null: isCommunication above required a string message.
-			result.details.communication = { direction: "to", peer, kind: "steer", message: params.message! };
+			result.details.communication = { direction: "to", peer, kind: "steer", message: params.message };
 		}
 		return result;
 	};
