@@ -25,6 +25,7 @@ import {
 
 import { addPayloadDependencies, release as computerRelease, stagePayloadPackages } from "./computer-use-packages.mjs";
 import { stagePackageNotice } from "./distribution-assets.mjs";
+import { QUALIFY_STATUS_CONTEXT, qualifyStatus } from "./qualify-release.mjs";
 
 const REWRITE_EXT = new Set([".js", ".mjs", ".cjs", ".d.ts", ".ts", ".map", ".json"]);
 
@@ -66,6 +67,9 @@ const packages = [
 const { values: options } = parseArgs({
 	options: {
 		"dry-run": { type: "boolean", default: false },
+		// --require-qualify refuses to publish unless HEAD has a passing `npm run qualify` commit status
+		// (scripts/qualify-release.mjs). Off by default; the stable workflow passes it when the owner turns the gate on.
+		"require-qualify": { type: "boolean", default: false },
 		"pack-dir": { type: "string" },
 		// --manifest <file> records each package's name, version and packed integrity for scripts/verify-npm-release.mjs.
 		manifest: { type: "string" },
@@ -74,6 +78,7 @@ const { values: options } = parseArgs({
 	},
 });
 const dryRun = options["dry-run"];
+const requireQualify = options["require-qualify"];
 const packDirectory = options["pack-dir"];
 const manifestPath = options.manifest;
 if (packDirectory && (!dryRun || !existsSync(packDirectory) || !statSync(packDirectory).isDirectory())) {
@@ -208,6 +213,15 @@ const publishVersion = options.version ?? versions[0];
 
 if (!dryRun && options.channel === "stable" && computerRelease.approval !== "production-approved") {
 	throw new Error("Computer-use runtime has development-only approval. Production publication is blocked.");
+}
+
+if (requireQualify) {
+	const sha = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+	const state = qualifyStatus(sha);
+	console.log(`Release qualification ${QUALIFY_STATUS_CONTEXT} on ${sha}: ${state}`);
+	if (state !== "success" && !dryRun) {
+		throw new Error(`${sha} has no passing release qualification. Run \`npm run qualify -- --profile <signed-in agent dir>\` on this commit.`);
+	}
 }
 
 console.log(`Publishing ${options.channel} lunR packages at ${publishVersion} as @ashx-j/*${dryRun ? " (dry run)" : ""}\n`);

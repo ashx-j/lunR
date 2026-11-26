@@ -5,6 +5,15 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      require_qualify:
+        description: Require a passing lunr/qualify-release status on this commit
+        type: boolean
+        default: false
+      skip_qualify:
+        description: Skip that check for this run even when LUNR_REQUIRE_QUALIFY is on
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -18,6 +27,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      statuses: read
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -30,6 +40,25 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
           cache: npm
+
+      # Off until the owner sets the repository variable LUNR_REQUIRE_QUALIFY to true, or ticks require_qualify
+      # on a manual run. Then publishing needs a pass from `npm run qualify` on this commit (a reminder that the
+      # check ran, not proof). skip_qualify turns it off for one manual run and says so in the log.
+      - name: Check release qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REQUIRE_QUALIFY: ${{ vars.LUNR_REQUIRE_QUALIFY == 'true' || inputs.require_qualify == true }}
+          SKIP_QUALIFY: ${{ inputs.skip_qualify == true }}
+        run: |
+          if [ "$REQUIRE_QUALIFY" != "true" ]; then
+            echo "Release qualification gate is off."
+          elif [ "$SKIP_QUALIFY" = "true" ]; then
+            echo "::warning::Release qualification gate is on but was skipped by the skip_qualify input."
+          else
+            node scripts/qualify-release.mjs --check-status
+            echo "QUALIFY_FLAG=--require-qualify" >> "$GITHUB_ENV"
+          fi
 
       - name: Check computer-use production approval
         run: node scripts/check-computer-use-release.mjs --production
@@ -75,9 +104,12 @@ jobs:
           node --test scripts/check-computer-use-release.test.mjs scripts/computer-use-packages.test.mjs
 
       - name: Publish @ashx-j/lunr*
-        run: node scripts/publish.mjs --manifest "$RUNNER_TEMP/npm-release.json"
+        run: node scripts/publish.mjs --manifest "$RUNNER_TEMP/npm-release.json" $QUALIFY_FLAG
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # With the gate on, publish.mjs reads the lunr/qualify-release commit status again with gh.
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
 
       # npm metadata and tarballs can lag the publish by minutes; the script retries until its deadline.
       - name: Verify registry tarballs and a fresh install

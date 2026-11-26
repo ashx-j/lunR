@@ -88,4 +88,4 @@ jobs:
           bun-version: 1.3.14
 
       - name: Script tests
-        run: node --test scripts/build-standalone.test.mjs scripts/distribution-lock-graph.test.mjs scripts/release-commands.test.mjs
+        run: node --test scripts/build-standalone.test.mjs scripts/distribution-lock-graph.test.mjs scripts/release-commands.test.mjs scripts/qualify-release.test.mjs
