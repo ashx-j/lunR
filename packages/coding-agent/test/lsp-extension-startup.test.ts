@@ -667,7 +667,7 @@ describe("pi-lsp-extension startup readiness", () => {
 						{ path: "b.ts", kind: "modified" },
 						{ path: "gone.ts", kind: "deleted" },
 					],
-					more: 0,
+					more: 12,
 				},
 			},
 			isError: false,
@@ -686,7 +686,8 @@ describe("pi-lsp-extension startup readiness", () => {
 		expect(result.content.at(-1)?.text).toBe(
 			"\n\n⚠ LSP: 2 error(s) in 1 file(s) this command changed:\n" +
 				"a.ts:1:1 error: Type 'string' is not assignable to type 'number'. [typescript]\n" +
-				"a.ts:5:1 error: Type 'string' is not assignable to type 'number'. [typescript]",
+				"a.ts:5:1 error: Type 'string' is not assignable to type 'number'. [typescript]\n" +
+				"LSP: 12 more changed file(s) were not listed, so they were not checked.",
 		);
 	});
 

@@ -76,6 +76,8 @@ export async function bashDiagnosticsNote(
     relPath: (file: string) => string;
     late: (uri: string, relPath: string, settled: SentVersionDiagnostics) => void;
   },
+  /** Changed files the bash result did not list (past its limit), reported on their own line. */
+  unlisted = 0,
 ): Promise<string | undefined> {
   if (files.length === 0) return undefined;
   const deadline = Date.now() + DIAGNOSTIC_WAIT_CAP_MS;
@@ -118,6 +120,8 @@ export async function bashDiagnosticsNote(
   if (notReady.length > 0) parts.push(`LSP: diagnostics were not ready in time for ${notReady.join(", ")}.`);
   const unchecked = files.length - checked.length;
   if (unchecked > 0) parts.push(`LSP: ${unchecked} more changed file(s) were not checked.`);
+  // Files past the result's list may be any type, so they are counted apart, not as unchecked sources.
+  if (unlisted > 0) parts.push(`LSP: ${unlisted} more changed file(s) were not listed, so they were not checked.`);
   return parts.length > 0 ? `\n\n${parts.join("\n")}` : undefined;
 }
 
@@ -491,7 +495,7 @@ export default function lspExtension(pi: ExtensionAPI) {
         relPath: (file) => relative(manager.resolvePath("."), manager.resolvePath(file)),
         late: (uri, relPath, settled) =>
           lateDiagnostics.add(uri, relPath, settled.then((late) => (late.kind === "ready" ? late.diagnostics : undefined))),
-      });
+      }, event.details?.fileChanges?.more ?? 0);
       if (host.getGeneration() !== generation) return;
       if (note) notes.push(note);
     }
