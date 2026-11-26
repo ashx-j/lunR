@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -103,7 +102,7 @@ export function enqueueChainAppendRequest(input: {
 function readAppendRequest(filePath: string): ChainAppendRequest | undefined {
 	const raw = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Partial<ChainAppendRequest>;
 	if (!raw.id || typeof raw.id !== "string") return undefined;
-	if (!Number.isFinite(raw.createdAt)) return undefined;
+	if (typeof raw.createdAt !== "number" || !Number.isFinite(raw.createdAt)) return undefined;
 	if (!Array.isArray(raw.steps) || raw.steps.length === 0) return undefined;
 	return { id: raw.id, createdAt: raw.createdAt, steps: raw.steps as RunnerStep[] };
 }
@@ -131,7 +130,8 @@ export function consumeChainAppendRequests(asyncDir: string): ChainAppendRequest
 
 function statusStepForTask(task: RunnerSubagentStep): StatusStep {
 	return {
-		agent: task.agent,
+		// Non-null: the async step builder sets agent to the child description on every runner step.
+		agent: task.agent!,
 		phase: task.phase,
 		label: task.label,
 		outputName: task.outputName,

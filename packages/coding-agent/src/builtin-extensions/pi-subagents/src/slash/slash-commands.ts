@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { getPromptTemplateChains } from "../../../../core/prompt-chain-bridge.ts";
 import { collectUsageRequests, totalRequestUsage, collectChildUsage } from "../../../../core/usage-accounting.ts";
 import { randomUUID } from "node:crypto";
@@ -212,6 +211,9 @@ class SubagentsStopSelector implements Component {
 		this.done = done;
 	}
 
+	// render() reads no cached layout, so there is nothing to clear.
+	invalidate(): void {}
+
 	handleInput(data: string): void {
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 			this.done({ confirmed: false });
@@ -273,11 +275,11 @@ class SubagentsStopSelector implements Component {
 	}
 }
 
-function emptyUsage(): Usage {
+function emptyUsage(): Required<Usage> {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, unknownRequests: 0, partialRequests: 0, unknownCosts: 0 };
 }
 
-function addUsage(target: Usage, source: Usage): void {
+function addUsage(target: Required<Usage>, source: Usage): void {
 	target.input += source.input;
 	target.output += source.output;
 	target.cacheRead += source.cacheRead;
@@ -753,7 +755,9 @@ const parseAgentArgs = (
 type ChainStepObject = {
 	description: string;
 	permissions: "full" | "read-only";
-	tier: "light" | "standard" | "heavy";
+	tier?: InlineConfig["tier"];
+	model?: string;
+	thinking?: InlineConfig["thinking"];
 	task?: string;
 	output?: string | false;
 	outputMode?: "inline" | "file-only";
@@ -766,12 +770,12 @@ type ChainStepObject = {
 	cwd?: string;
 	count?: number;
 	outputSchema?: JsonSchemaObject;
-	acceptance?: string;
+	acceptance?: "auto" | "attested" | "checked";
 };
 
 const INLINE_ACCEPTANCE_LEVELS = new Set(["auto", "attested", "checked"]);
 
-function validateInlineAcceptanceInput(value: string, agent: string): void {
+function validateInlineAcceptanceInput(value: string, agent: string): asserts value is "auto" | "attested" | "checked" {
 	const errors = validateAcceptanceInput(value, `acceptance for step '${agent}'`);
 	if (errors.length > 0) throw new SlashParseError(errors[0]!);
 	if (!INLINE_ACCEPTANCE_LEVELS.has(value)) {
