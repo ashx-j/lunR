@@ -102,7 +102,7 @@ import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/
 import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
-import { type ApprovalRequest, type ApprovalResponse, registerApprovalHandler } from "../../core/permissions.ts";
+import { registerApprovalHandler } from "../../core/permissions.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import {
 	captureTreeChanges,
@@ -148,6 +148,7 @@ import { parseGitUrl } from "../../utils/git.ts";
 import { processImage } from "../../utils/image-process.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool, getToolPath } from "../../utils/tools-manager.ts";
+import { type ApprovalDialogHost, showPlanApprovalDialog, showToolApprovalDialog } from "./approval-dialogs.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BootScreenComponent, type BootScreenRow } from "./components/boot-screen.ts";
@@ -176,7 +177,6 @@ import {
 	shouldShowOnboarding,
 	WELCOME_TEXT,
 } from "./components/onboarding.ts";
-import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -570,6 +570,8 @@ export class InteractiveMode {
 	// Owns permission mode changes and their history; see permission-controller.ts.
 	private readonly permissions = new PermissionModeController(this.createPermissionControllerHost());
 	private readonly modelCommandHost: ModelCommandHost = this.createModelCommandHost();
+	// Passed to the approval-dialogs.ts questions the approval handler in `init` asks.
+	private readonly approvalDialogHost: ApprovalDialogHost = this.createApprovalDialogHost();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -872,11 +874,11 @@ export class InteractiveMode {
 		registerApprovalHandler(async (req) => {
 			this.notifyAttention("input");
 			if (req.kind === "large-subagent-launch" || req.kind === "tool") {
-				return this.showToolApprovalDialog(req);
+				return showToolApprovalDialog(this.approvalDialogHost, req);
 			}
 			// Approval restores writing access before the model's next tool call.
 			if (req.kind === "plan") {
-				const resp = await this.showPlanApprovalDialog(req.detail);
+				const resp = await showPlanApprovalDialog(this.approvalDialogHost, req.detail);
 				const decision = typeof resp === "string" ? resp : resp.decision;
 				if (decision !== "reject") {
 					const target = this.permissions.restoreTargetAfterPlan();
@@ -5306,6 +5308,29 @@ export class InteractiveMode {
 		};
 	}
 
+	// Builds the ApprovalDialogHost. `lastStartedTool` and `outputPad` stay getters because each
+	// tool start and each settings reload changes them.
+	private createApprovalDialogHost(): ApprovalDialogHost {
+		const mode = this;
+		return {
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get lastStartedTool() {
+				return mode.lastStartedTool;
+			},
+			get outputPad() {
+				return mode.outputPad;
+			},
+			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
+			showSelector: (create) => this.showSelector(create),
+			showExtensionInput: (title, placeholder) => this.showExtensionInput(title, placeholder),
+		};
+	}
+
 	// Builds the PermissionControllerHost. `session` stays a getter because /new, /resume and /fork replace it.
 	private createPermissionControllerHost(): PermissionControllerHost {
 		const mode = this;
@@ -6080,106 +6105,6 @@ export class InteractiveMode {
 	/** Extension questions only count as waiting for the user while a run is in progress. */
 	private notifyAttentionIfRunning(): void {
 		if (this.session.isStreaming) this.notifyAttention("input");
-	}
-
-	// Approval dialog for one subagent call launching more than two children, and for ask mode's
-	// question before one call (`title`; no session answer when `allowSession` is false; "Always
-	// allow" when the request carries a `rule`). "Reject with feedback" collects a one-line
-	// reason that becomes the block reason the model sees, so it can adjust the plan.
-	private async showToolApprovalDialog(req: ApprovalRequest): Promise<ApprovalResponse> {
-		// Ask mode's question belongs to the call that started last. Its card leaves the time spent
-		// deciding out of "Took" and says "rejected" in words.
-		const card = req.kind === "tool" ? this.lastStartedTool : undefined;
-		card?.beginApproval();
-		const response = await this.askToolApproval(req);
-		card?.endApproval((typeof response === "string" ? response : response.decision) !== "reject");
-		return response;
-	}
-
-	private askToolApproval(req: ApprovalRequest): Promise<ApprovalResponse> {
-		const always = req.rule ? `Always allow in every project (saves ${req.rule} to global settings)` : undefined;
-		return new Promise((resolve) => {
-			this.showSelector((done) => {
-				const selector = new ExtensionSelectorComponent(
-					req.title ?? "Approve large subagent launch?",
-					[
-						"Approve once",
-						...(req.allowSession === false ? [] : ["Approve for this session"]),
-						...(always ? [always] : []),
-						"Reject",
-						"Reject with feedback",
-					],
-					(option) => {
-						done();
-						if (option === "Approve once") resolve("once");
-						else if (option === "Approve for this session") resolve("session");
-						else if (option === always) resolve("always");
-						else if (option === "Reject with feedback") {
-							void this.showExtensionInput(
-								req.kind === "tool" ? `Reject ${req.toolName}` : "Reject large subagent launch",
-								"feedback for the agent (optional)",
-							).then((feedback) => {
-								const trimmed = feedback?.trim();
-								resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
-							});
-						} else resolve("reject");
-					},
-					() => {
-						done();
-						resolve("reject");
-					},
-					{ message: req.detail.slice(0, 500) },
-				);
-				return { component: selector, focus: selector };
-			});
-		});
-	}
-
-	// Approval dialog for present_plan (read-only mode). The "with feedback"
-	// options collect a one-line note via showExtensionInput that becomes part of
-	// the result text the model sees. Esc/close counts as Decline.
-	private showPlanInChat(summary: string): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(
-			new PlanMessageComponent(summary, this.getMarkdownThemeWithSettings(), this.outputPad),
-		);
-		this.ui.requestRender();
-	}
-
-	private async showPlanApprovalDialog(summary: string): Promise<ApprovalResponse> {
-		this.showPlanInChat(summary);
-		return new Promise((resolve) => {
-			this.showSelector((done) => {
-				const selector = new ExtensionSelectorComponent(
-					"▶ Approve plan?",
-					["Approve", "Approve with feedback", "Decline", "Decline with feedback"],
-					(option) => {
-						done();
-						if (option === "Approve") resolve({ decision: "approve" });
-						else if (option === "Approve with feedback") {
-							void this.showExtensionInput("Approve plan", "feedback for the agent (optional)").then(
-								(feedback) => {
-									const trimmed = feedback?.trim();
-									resolve(trimmed ? { decision: "approve", feedback: trimmed } : { decision: "approve" });
-								},
-							);
-						} else if (option === "Decline with feedback") {
-							void this.showExtensionInput("Decline plan", "feedback for the agent (optional)").then(
-								(feedback) => {
-									const trimmed = feedback?.trim();
-									resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
-								},
-							);
-						} else resolve("reject");
-					},
-					() => {
-						done();
-						resolve("reject");
-					},
-				);
-				return { component: selector, focus: selector };
-			});
-		});
 	}
 
 	// lunr: /processes — view and manage background processes.
