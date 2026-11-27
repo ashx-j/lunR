@@ -45,8 +45,9 @@ export async function runTreeNavigation(
 		return { cancelled: false };
 	}
 
-	// Model required for summarization
-	if (options.summarize && !host.model) {
+	// Model required for summarization; the summary uses the model navigation started with.
+	const summaryModel = host.model;
+	if (options.summarize && !summaryModel) {
 		throw new Error("No model available for summarization");
 	}
 
@@ -117,9 +118,10 @@ export async function runTreeNavigation(
 		// Run default summarizer if needed
 		let summaryText: string | undefined;
 		let summaryDetails: unknown;
-		if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
+		if (options.summarize && summaryModel && entriesToSummarize.length > 0 && !extensionSummary) {
 			const generated = await summarizeBranch(
 				host,
+				summaryModel,
 				entriesToSummarize,
 				host.branchSummaryAbortController.signal,
 				customInstructions,
@@ -158,15 +160,15 @@ export async function runTreeNavigation(
 	}
 }
 
-/** Generates the default branch summary with the session model. `aborted` when the user cancels it. */
+/** Generates the default branch summary with `model`. `aborted` when the user cancels it. */
 async function summarizeBranch(
 	host: TreeNavigationHost,
+	model: Model<Api>,
 	entriesToSummarize: Parameters<typeof generateBranchSummary>[0],
 	signal: AbortSignal,
 	customInstructions: string | undefined,
 	replaceInstructions: boolean | undefined,
 ): Promise<{ aborted: true } | { aborted: false; summary: string | undefined; details: unknown }> {
-	const model = host.model!;
 	const { apiKey, headers, env } = await host.getSummarizationRequestAuth(model);
 	const branchSummarySettings = host.settingsManager.getBranchSummarySettings();
 	const result = await generateBranchSummary(entriesToSummarize, {
