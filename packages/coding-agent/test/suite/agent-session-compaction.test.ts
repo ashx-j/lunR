@@ -332,10 +332,6 @@ describe("AgentSession compaction characterization", () => {
 		let requests = 0;
 		let failed = false;
 		let turn = 0;
-		// A real reply takes longer than a millisecond, so a compaction after it is strictly newer. An
-		// instant fake reply can share the compaction's millisecond, and then the context estimate
-		// trusts the kept reply's pre-compaction usage. Each fake reply takes 1 ms of a fake clock.
-		vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
 		harness.session.agent.streamFn = (_model, context) => {
 			const index = requests++;
 			const stream = createAssistantMessageEventStream();
@@ -346,7 +342,6 @@ describe("AgentSession compaction characterization", () => {
 						stopReason: "error",
 						errorMessage: "529 overloaded_error: Overloaded",
 					});
-					vi.setSystemTime(Date.now() + 1);
 					stream.push({ type: "error", reason: "error", error });
 					return;
 				}
@@ -359,7 +354,6 @@ describe("AgentSession compaction characterization", () => {
 					? [{ type: "text", text: "done" }]
 					: [fauxToolCall("dump", { chars: resultChars[turn] })];
 				turn++;
-				vi.setSystemTime(Date.now() + 1);
 				stream.push({ type: "done", reason: message.stopReason, message });
 			});
 			return stream;
