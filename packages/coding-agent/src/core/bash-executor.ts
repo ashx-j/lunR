@@ -75,6 +75,13 @@ export async function executeBashWithOperations(
 		}
 	};
 
+	// The result names the file, so it must hold the whole output before the result returns.
+	const closeTempFile = (): Promise<void> =>
+		new Promise((resolve) => {
+			if (!tempFileStream) return resolve();
+			tempFileStream.end(() => resolve());
+		});
+
 	const decoder = new TextDecoder();
 
 	const onData = (data: Buffer) => {
@@ -117,9 +124,7 @@ export async function executeBashWithOperations(
 		if (truncationResult.truncated) {
 			ensureTempFile();
 		}
-		if (tempFileStream) {
-			tempFileStream.end();
-		}
+		await closeTempFile();
 		const cancelled = options?.signal?.aborted ?? false;
 
 		return {
@@ -137,9 +142,7 @@ export async function executeBashWithOperations(
 			if (truncationResult.truncated) {
 				ensureTempFile();
 			}
-			if (tempFileStream) {
-				tempFileStream.end();
-			}
+			await closeTempFile();
 			return {
 				output: truncationResult.truncated ? truncationResult.content : fullOutput,
 				exitCode: undefined,
@@ -149,9 +152,7 @@ export async function executeBashWithOperations(
 			};
 		}
 
-		if (tempFileStream) {
-			tempFileStream.end();
-		}
+		await closeTempFile();
 
 		throw err;
 	}
