@@ -1425,11 +1425,6 @@ export class InteractiveMode {
 	private transferInProgress = false;
 	private detachedDraft = "";
 
-	/** True while the session is detached or a transfer to another process is running. */
-	private isSessionDetached(): boolean {
-		return this.runtimeHost.isDetached || this.transferInProgress;
-	}
-
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		await this.waitForDeferredBuiltins();
 		this.unregisterSessionTransfer?.();
@@ -2198,7 +2193,7 @@ export class InteractiveMode {
 				}
 				return;
 			}
-			if (this.isSessionDetached() && !["/quit", "/exit"].includes(text)) {
+			if ((this.runtimeHost.isDetached || this.transferInProgress) && !["/quit", "/exit"].includes(text)) {
 				// Submit already cleared the editor; put the draft and its image chips back.
 				this.editor.setText(text);
 				const attachments = this.takeSubmittedImages(text);
@@ -3132,7 +3127,7 @@ export class InteractiveMode {
 	}
 
 	private async handleFollowUp(): Promise<void> {
-		if (this.isSessionDetached()) {
+		if (this.runtimeHost.isDetached || this.transferInProgress) {
 			this.showError("Use /reclaim before sending more work. Draft retained.");
 			return;
 		}
@@ -3208,7 +3203,7 @@ export class InteractiveMode {
 	}
 
 	private cycleThinkingLevel(): void {
-		if (this.isSessionDetached()) return;
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		const newLevel = this.session.cycleThinkingLevel();
 		if (newLevel === undefined) {
@@ -3220,7 +3215,7 @@ export class InteractiveMode {
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
-		if (this.isSessionDetached()) return;
+		if (this.runtimeHost.isDetached || this.transferInProgress) return;
 		recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir);
 		try {
 			const result = await this.session.cycleModel(direction);
@@ -3826,7 +3821,7 @@ export class InteractiveMode {
 			get ui() {
 				return mode.ui;
 			},
-			isSessionDetached: () => this.isSessionDetached(),
+			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
 			showStatus: (message) => this.showStatus(message),
 			showError: (message) => this.showError(message),
 			showSelector: (create) => this.dialogs.showSelector(create),
@@ -3896,7 +3891,7 @@ export class InteractiveMode {
 			get redoStack() {
 				return mode.redoStack;
 			},
-			isSessionDetached: () => this.isSessionDetached(),
+			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
 			showStatus: (message) => this.showStatus(message),
 			showWarning: (message) => this.showWarning(message),
 			showError: (message) => this.showError(message),
@@ -4180,7 +4175,7 @@ export class InteractiveMode {
 			get ui() {
 				return mode.ui;
 			},
-			isSessionDetached: () => this.isSessionDetached(),
+			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
 			recordActivity: () => recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir),
 			showStatus: (message) => this.showStatus(message),
 			showWarning: (message) => this.showWarning(message),
@@ -4499,7 +4494,7 @@ export class InteractiveMode {
 	}
 
 	private async handleClearCommand(): Promise<void> {
-		if (this.isSessionDetached()) {
+		if (this.runtimeHost.isDetached || this.transferInProgress) {
 			this.showError("Use /reclaim first, or /quit to leave this terminal.");
 			return;
 		}
