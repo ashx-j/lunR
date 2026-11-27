@@ -1,6 +1,6 @@
-import { lstatSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "../config.ts";
 import { canonicalizeTargetPath } from "../utils/paths.ts";
@@ -136,127 +136,247 @@ const LOOSE_CREDENTIAL_NAME = new RegExp(
 );
 // The same names, searched from a position: a heredoc body without one is skipped whole.
 const LOOSE_CREDENTIAL_NAME_FROM = new RegExp(LOOSE_CREDENTIAL_NAME.source, `${LOOSE_CREDENTIAL_NAME.flags}g`);
-const GLOB_CHARS = /[*?[]/;
+// The kernel refuses longer paths, so a longer `cd` base or word names nothing bash can open.
+const PATH_MAX = 4096;
+// Disk lookups (one `realpath` of a word's directory each) per command, so a command with thousands
+// of distinct paths stays fast. Words after the limit are checked lexically only.
+const MAX_DISK_LOOKUPS = 64;
+// Missing directories a word's lookup walks up before it gives up (`new/dir/auth.json`).
+const MAX_MISSING_LEVELS = 8;
+const MAX_DELIMITER = 256;
 
 let reportedBashFailure = false;
 
 /**
  * The refusal when a bash command names a credential location. Matched, and nothing else:
- * - literal words and `--opt=` values, after removing quotes, `\` escapes and line continuations;
- * - `$HOME`, `"$HOME"` and `${HOME}` (and `$USERPROFILE` on Windows), from lunR's own environment;
- * - paths relative to a `cd`, `cd --`, `cd -L`/`-P` or `pushd` with a single directory (redirections
- *   such as `>/dev/null` ignored), undone by `popd`;
- * - unquoted globs (`*`, `?`, any `[...]` as 1 character) whose literal part reaches the profile's
- *   parent directory and whose remaining segments match a guarded path segment by segment.
- * Not followed: brace expansion, `$'...'`, `${HOME:-x}` and other parameter forms, other variables,
- * assignments, command substitution, `bash -c`, `eval`, `cd -`, `CDPATH`, `~+`, shell options such
- * as `extglob`, and symlinks a `cd` passes through. This is a guard for 3 file names, not a sandbox.
+ * - words and `--opt=` values that contain one of the names after removing quotes, `\` escapes and
+ *   line continuations, including heredoc bodies that contain a name;
+ * - with `$HOME`, `"$HOME"` and `${HOME}` (and `$USERPROFILE` on Windows) taken from lunR's
+ *   environment, and Git Bash, Cygwin and WSL drive paths mapped on Windows;
+ * - relative to the directory of a leading `cd`, `cd --`, `cd -L`/`-P` or `pushd` with a single
+ *   argument (redirections such as `>/dev/null` ignored), undone by `popd`. After a `cd` into the
+ *   `mcp-oauth` tree every plain word is checked.
+ * See docs/agents/permissions-and-memory.md for what goes through. This is a guard for 3 file
+ * names, not a sandbox.
  *
- * Commands with no name (even split by quotes) and no glob near the profile return after 2 text
- * scans. Any internal error allows the command: a wrong refusal blocks normal work.
+ * A command with no name, even split by quotes, returns after 1 regex scan. The rest is linear in
+ * the command's length. A word that cannot be examined (a bad `file://` URL) is skipped and the
+ * other words are still checked.
  */
 export function credentialBashReason(command: string, cwd: string): string | undefined {
 	try {
 		return bashReason(command, cwd);
 	} catch (error) {
+		// Only a bug gets here, since every word is examined in its own try. Log the kind, not the text.
 		if (!reportedBashFailure) {
 			reportedBashFailure = true;
-			console.error(`lunR: the saved-login check failed on a bash command and allowed it: ${String(error)}`);
+			console.error(
+				`lunR: the saved-login check for bash failed (${error instanceof Error ? error.name : typeof error}).`,
+			);
 		}
 		return undefined;
 	}
 }
 
+/** Per-command caches (words, `cd` results, real directory paths) and the disk lookups used. */
+interface BashCheck {
+	cwd: string;
+	paths: CredentialPaths;
+	canonical?: CredentialPaths;
+	words: Map<string, boolean>;
+	wordsBase?: string;
+	dirs: Map<string, string>;
+	realDirs: Map<string, string | null>;
+	lookups: number;
+}
+
 function bashReason(command: string, cwd: string): string | undefined {
-	const names = LOOSE_CREDENTIAL_NAME.test(command);
-	const globs = globsMayReachProfile(command, cwd) && GLOB_CHARS.test(command);
-	if (!names && !globs) return undefined;
-	const resolved = new Map<string, boolean>();
-	const namesCredential = (candidate: string, base: string) => {
-		const key = `${base}\0${candidate}`;
-		let hit = resolved.get(key);
-		if (hit === undefined) {
-			hit = credentialPathReason(candidate, base) !== undefined;
-			resolved.set(key, hit);
-		}
-		return hit;
+	if (!LOOSE_CREDENTIAL_NAME.test(command)) return undefined;
+	const check: BashCheck = {
+		cwd,
+		paths: activeCredentialPaths(),
+		words: new Map(),
+		dirs: new Map(),
+		realDirs: new Map(),
+		lookups: 0,
 	};
-	let base = cwd;
+	// Normalized once, so plain relative words can be joined to it.
+	let base = resolve(cwd);
+	let inTree = false;
 	const pushed: string[] = [];
-	for (const segment of bashSegments(command, names)) {
+	for (const segment of bashSegments(command)) {
 		const first = segment[0]?.text;
 		if (first === "cd" || first === "pushd") {
 			const target = directoryArgument(segment);
 			if (target !== undefined) {
 				if (first === "pushd") pushed.push(base);
-				base = resolveToCwd(fromMsysPath(target), base);
+				const next = changeDirectory(target, base, check);
+				if (next !== base) inTree = baseInTree(next, target, check);
+				base = next;
 			}
 			continue;
 		}
 		if (first === "popd") {
 			base = pushed.pop() ?? base;
+			inTree = under(fold(base), check.paths.mcp);
 			continue;
 		}
-		// After `cd .../mcp-oauth/x` a plain word such as `tokens.json` can name a guarded file.
-		const baseNamed = base !== cwd && CREDENTIAL_NAME.test(base);
 		for (const word of segment) {
-			if (baseNamed || CREDENTIAL_NAME.test(word.text)) {
-				const text = fromMsysPath(word.text);
-				const eq = text.lastIndexOf("=");
-				for (const candidate of eq === -1 ? [text] : [text, fromMsysPath(text.slice(eq + 1))]) {
-					const named = CREDENTIAL_NAME.test(candidate) || (baseNamed && !word.body && !/\s/.test(candidate));
-					if (candidate && named && namesCredential(candidate, base)) return CREDENTIAL_BLOCK_REASON;
-				}
-			}
-			if (globs && word.globs && globNamesCredential(word.text, word.globs, base)) return CREDENTIAL_BLOCK_REASON;
+			const named = CREDENTIAL_NAME.test(word.text);
+			// After a `cd` into the mcp-oauth tree a plain word such as `tokens.json` can name a token file.
+			if (!named && !inTree) continue;
+			const text = fromMsysPath(word.text);
+			const plain = inTree && !word.body && !/\s/.test(text);
+			if ((named || plain) && wordNamesCredential(text, base, check)) return CREDENTIAL_BLOCK_REASON;
+			const eq = text.lastIndexOf("=");
+			if (eq === -1 || eq === text.length - 1) continue;
+			const value = fromMsysPath(text.slice(eq + 1));
+			if ((CREDENTIAL_NAME.test(value) || plain) && wordNamesCredential(value, base, check))
+				return CREDENTIAL_BLOCK_REASON;
 		}
 	}
 	return undefined;
 }
 
 /**
- * Whether an unquoted glob could reach a guarded path: the text names the profile's parent
- * directory (`.lunr` for `~/.lunr/agent`), or the cwd is inside it. Like `mayNameCredential`, this
- * uses the profile dir from the last lookup, because `getAgentDir()` costs about 0.6 µs.
+ * The directory after `cd target`, read as bash does: a plain path (`file://x` is relative), `~`
+ * from HOME. Bash's `cd` fails and stays put for a directory that does not exist or is longer than
+ * PATH_MAX, so the base moves only to an existing directory (checked within MAX_DISK_LOOKUPS;
+ * after that a `cd` is assumed to succeed).
  */
-function globsMayReachProfile(command: string, cwd: string): boolean {
-	const context = profileContext();
-	if (CASE_INSENSITIVE ? context.marker.test(command) : command.includes(context.name)) return true;
-	if (context.cwd !== cwd) {
-		context.cwd = cwd;
-		context.cwdInside = isWithin(fold(resolve(cwd)), context.parent);
-	}
-	return context.cwdInside;
+function changeDirectory(target: string, base: string, check: BashCheck): string {
+	const key = `${base}\0${target}`;
+	const known = check.dirs.get(key);
+	if (known !== undefined) return known;
+	const next = followDirectory(target, base, check);
+	check.dirs.set(key, next);
+	return next;
 }
 
-let profileContextCache:
-	| { dir: string; parent: string; name: string; marker: RegExp; cwd?: string; cwdInside: boolean }
-	| undefined;
-
-function profileContext(): NonNullable<typeof profileContextCache> {
-	const dir = lastProfileDir ?? activeCredentialPaths().dir;
-	if (profileContextCache?.dir !== dir) {
-		const parent = dirname(dir);
-		const name = basename(parent) || basename(dir);
-		profileContextCache = {
-			dir,
-			parent,
-			name,
-			marker: new RegExp(escapeRegExp(name), CASE_INSENSITIVE ? "i" : ""),
-			cwdInside: false,
-		};
+function followDirectory(target: string, base: string, check: BashCheck): string {
+	const mapped = fromMsysPath(target);
+	const home = mapped === "~" || mapped.startsWith("~/") ? (homeVariable("HOME") ?? homedir()) : undefined;
+	const path = home !== undefined ? home + mapped.slice(1) : mapped;
+	// A relative target without `..` only lengthens the base, so it is too long before resolving it.
+	if (!isAbsolute(path) && !path.includes("..") && base.length + 1 + path.length > PATH_MAX) return base;
+	try {
+		const next = resolve(base, path);
+		if (next.length > PATH_MAX) return base;
+		return directoryExists(next, check) === false ? base : next;
+	} catch {
+		return base;
 	}
-	return profileContextCache;
+}
+
+/** Whether `dir` exists, from a cached `realpath`; undefined once the command used its lookups. */
+function directoryExists(dir: string, check: BashCheck): boolean | undefined {
+	let real = check.realDirs.get(dir);
+	if (real === undefined) {
+		if (check.lookups >= MAX_DISK_LOOKUPS) return undefined;
+		check.lookups++;
+		try {
+			real = realpathSync(dir);
+		} catch {
+			real = null;
+		}
+		check.realDirs.set(dir, real);
+	}
+	return real !== null;
+}
+
+/**
+ * Whether the base after `cd target` is in the `mcp-oauth` tree: lexically, or through a symlink
+ * when the target names `mcp-oauth` as a whole path segment (`cd profile/mcp-oauth`).
+ */
+function baseInTree(base: string, target: string, check: BashCheck): boolean {
+	if (under(fold(base), check.paths.mcp)) return true;
+	if (!target.split(/[\\/]/).some((segment) => fold(segment) === fold("mcp-oauth"))) return false;
+	const real = realPath(base, check);
+	check.canonical ??= canonicalCredentialPaths();
+	return real !== undefined && under(fold(real), check.canonical.mcp);
+}
+
+/** Whether `word` (relative to `base`) is a credential location, lexically or through symlinks. */
+function wordNamesCredential(word: string, base: string, check: BashCheck): boolean {
+	// Words are cached for the current base; a `cd` to another base starts over.
+	if (check.wordsBase !== base) {
+		check.words.clear();
+		check.wordsBase = base;
+	}
+	const seen = check.words.get(word);
+	if (seen !== undefined) return seen;
+	let target: string;
+	try {
+		// `resolveToCwd` also expands `~`, strips `@` and reads file URLs, at about 2.5 µs a word, and
+		// `resolve` costs about 1.2 µs. A plain relative word only needs joining to the normalized base.
+		if (isPlainRelative(word))
+			target = (base.endsWith(sep) ? base : base + sep) + (sep === "/" ? word : word.replaceAll("/", sep));
+		else target = /^[~@]|^file:/.test(word) ? resolveToCwd(word, base) : resolve(base, word);
+	} catch {
+		// A bad file URL names nothing readable; the other words are still checked.
+		check.words.set(word, false);
+		return false;
+	}
+	let hit = matchesCredential(fold(target), check.paths);
+	if (!hit && target.length <= PATH_MAX) {
+		const real = realPath(target, check);
+		check.canonical ??= canonicalCredentialPaths();
+		hit = real !== undefined && matchesCredential(fold(real), check.canonical);
+	}
+	check.words.set(word, hit);
+	return hit;
+}
+
+/**
+ * A relative word with no `.`, `..` or empty segment, no backslash and no drive: joining it to the
+ * normalized base gives the same path as `resolve`. One pass over the word.
+ */
+function isPlainRelative(word: string): boolean {
+	const first = word[0];
+	if (!first || first === "~" || first === "@" || first === "/" || word.startsWith("file:")) return false;
+	if (word.includes("\\") || word.includes("//") || word.endsWith("/") || /^[a-z]:/i.test(word)) return false;
+	for (let start = 0; ; ) {
+		const end = word.indexOf("/", start);
+		const length = (end === -1 ? word.length : end) - start;
+		if (word[start] === "." && (length === 1 || (length === 2 && word[start + 1] === "."))) return false;
+		if (end === -1) return true;
+		start = end + 1;
+	}
+}
+
+/**
+ * The real path of `target` through symlinks in its directories, from a cached `realpath` of the
+ * nearest existing directory at most MAX_MISSING_LEVELS up. Undefined when that fails or the
+ * command used its MAX_DISK_LOOKUPS.
+ */
+function realPath(target: string, check: BashCheck): string | undefined {
+	const missing: string[] = [];
+	let dir = target;
+	for (let level = 0; level <= MAX_MISSING_LEVELS; level++) {
+		// `target` is absolute and normalized, so its directories are prefixes up to a separator.
+		const cut = dir.lastIndexOf(sep);
+		if (cut <= 0 || cut === dir.length - 1) return undefined;
+		missing.push(dir.slice(cut + 1));
+		dir = dir.slice(0, dir.indexOf(sep) === cut ? cut + 1 : cut);
+		if (directoryExists(dir, check) === undefined) return undefined;
+		const real = check.realDirs.get(dir);
+		if (real) return join(real, ...missing.reverse());
+	}
+	return undefined;
 }
 
 /** The single directory of a `cd` or `pushd` segment, without redirections and `-L`/`-P`/`-e`/`-@`. */
 function directoryArgument(segment: BashWord[]): string | undefined {
-	const args = segment.slice(1).filter((word) => !word.redirect);
-	let index = 0;
-	while (index < args.length && /^-[LPe@]+$/.test(args[index].text)) index++;
-	if (args[index]?.text === "--") index++;
-	const rest = args.slice(index);
-	return rest.length === 1 && rest[0].text !== "-" ? rest[0].text : undefined;
+	let index = 1;
+	while (index < segment.length && (segment[index].redirect || /^-[LPe@]+$/.test(segment[index].text))) index++;
+	if (segment[index]?.text === "--") index++;
+	let target: string | undefined;
+	for (; index < segment.length; index++) {
+		if (segment[index].redirect) continue;
+		if (target !== undefined) return undefined;
+		target = segment[index].text;
+	}
+	return target === "-" ? undefined : target;
 }
 
 /**
@@ -268,97 +388,13 @@ function fromMsysPath(word: string): string {
 	return process.platform === "win32" ? word.replace(/^(?:\/cygdrive|\/mnt)?\/([a-z])(?=\/|$)/i, "$1:/") : word;
 }
 
-// Pattern codes for an unquoted `*` and for `?` or a bracket expression; other entries are char codes.
-const STAR = -1;
-const ONE = -2;
-
-/** An unquoted glob character or bracket expression in a word: `[start, end)` of the word's text. */
-interface GlobToken {
-	start: number;
-	end: number;
-	code: typeof STAR | typeof ONE;
-}
-
-/**
- * Whether glob word `text` (relative to `base`) can match a credential file, or the `mcp-oauth`
- * tree or something in it. The literal part before the segment with the first glob is resolved
- * lexically; the rest is matched segment by segment with `segmentMatches`.
- */
-function globNamesCredential(text: string, tokens: GlobToken[], base: string): boolean {
-	const headEnd = text.lastIndexOf("/", tokens[0].start) + 1;
-	const dir = headEnd === 0 ? resolvedBase(base) : fold(resolveToCwd(fromMsysPath(text.slice(0, headEnd)), base));
-	const paths = activeCredentialPaths();
-	const inTree = under(dir, paths.mcp);
-	if (!inTree && !under(paths.dir, dir)) return false;
-	const segments: number[][] = [[]];
-	let token = 0;
-	for (let i = headEnd; i < text.length; i++) {
-		if (token < tokens.length && tokens[token].start === i) {
-			segments[segments.length - 1].push(tokens[token].code);
-			i = tokens[token++].end - 1;
-		} else if (text[i] === "/") segments.push([]);
-		else segments[segments.length - 1].push(fold(text[i]).charCodeAt(0));
-	}
-	const pattern = segments.filter((part) => part.length > 0 && !(part.length === 1 && part[0] === 46));
-	// `..` after a glob: refuse rather than follow it, since the glob is next to the profile.
-	if (pattern.some((part) => part.length === 2 && part[0] === 46 && part[1] === 46)) return true;
-	if (inTree) return pattern.length > 0;
-	const covers = (location: string, tree: boolean) => {
-		if (!under(location, dir)) return false;
-		const parts = location.slice(dir.endsWith(sep) ? dir.length : dir.length + 1).split(sep);
-		if (tree ? pattern.length < parts.length : pattern.length !== parts.length) return false;
-		return parts.every((part, index) => segmentMatches(pattern[index], part));
-	};
-	return covers(paths.auth, false) || covers(paths.subscriptions, false) || covers(paths.mcp, true);
-}
-
-// Node's path functions cost 1 to 4 µs a call; these paths are already absolute and normalized.
-/** Whether absolute, normalized `target` is `root` or inside it. */
+/** Whether absolute, normalized `target` is `root` or inside it. Node's path functions cost 1 to 4 µs. */
 function under(target: string, root: string): boolean {
 	return target === root || target.startsWith(root.endsWith(sep) ? root : root + sep);
 }
 
-let lastBase: { base: string; resolved: string } | undefined;
-
-/** `base` resolved and folded, cached for the cwd that every glob word without a directory uses. */
-function resolvedBase(base: string): string {
-	if (lastBase?.base !== base) lastBase = { base, resolved: fold(resolve(base)) };
-	return lastBase.resolved;
-}
-
-/**
- * Linear wildcard match of one pattern segment against one path segment, with a single fallback
- * point for the last `*` (no backtracking beyond it). A leading glob does not match a leading `.`.
- */
-function segmentMatches(pattern: number[], name: string): boolean {
-	if (name.startsWith(".") && pattern[0] < 0) return false;
-	let fixed = 0;
-	for (const code of pattern) if (code !== STAR) fixed++;
-	if (fixed > name.length) return false;
-	let p = 0;
-	let n = 0;
-	let star = -1;
-	let mark = 0;
-	while (n < name.length) {
-		if (p < pattern.length && (pattern[p] === ONE || pattern[p] === name.charCodeAt(n))) {
-			p++;
-			n++;
-		} else if (p < pattern.length && pattern[p] === STAR) {
-			star = p++;
-			mark = n;
-		} else if (star !== -1) {
-			p = star + 1;
-			n = ++mark;
-		} else return false;
-	}
-	while (p < pattern.length && pattern[p] === STAR) p++;
-	return p === pattern.length;
-}
-
 interface BashWord {
 	text: string;
-	/** Unquoted glob characters, in order; only outside heredoc bodies. */
-	globs?: GlobToken[];
 	/** The target of a redirection (`>/dev/null`, `<<< x`). */
 	redirect?: boolean;
 	/** A line of a heredoc body. */
@@ -369,55 +405,54 @@ interface BashWord {
 // path such as "C:\Users\me\auth.json" keeps its separators.
 const DOUBLE_QUOTE_ESCAPES = new Set(["$", "`", '"', "\\", "\n"]);
 const HOME_NAMES = process.platform === "win32" ? ["HOME", "USERPROFILE"] : ["HOME"];
-const BREAKS = new Set([" ", "\t", "\n", ";", "|", "&", "<", ">", "(", ")", "`", "'", '"', "\\"]);
 // Characters the tokenizer acts on outside quotes; any other character is copied as it is.
-const SPECIAL = new Set([...BREAKS, "$", "*", "?", "["]);
+const SPECIAL = new Set([" ", "\t", "\n", ";", "|", "&", "<", ">", "(", ")", "`", "'", '"', "\\", "$"]);
 
 /** The value bash gives a home variable: lunR's environment, or the home directory for an unset HOME. */
 function homeVariable(name: string): string | undefined {
 	return process.env[name] ?? (name === "HOME" ? homedir() : undefined);
 }
 
-/** `$NAME` or `${NAME}` for a home variable at `i`: its length and value. */
-function homeVariableAt(command: string, i: number): { length: number; value: string } | undefined {
-	for (const name of HOME_NAMES) {
-		const braced = command.startsWith(`\${${name}}`, i);
-		const bare = !braced && command.startsWith(`$${name}`, i) && !/\w/.test(command[i + name.length + 1] ?? "");
-		const value = braced || bare ? homeVariable(name) : undefined;
-		if (value !== undefined) return { length: name.length + (braced ? 3 : 1), value };
-	}
-	return undefined;
-}
-
 /**
- * Bash words grouped by `;`, `|`, `&` and newline, in one pass over the text (`hasName`: the text has
- * a loose name, else heredoc bodies are skipped without a search): quotes, `\` escapes and
- * line continuations removed, home variables expanded, unquoted globs and redirection targets marked,
- * and heredoc bodies kept as words of their own (quotes there end at each line, globs not marked).
+ * Bash words grouped by `;`, `|`, `&` and newline, in one pass over the text: quotes, `\` escapes and
+ * line continuations removed, home variables expanded (each read once), redirection targets marked,
+ * and heredoc bodies kept as words of their own only when they contain a name (quotes there end at
+ * each line).
  */
-function bashSegments(command: string, hasName: boolean): BashWord[][] {
+function bashSegments(command: string): BashWord[][] {
 	const segments: BashWord[][] = [[]];
+	const homes = new Map<string, string | undefined>();
 	let word = "";
-	let tokens: GlobToken[] | undefined;
 	let redirect = false;
 	let heredocDelimiter: "plain" | "strip" | undefined;
 	const heredocs: Array<{ delimiter: string; strip: boolean }> = [];
 	let quote: "'" | '"' | undefined;
 	let bodyEnd = -1;
 	let resumeAt = -1;
-	let bracketFailsBefore = -1;
+	// Where the next name is, from the last search, so many heredocs do not each search to the end.
+	let nameAt = -1;
 	const newSegment = () => {
 		if (segments[segments.length - 1].length > 0) segments.push([]);
 	};
 	const endWord = () => {
 		if (!word) return;
 		if (heredocDelimiter) heredocs.push({ delimiter: word, strip: heredocDelimiter === "strip" });
-		else segments[segments.length - 1].push({ text: word, globs: tokens, redirect, body: bodyEnd !== -1 });
+		else segments[segments.length - 1].push({ text: word, redirect, body: bodyEnd !== -1 });
 		// A redirection or heredoc operator applies to the next word, also after a space (`<< 'EOF'`).
 		redirect = false;
 		heredocDelimiter = undefined;
 		word = "";
-		tokens = undefined;
+	};
+	const homeAt = (i: number): { length: number; value: string } | undefined => {
+		for (const name of HOME_NAMES) {
+			const braced = command.startsWith(`\${${name}}`, i);
+			if (!braced && !(command.startsWith(`$${name}`, i) && !/\w/.test(command[i + name.length + 1] ?? "")))
+				continue;
+			if (!homes.has(name)) homes.set(name, homeVariable(name));
+			const value = homes.get(name);
+			if (value !== undefined) return { length: name.length + (braced ? 3 : 1), value };
+		}
+		return undefined;
 	};
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
@@ -435,7 +470,7 @@ function bashSegments(command: string, hasName: boolean): BashWord[][] {
 			else if (quote === '"' && !DOUBLE_QUOTE_ESCAPES.has(command[i + 1])) word += ch;
 			else word += command[++i];
 		} else if (ch === "$" && quote !== "'") {
-			const home = homeVariableAt(command, i);
+			const home = homeAt(i);
 			if (home) {
 				word += home.value;
 				i += home.length - 1;
@@ -468,10 +503,12 @@ function bashSegments(command: string, hasName: boolean): BashWord[][] {
 			heredocDelimiter = undefined;
 			if (ch === "\n" && !inBody && heredocs.length > 0) {
 				const span = heredocSpan(command, i + 1, heredocs.splice(0));
-				LOOSE_CREDENTIAL_NAME_FROM.lastIndex = i + 1;
-				const name = hasName ? LOOSE_CREDENTIAL_NAME_FROM.exec(command) : null;
+				if (nameAt < i + 1) {
+					LOOSE_CREDENTIAL_NAME_FROM.lastIndex = i + 1;
+					nameAt = LOOSE_CREDENTIAL_NAME_FROM.exec(command)?.index ?? command.length;
+				}
 				// A body is data on stdin: only a name in it can matter, so a body without one is skipped.
-				if (name && name.index < span.bodyEnd) bodyEnd = span.bodyEnd;
+				if (nameAt < span.bodyEnd) bodyEnd = span.bodyEnd;
 				else i = span.resumeAt - 1;
 				resumeAt = span.resumeAt;
 			}
@@ -489,21 +526,6 @@ function bashSegments(command: string, hasName: boolean): BashWord[][] {
 			i = end - 1;
 		} else if (ch === " " || ch === "\t" || ch === "(" || ch === ")" || ch === "`" || ch === "<" || ch === ">") {
 			endWord();
-		} else if ((ch === "*" || ch === "?") && !inBody) {
-			tokens ??= [];
-			tokens.push({ start: word.length, end: word.length + 1, code: ch === "*" ? STAR : ONE });
-			word += ch;
-		} else if (ch === "[" && !inBody && i >= bracketFailsBefore) {
-			const close = bracketEnd(command, i);
-			if ("failedAt" in close) {
-				bracketFailsBefore = close.failedAt;
-				word += ch;
-			} else {
-				tokens ??= [];
-				tokens.push({ start: word.length, end: word.length + close.end + 1 - i, code: ONE });
-				word += command.slice(i, close.end + 1);
-				i = close.end;
-			}
 		} else {
 			// Take the run of characters that change nothing in one slice, stopping at a body's end.
 			let end = i + 1;
@@ -532,6 +554,8 @@ function heredocSpan(
 	for (const { delimiter, strip } of heredocs) {
 		bodyEnd = command.length;
 		resumeAt = command.length;
+		// Real delimiters are short; a long one would make each search costly, so it runs to the end.
+		if (delimiter.length > MAX_DELIMITER) break;
 		// Each candidate is checked once for being a whole line, so this is linear in the text.
 		for (let at = command.indexOf(delimiter, from); at !== -1; at = command.indexOf(delimiter, at + 1)) {
 			let lineStart = at;
@@ -549,30 +573,6 @@ function heredocSpan(
 	return { bodyEnd, resumeAt };
 }
 
-/**
- * The `]` that closes the bracket expression at `open`, scanning only until a character that ends
- * the word. A `]` right after `[`, `[!` or `[^` is a member, and `[:class:]` is skipped whole.
- * Without one, `failedAt` is where the scan stopped: a later `[` before it cannot close either.
- */
-function bracketEnd(command: string, open: number): { end: number } | { failedAt: number } {
-	let j = open + 1;
-	if (command[j] === "!" || command[j] === "^") j++;
-	if (command[j] === "]") j++;
-	while (j < command.length) {
-		const c = command[j];
-		if (c === "]") return { end: j };
-		if (BREAKS.has(c)) return { failedAt: j };
-		if (c === "[" && command[j + 1] === ":") {
-			const close = command.indexOf(":]", j + 2);
-			if (close === -1) return { failedAt: command.length };
-			for (let k = j + 2; k < close; k++) if (BREAKS.has(command[k])) return { failedAt: k };
-			j = close + 2;
-			continue;
-		}
-		j++;
-	}
-	return { failedAt: command.length };
-}
 /**
  * For a tool about to read the file at absolute, normalized `path`: the refusal when it is a
  * credential location, also through a symlink under another name (`notes.json -> auth.json`). The

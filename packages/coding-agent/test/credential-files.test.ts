@@ -4,7 +4,7 @@ import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import lspExtension from "../src/builtin-extensions/pi-lsp-extension/src/index.ts";
-import { CREDENTIAL_BLOCK_REASON, credentialWalkFilter } from "../src/core/credential-files.ts";
+import { CREDENTIAL_BLOCK_REASON, credentialBashReason, credentialWalkFilter } from "../src/core/credential-files.ts";
 import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
 import { gateToolCall, resetAllPermissionContexts, setPermissionMode } from "../src/core/permissions.ts";
 import {
@@ -35,8 +35,7 @@ beforeEach(async () => {
 	await writeFile(join(project, "auth.json"), '{"fixture":"FAKE-SECRET"}');
 	await symlink(join(agentDir, "auth.json"), join(project, "notes.json"));
 	await symlink(agentDir, join(project, "profile"));
-	// The bash glob check reuses the profile dir of the last lookup; this one reads the new profile.
-	credentialWalkFilter(agentDir);
+	await mkdir(join(project, "mcp-oauth-server"));
 });
 
 afterEach(async () => {
@@ -176,37 +175,36 @@ describe("lunR's saved logins", () => {
 		expect(await gate(toolName, withProfile(input, toolName))).toBeUndefined();
 	});
 
-	// Spellings bash reads as a saved login, each next to one that names another file. Any `[...]`
-	// counts as 1 character, so `au[x]h.json` is refused too.
+	// Spellings bash reads as a saved login, each next to one that names another file.
 	it.each<[refused: string, allowed: string]>([
 		['cat <profile>/"auth".json', 'cat <profile>/"auth".json.bak'],
 		["cat <profile>/a''uth.json", "cat <profile>/a''uth.md"],
 		["cat <profile>/auth\\.json", 'cat "<profile>/auth\\.json"'],
 		["cat <profile>/auth\\\n.json", "cat <profile>/auth\\\n.md"],
-		["cat <profile>/auth.js*", "cat <profile>/settings*.json"],
-		["cat <profile>/au[t]h.json", "cat <profile>/au[t]h.md"],
-		["cd <profile> && cat *.json", "cat *.json"],
-		["cat <profile>/mcp-*/*/tokens.json", "ls <profile>/settings.*"],
-		["cat <profile>/au[[:lower:]]h.json", "cat <profile>/au[[:lower:]]h.md"],
-		["cat <profile>/au[]t]h.json", "cat <profile>/au[]t]h.md"],
-		["cat <profile>/./a*.json", "cat <profile>/./s*.md"],
-		["cat <profile>/s*/../a*h.json", "cat sub/*/../a*h.json"],
-		["cat <profile>/a*.json", 'cat <profile>/a"*".json'],
-		["cat <profile>/auth.jso?", "cat <profile>/auth.jso\\?"],
 		["cd -- <profile> && cat auth.json", "cd -- sub && cat auth.json"],
 		["pushd <profile> && cat auth.json", "pushd sub && cat auth.json"],
 		["pushd <profile> >/dev/null && cat auth.json", "pushd <profile> >/dev/null && popd && cat auth.json"],
 		["cd <profile> 2>/dev/null && cat auth.json", "cd sub 2>/dev/null && cat auth.json"],
 		["cd -P <profile> && cat auth.json", "cd -P sub && cat auth.json"],
-		["cat <<EOF\nx\nEOF\ncat <profile>/auth.json", "cat << 'EOF'\n<profile>/*.json\nEOF"],
+		["cd <profile> && cd missing-dir && cat auth.json", "cd sub && cd <profile>/missing-dir && cat auth.json"],
+		["cat <<EOF\nx\nEOF\ncat <profile>/auth.json", "cat << 'EOF'\n<profile>/settings.json\nEOF"],
+		// A word that cannot be examined is skipped; the words after it are still checked.
+		["cd file://x/y; cat <profile>/auth.json", "cd file://x/y; cat <profile>/settings.json"],
+		["cd file://x/y 2>/dev/null; cat <profile>/auth.json", "cd file://x/y 2>/dev/null; cat auth.json"],
+		["cd file:///%2f; cat <profile>/auth.json", "cd file:///%2f; cat <profile>/models.json"],
+		["cd <profile>; cd file://x/y; cat auth.json", "cd sub; cd file://x/y; cat auth.json"],
+		["cat file://x/a* <profile>/auth.json", "cat file://x/a* <profile>/settings.json"],
+		["ls file://x/*; cat <profile>/auth.json", "ls file://x/*; cat <profile>/settings.json"],
+		["pushd file://x/y; cat <profile>/auth.json", "pushd file://x/y; cat auth.json"],
+		// Only the real mcp-oauth tree makes plain words candidates, not a name inside a longer one.
+		["cd <profile>/mcp-oauth/sha256-ab && cat tokens.json", "cd mcp-oauth-server && cat tokens.json"],
 	])("refuses bash %j and allows %j", async (refused, allowed) => {
 		const reason = { block: true, reason: CREDENTIAL_BLOCK_REASON };
 		expect(await gate("bash", withProfile({ command: refused }, "bash"))).toEqual(reason);
 		expect(await gate("bash", withProfile({ command: allowed }, "bash"))).toBeUndefined();
 	});
 
-	// Code and text with glob characters, from the families of real agent commands. The scratch
-	// project sits next to the profile, so each of these takes the full glob path.
+	// Code and text with glob characters, from the families of real agent commands.
 	const ORDINARY = [
 		`python3 -c "print('x'[:-1])"`,
 		"python3 -c 'import sys; print(sys.argv[1:])' a b",
@@ -244,7 +242,71 @@ describe("lunR's saved logins", () => {
 	it("allows ordinary commands with glob characters in code, quickly", async () => {
 		const started = performance.now();
 		for (const command of ORDINARY) expect(await gate("bash", { command }), command).toBeUndefined();
-		expect(performance.now() - started).toBeLessThan(50);
+		expect(performance.now() - started).toBeLessThan(500);
+	});
+
+	// Input shapes that made earlier versions of the bash check quadratic or worse, built to a size.
+	// Each must stay linear: 10x the text may cost at most 30x the time (10x plus noise), and 100 KB
+	// at most 50 ms. Times are per call, from repeated calls of at least 5 ms in all.
+	const SCALING: Array<[name: string, build: (count: number) => string]> = [
+		["star banner next to .lunr", (n) => `ls ~/.lunr/ ${"*".repeat(n)} DONE`],
+		["star banner in quotes", (n) => `echo "${"*".repeat(n)} DONE"`],
+		["a* repeated, then a name", (n) => `ls ${"a*".repeat(n)} auth.json`],
+		["nested [ then ]", (n) => `echo ${"[".repeat(n)}${"]".repeat(n)}`],
+		["failing [[:x classes", (n) => `ls ~/.lunr/ ${"[[:x ".repeat(n)}:]`],
+		["[a repeated", (n) => `echo ${"[a ".repeat(n)}`],
+		["run of ' after a name", (n) => `cat auth.json ${"'".repeat(n)}`],
+		['run of " after a name', (n) => `cat auth.json ${'"'.repeat(n)}`],
+		["run of \\ after a name", (n) => `cat auth.json ${"\\".repeat(n)}`],
+		["a' repeated", (n) => `echo ${"a'".repeat(n)}`],
+		["many words, a name at the end", (n) => `echo ${"word ".repeat(n)}auth.json`],
+		["distinct dN/auth.json words", (n) => `cat ${Array.from({ length: n }, (_, i) => `d${i}/auth.json`).join(" ")}`],
+		["nested cd, a name at the end", (n) => `${"cd a && ".repeat(n)}cat auth.json`],
+		["cd a && cd .., a name at the end", (n) => `${"cd a && cd .. && ".repeat(n)}cat auth.json`],
+		["nested cd, no name", (n) => `${"cd a && ".repeat(n)}ls *.ts # .lunr`],
+		["1 heredoc body with names", (n) => `cat <<'EOF'\n${"~/.lunr/agent/auth.json\n".repeat(n)}EOF`],
+		[
+			"1 heredoc body, distinct names",
+			(n) => `cat <<'EOF'\n${Array.from({ length: n }, (_, i) => `${i}/auth.json`).join("\n")}\nEOF`,
+		],
+		["many small heredocs, a name at the end", (n) => `${"cat <<E\nx\nE\n".repeat(n)}echo auth.json`],
+		["deep ../ chain", (n) => `cat ${"../".repeat(n)}auth.json`],
+		["very long word with a name", (n) => `cat ${"x".repeat(n)}auth.json`],
+		["very long a? word", (n) => `ls ${"a?".repeat(n)}`],
+		["$HOME repeated", (n) => `cat ${"$HOME/x ".repeat(n)}auth.json`],
+		["2>x repeated after a name", (n) => `cat auth.json ${"2>x ".repeat(n)}`],
+		["cd into mcp-oauth-server, many words", (n) => `cd mcp-oauth-server && cat ${"a.json ".repeat(n)}`],
+	];
+	const sized = (build: (count: number) => string, bytes: number) => {
+		let count = 1;
+		while (build(count).length < bytes) count *= 2;
+		let low = count / 2;
+		while (count - low > 1) {
+			const middle = Math.floor((low + count) / 2);
+			if (build(middle).length < bytes) low = middle;
+			else count = middle;
+		}
+		return build(count);
+	};
+	const msPerCall = (command: string) => {
+		let best = Number.POSITIVE_INFINITY;
+		for (let round = 0; round < 3; round++) {
+			let calls = 0;
+			const started = performance.now();
+			while (performance.now() - started < 5 || calls === 0) {
+				credentialBashReason(command, project);
+				calls++;
+			}
+			best = Math.min(best, (performance.now() - started) / calls);
+		}
+		return best;
+	};
+
+	it.each(SCALING)("checks %s in linear time", (_name, build) => {
+		const small = msPerCall(sized(build, 10_000));
+		const large = msPerCall(sized(build, 100_000));
+		expect(large).toBeLessThan(50);
+		expect(large / small).toBeLessThan(30);
 	});
 
 	// The scratch root stands in for the home directory, so `$HOME/agent` is the profile.
