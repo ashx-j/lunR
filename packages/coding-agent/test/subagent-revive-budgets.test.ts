@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { executeAsyncSingle } from "../src/builtin-extensions/pi-subagents/src/runs/background/async-execution.ts";
-import { appendTurnBudgetSystemPrompt } from "../src/builtin-extensions/pi-subagents/src/runs/shared/turn-budget.ts";
 import {
 	createSubagentExecutor,
 	type SubagentParamsLike,
 } from "../src/builtin-extensions/pi-subagents/src/runs/foreground/subagent-executor.ts";
+import { appendTurnBudgetSystemPrompt } from "../src/builtin-extensions/pi-subagents/src/runs/shared/turn-budget.ts";
 import { ASYNC_DIR, type SubagentState } from "../src/builtin-extensions/pi-subagents/src/shared/types.ts";
 
 // A revive starts the child through executeAsyncSingle; record the budgets it receives.
