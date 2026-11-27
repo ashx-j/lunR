@@ -608,15 +608,18 @@ describe("cd to the session directory", () => {
 
 	// Models often start a line with `cd <project> &&`. That is no change of directory, so git and
 	// npm after it read the same config as without it.
-	it.each([
-		"cd /work/project && git status && git log --oneline -5",
-		"cd /work/project; git diff; ls; cat package.json",
-		"cd '/work/project' && npm ls",
-		"cd /work/project/ && git status --short | head",
-		"cd . && git status",
-		"cd ./ && git status",
-		"cd /work//project/. && git status",
-	])("allows %s", (command) => {
+	// Off on Windows (Node and Git Bash disagree on `/`): there every cd counts as a change.
+	it
+		.skipIf(process.platform === "win32")
+		.each([
+			"cd /work/project && git status && git log --oneline -5",
+			"cd /work/project; git diff; ls; cat package.json",
+			"cd '/work/project' && npm ls",
+			"cd /work/project/ && git status --short | head",
+			"cd . && git status",
+			"cd ./ && git status",
+			"cd /work//project/. && git status",
+		])("allows %s", (command) => {
 		expect(isMutatingBashCommand(command, cwd)).toBe(false);
 	});
 
