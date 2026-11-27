@@ -395,6 +395,8 @@ describe("prompt-driven execution paths", () => {
 		const built = buildAsyncRunnerSteps("async-run", {
 			chain: [
 				{
+					// internalizePromptDrivenChildren sets agent to the child id before a chain reaches the builder.
+					agent: "async-run-0",
 					task: "Inspect the permission boundary.",
 					description: "Audit permission boundary",
 					permissions: "read-only",
@@ -451,6 +453,7 @@ describe("prompt-driven execution paths", () => {
 		const built = buildAsyncRunnerSteps("root-run", {
 			chain: [
 				{
+					agent: "root-run-append-abc123-0",
 					task: "Continue from {previous}",
 					description: "Verify appended fix",
 					permissions: "read-only",

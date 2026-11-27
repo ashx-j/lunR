@@ -1082,11 +1082,6 @@ async function resumeAsyncRun(input: {
 	deps: ExecutorDeps;
 	absoluteDeadlineAt?: number;
 }): Promise<AgentToolResult<Details>> {
-	// Resolve passed turn and tool budgets like a fresh launch does: validate them and fill in defaults.
-	const resumeTurnBudget = resolveTurnBudgetConfig(input.params.turnBudget);
-	if (resumeTurnBudget.error) return { content: [{ type: "text", text: resumeTurnBudget.error }], isError: true, details: { mode: "management", results: [] } };
-	const resumeToolBudget = resolveToolBudget(input.params.toolBudget, "toolBudget");
-	if (resumeToolBudget.error) return { content: [{ type: "text", text: resumeToolBudget.error }], isError: true, details: { mode: "management", results: [] } };
 	const followUp = (input.params.message ?? input.params.task ?? "").trim();
 	const attachChain = (input.params.chain?.length ?? 0) > 0 ? input.params.chain as MaterializedChainStep[] : undefined;
 	if (!followUp && !attachChain) {
@@ -1286,6 +1281,12 @@ async function resumeAsyncRun(input: {
 			return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true, details: { mode: "management", results: [] } };
 		}
 	}
+	// Resolve passed budgets like a fresh launch does, so the child gets its grace turn. executeAsyncSingle
+	// validates toolBudget itself; resolving it here gives it the resolved type it declares.
+	const resumeTurnBudget = resolveTurnBudgetConfig(input.params.turnBudget);
+	if (resumeTurnBudget.error) return { content: [{ type: "text", text: resumeTurnBudget.error }], isError: true, details: { mode: "management", results: [] } };
+	const resumeToolBudget = resolveToolBudget(input.params.toolBudget, "toolBudget");
+	if (resumeToolBudget.error) return { content: [{ type: "text", text: resumeToolBudget.error }], isError: true, details: { mode: "management", results: [] } };
 	let recoverySpec: ChildSpec;
 	try {
 		const recoverySelection = recoveryDescriptor?.modelSelection ?? target.modelSelection;
@@ -1669,8 +1670,8 @@ function runtimeConfigFromChildSpec(spec: ChildSpec): ChildRuntimeConfig {
 }
 
 // The 3 casts to MaterializedParams below: a call sets only one of tasks, chain or task.
-// The lists this function leaves alone are empty, or validateExecutionInput rejects the call
-// before anything runs.
+// The lists this function leaves alone are empty, or validateExecutionInput (execute) or the
+// append-step guard rejects the call before anything runs.
 function internalizePromptDrivenChildren(
 	params: SubagentParamsLike,
 	options: { runId: string; parentMode?: string; dynamicFanoutMaxItems?: number },

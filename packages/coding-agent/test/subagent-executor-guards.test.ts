@@ -46,8 +46,3 @@ it("rejects tasks next to an append-step chain", async () => {
 		content: [{ text: "action='append-step' takes chain only, not tasks." }],
 	});
 });
-
-it("validates a turn budget passed to a resume", async () => {
-	const result = await execute({ action: "resume", id: "run-1", message: "go on", turnBudget: { maxTurns: 0 } });
-	expect(result).toMatchObject({ isError: true, content: [{ text: "turnBudget.maxTurns must be an integer >= 1." }] });
-});

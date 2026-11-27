@@ -157,6 +157,7 @@ describe("parallel explicit model launch validation", () => {
 		[{ model: undefined, tier: "light" }, /thinking is only valid with an explicit model/],
 	])("rejects invalid child selection %j", async (override, error) => {
 		const tasks = children();
+		// Cast: these overrides are deliberately invalid (bogus thinking levels, empty models).
 		const result = await launch({ tasks: [tasks[0], { ...tasks[1], ...override }] } as never);
 		expect(result.isError).toBe(true);
 		expect(result.content).toEqual([{ type: "text", text: expect.stringMatching(error) }]);
