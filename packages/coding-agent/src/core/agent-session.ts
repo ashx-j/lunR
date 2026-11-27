@@ -21,7 +21,7 @@ import {
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname } from "node:path";
 import type {
 	Agent,
 	AgentEvent,
@@ -58,7 +58,6 @@ import {
 	AutoReviewTracker,
 	buildAutoReviewContext,
 	missingReviewerReason,
-	needsAutoReview,
 	parseAutoReviewVerdict,
 	registerAutoReviewSnapshot,
 	resolveAutoReviewer,
@@ -89,11 +88,9 @@ import {
 	type ToolInfo,
 	type TurnEndEvent,
 	type TurnStartEvent,
-	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { Extension, InlineExtension } from "./extensions/types.ts";
-import { MEMORY_TOOL_NAMES } from "./memory-cap.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { convertToLlm } from "./messages.ts";
 import { isUserInstructionsPath, loadSelectedUserInstructions } from "./model-instructions.ts";
@@ -113,7 +110,6 @@ import { type CompiledPermissionRules, compilePermissionRules } from "./permissi
 import {
 	AUTONOMOUS_ADDENDUM,
 	deletePermissionContext,
-	gateToolCall,
 	getPermissionMode,
 	initializePermissionContext,
 	type PermissionMode,
@@ -121,11 +117,10 @@ import {
 	setPermissionAutonomous,
 	setPermissionMode,
 } from "./permissions.ts";
-import { READ_ONLY_MODE_ADDENDUM, readOnlyModeBlockReason } from "./plan-mode.ts";
+import { READ_ONLY_MODE_ADDENDUM } from "./plan-mode.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import { withoutDeletedHeaders } from "./provider-headers.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
-import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
 import { SessionCompaction, type SessionCompactionHost } from "./session-compaction.ts";
 import type { SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
@@ -138,7 +133,6 @@ import {
 } from "./session-retry.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
-import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import {
 	isSubagentChildProcess,
 	resolveChildRuntimePermissionMode,
@@ -150,16 +144,18 @@ import {
 } from "./subagent-wait-interruption.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { measureStartup } from "./timings.ts";
-import { TODO_TOOL_NAMES } from "./todo-settings.ts";
+import { installToolCallHooks, type ToolCallGate, type ToolCallHooksHost } from "./tool-call-hooks.ts";
+import { rebuildToolRegistry, type ToolDefinitionEntry, type ToolRegistryHost } from "./tool-registry.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { BashJobs } from "./tools/bash-jobs.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
-import { resolveToCwd } from "./tools/path-utils.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { getUserMessagesForForking, runTreeNavigation, type TreeNavigationHost } from "./tree-navigation.ts";
 
-// NothingToCompactError moved with compaction; callers still import it from here.
 export { NothingToCompactError } from "./session-compaction.ts";
+// NothingToCompactError moved with compaction, and the tool-call gate types with the hooks;
+// callers still import them from here.
+export type { ToolCallGate, ToolCallGateResult } from "./tool-call-hooks.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -363,23 +359,6 @@ export interface SessionStats {
 	combinedUsage?: UsageTotals;
 }
 
-interface ToolDefinitionEntry {
-	definition: ToolDefinition;
-	sourceInfo: SourceInfo;
-}
-
-// lunr: core-owned tool-call gate. return { block: true, reason } to prevent
-// execution; the agent loop turns it into an error tool result shown to the model.
-export interface ToolCallGateResult {
-	block: boolean;
-	reason?: string;
-}
-export type ToolCallGate = (
-	toolName: string,
-	input: Record<string, unknown>,
-	toolCallId: string,
-) => ToolCallGateResult | undefined | Promise<ToolCallGateResult | undefined>;
-
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -472,6 +451,8 @@ export class AgentSession {
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
 	private _toolPromptSnippets: Map<string, string> = new Map();
 	private _toolPromptGuidelines: Map<string, string[]> = new Map();
+	// Passed to tool-registry.ts, which rebuilds the four maps above.
+	private readonly _toolRegistryHost: ToolRegistryHost = this.createToolRegistryHost();
 
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
@@ -539,7 +520,7 @@ export class AgentSession {
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
-		this._installAgentToolHooks();
+		installToolCallHooks(this.agent, this.createToolCallHooksHost());
 		this._installAgentNextTurnRefresh();
 
 		this._buildRuntime({
@@ -716,6 +697,94 @@ export class AgentSession {
 		};
 	}
 
+	// Builds the ToolCallHooksHost. Every member is a getter or an arrow, so the hooks read the
+	// session's state, including the current extension runner, at each tool call.
+	private createToolCallHooksHost(): ToolCallHooksHost {
+		const session = this;
+		return {
+			get settingsManager() {
+				return session.settingsManager;
+			},
+			get cwd() {
+				return session._cwd;
+			},
+			get sessionId() {
+				return session.sessionId;
+			},
+			get permissionMode() {
+				return session.permissionMode;
+			},
+			get autoReviewEnabled() {
+				return session._autoReviewEnabled;
+			},
+			get toolCallGates() {
+				return session._toolCallGates;
+			},
+			get extensionRunner() {
+				return session._extensionRunner;
+			},
+			get bashJobs() {
+				return session.bashJobs;
+			},
+			permissionRules: () => this._permissionRules(),
+			reviewAutoAction: (toolName, args, toolCallId) => this._reviewAutoAction(toolName, args, toolCallId),
+		};
+	}
+
+	// Builds the ToolRegistryHost. The 4 maps are getter/setter pairs because the rebuild replaces them.
+	private createToolRegistryHost(): ToolRegistryHost {
+		const session = this;
+		return {
+			get settingsManager() {
+				return session.settingsManager;
+			},
+			get extensionRunner() {
+				return session._extensionRunner;
+			},
+			get baseToolDefinitions() {
+				return session._baseToolDefinitions;
+			},
+			get customTools() {
+				return session._customTools;
+			},
+			get allowedToolNames() {
+				return session._allowedToolNames;
+			},
+			get excludedToolNames() {
+				return session._excludedToolNames;
+			},
+			get deferredToolNames() {
+				return session._deferredToolNames;
+			},
+			get toolRegistry() {
+				return session._toolRegistry;
+			},
+			set toolRegistry(registry) {
+				session._toolRegistry = registry;
+			},
+			get toolDefinitions() {
+				return session._toolDefinitions;
+			},
+			set toolDefinitions(definitions) {
+				session._toolDefinitions = definitions;
+			},
+			get toolPromptSnippets() {
+				return session._toolPromptSnippets;
+			},
+			set toolPromptSnippets(snippets) {
+				session._toolPromptSnippets = snippets;
+			},
+			get toolPromptGuidelines() {
+				return session._toolPromptGuidelines;
+			},
+			set toolPromptGuidelines(guidelines) {
+				session._toolPromptGuidelines = guidelines;
+			},
+			getActiveToolNames: () => this.getActiveToolNames(),
+			setActiveToolsByName: (toolNames) => this.setActiveToolsByName(toolNames),
+		};
+	}
+
 	private async _getSummarizationRequestAuth(model: Model<Api>): Promise<{
 		apiKey?: string;
 		headers?: Record<string, string>;
@@ -733,134 +802,6 @@ export class AgentSession {
 		} catch {
 			return {};
 		}
-	}
-
-	/**
-	 * Install tool hooks once on the Agent instance.
-	 *
-	 * The callbacks read `this._extensionRunner` at execution time, so extension reload swaps in the
-	 * new runner without reinstalling hooks. Extension-specific tool wrappers are still used to adapt
-	 * registered tool execution to the extension context. Tool call and tool result interception now
-	 * happens here instead of in wrappers.
-	 */
-	private _installAgentToolHooks(): void {
-		// lunr: calls read-only mode knows to change state (edit, write, mutating bash, ...) run in
-		// the order the model wrote them; other calls in the same message still run concurrently.
-		// Unknown extension tools stay concurrent; they can opt out with executionMode "sequential".
-		this.agent.toolCallMutates = (toolCall, args) => readOnlyModeBlockReason(toolCall.name, args) !== undefined;
-		this.agent.beforeToolCall = async ({ toolCall, args, assistantMessage }) => {
-			// lunr: the permission gate runs before host gates and may request approval.
-			const rules = this._permissionRules();
-			const permBlock = await gateToolCall(
-				toolCall.name,
-				args as Record<string, unknown>,
-				this._cwd,
-				this.sessionId,
-				{
-					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
-					assistantMessage,
-					rules,
-					saveAllowRule: (rule) => this.settingsManager.addPermissionAllowRule(rule),
-				},
-			);
-			if (permBlock) {
-				return { block: true, reason: permBlock.reason };
-			}
-			if (
-				this.permissionMode === "auto" &&
-				this._autoReviewEnabled &&
-				needsAutoReview(toolCall.name, args as Record<string, unknown>, this._cwd) &&
-				!rules.allowed(toolCall.name, args as Record<string, unknown>)
-			) {
-				const reviewBlock = await this._reviewAutoAction(toolCall.name, args, toolCall.id);
-				if (reviewBlock) return { block: true, reason: reviewBlock };
-			}
-
-			// lunr: await host gates before snapshots, extension handlers or tool execution.
-			for (const gate of this._toolCallGates) {
-				const gateResult = await gate(toolCall.name, args as Record<string, unknown>, toolCall.id);
-				if (gateResult?.block) {
-					return { block: true, reason: gateResult.reason };
-				}
-			}
-
-			// lunr: rollback snapshot — capture pre-write content for mutating tools before they run.
-			try {
-				const toolName = toolCall.name;
-				const argPath =
-					args && typeof args === "object" && "path" in args
-						? resolveToCwd(String((args as Record<string, unknown>).path), this._cwd)
-						: undefined;
-				const pathsToSnapshot: string[] = [];
-				if (toolName === "edit" || toolName === "write") {
-					if (argPath) pathsToSnapshot.push(argPath);
-				} else if (toolName === "memory_add" || toolName === "memory_remove") {
-					// lunr: simple-memory lives next to the lunr agent dir (~/.lunr/simple-memory)
-					pathsToSnapshot.push(join(dirname(getAgentDir()), "simple-memory", "memory.md"));
-				} else if (toolName === "cron" && args && typeof args === "object") {
-					const action = String((args as Record<string, unknown>).action ?? "");
-					if (action === "create" || action === "update" || action === "remove") {
-						pathsToSnapshot.push(join(getAgentDir(), "cron", "jobs.json"));
-					}
-				}
-				for (const p of pathsToSnapshot) {
-					rollbackSnapshotBeforeWrite(p, this.sessionId);
-				}
-			} catch {
-				// rollback failures must never block the tool call
-			}
-
-			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_call")) {
-				return undefined;
-			}
-
-			try {
-				return await runner.emitToolCall({
-					type: "tool_call",
-					toolName: toolCall.name,
-					toolCallId: toolCall.id,
-					input: args as Record<string, unknown>,
-				});
-			} catch (err) {
-				if (err instanceof Error) {
-					throw err;
-				}
-				throw new Error(`Extension failed, blocking execution: ${String(err)}`);
-			}
-		};
-
-		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
-			// A job that exited during the run is announced in the next tool result, which the
-			// next request carries anyway. Steering would cost an extra request after a final answer.
-			const jobNotice = this.bashJobs.takeExitNotices();
-			if (jobNotice) result = { ...result, content: [...result.content, { type: "text", text: jobNotice }] };
-			const unchanged = jobNotice ? { content: result.content } : undefined;
-			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_result")) {
-				return unchanged;
-			}
-
-			const hookResult = await runner.emitToolResult({
-				type: "tool_result",
-				toolName: toolCall.name,
-				toolCallId: toolCall.id,
-				input: args as Record<string, unknown>,
-				content: result.content,
-				details: result.details,
-				isError,
-			});
-
-			if (!hookResult) {
-				return unchanged;
-			}
-
-			return {
-				content: hookResult.content,
-				details: hookResult.details,
-				isError: hookResult.isError ?? isError,
-			};
-		};
 	}
 
 	private _installAgentNextTurnRefresh(): void {
@@ -1613,7 +1554,7 @@ export class AgentSession {
 
 	/** Rebuild the registry after a settings-backed feature changes availability. */
 	refreshToolRegistry(): void {
-		this._refreshToolRegistry();
+		rebuildToolRegistry(this._toolRegistryHost);
 	}
 
 	/** Whether compaction or branch summarization is currently running */
@@ -1664,30 +1605,6 @@ export class AgentSession {
 	/** File-based prompt templates */
 	get promptTemplates(): ReadonlyArray<PromptTemplate> {
 		return this._resourceLoader.getPrompts().prompts;
-	}
-
-	private _normalizePromptSnippet(text: string | undefined): string | undefined {
-		if (!text) return undefined;
-		const oneLine = text
-			.replace(/[\r\n]+/g, " ")
-			.replace(/\s+/g, " ")
-			.trim();
-		return oneLine.length > 0 ? oneLine : undefined;
-	}
-
-	private _normalizePromptGuidelines(guidelines: string[] | undefined): string[] {
-		if (!guidelines || guidelines.length === 0) {
-			return [];
-		}
-
-		const unique = new Set<string>();
-		for (const guideline of guidelines) {
-			const normalized = guideline.trim();
-			if (normalized.length > 0) {
-				unique.add(normalized);
-			}
-		}
-		return Array.from(unique);
 	}
 
 	private _rebuildSystemPrompt(toolNames: string[]): string {
@@ -2742,7 +2659,7 @@ export class AgentSession {
 		this.applyDeferredExtensionFlags(fresh);
 		await this.emitSessionStartForExtensions(fresh);
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
-		this._refreshToolRegistry({
+		rebuildToolRegistry(this._toolRegistryHost, {
 			activeToolNames: this.getActiveToolNames(),
 			includeAllExtensionTools: true,
 		});
@@ -2945,7 +2862,7 @@ export class AgentSession {
 				getAllTools: () => this.getAllTools(),
 				setActiveTools: (toolNames) => this.setActiveToolsByName(toolNames),
 				setDeferredTools: (toolNames) => this.setDeferredToolsByName(toolNames),
-				refreshTools: () => this._refreshToolRegistry(),
+				refreshTools: () => rebuildToolRegistry(this._toolRegistryHost),
 				getCommands,
 				setModel: async (model) => {
 					if (!this._modelRuntime.hasConfiguredAuth(model.provider)) return false;
@@ -3003,107 +2920,6 @@ export class AgentSession {
 		);
 	}
 
-	private _refreshToolRegistry(options?: { activeToolNames?: string[]; includeAllExtensionTools?: boolean }): void {
-		const previousRegistryNames = new Set(this._toolRegistry.keys());
-		const previousActiveToolNames = this.getActiveToolNames();
-		const allowedToolNames = this._allowedToolNames;
-		const excludedToolNames = this._excludedToolNames;
-		// bash_job follows bash, so `--tools read,bash` keeps a way to read background jobs.
-		const isListed = (names: Set<string>, name: string): boolean =>
-			names.has(name) || (name === "bash_job" && names.has("bash"));
-		const isAllowedTool = (name: string): boolean =>
-			(!allowedToolNames || isListed(allowedToolNames, name)) &&
-			!(excludedToolNames && isListed(excludedToolNames, name)) &&
-			(this.settingsManager.getMemoryEnabled() || !MEMORY_TOOL_NAMES.has(name)) &&
-			(this.settingsManager.getTodosEnabled() || !TODO_TOOL_NAMES.has(name)) &&
-			(name !== "browser" || this.settingsManager.getBrowserEnabled());
-
-		const registeredTools = this._extensionRunner.getAllRegisteredTools();
-		const allCustomTools = [
-			...registeredTools,
-			...this._customTools.map((definition) => ({
-				definition,
-				sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
-			})),
-		].filter((tool) => isAllowedTool(tool.definition.name));
-		const definitionRegistry = new Map<string, ToolDefinitionEntry>(
-			Array.from(this._baseToolDefinitions.entries())
-				.filter(([name]) => isAllowedTool(name))
-				.map(([name, definition]) => [
-					name,
-					{
-						definition,
-						sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
-					},
-				]),
-		);
-		for (const tool of allCustomTools) {
-			definitionRegistry.set(tool.definition.name, {
-				definition: tool.definition,
-				sourceInfo: tool.sourceInfo,
-			});
-		}
-		this._toolDefinitions = definitionRegistry;
-		this._toolPromptSnippets = new Map(
-			Array.from(definitionRegistry.values())
-				.map(({ definition }) => {
-					const snippet = this._normalizePromptSnippet(definition.promptSnippet);
-					return snippet ? ([definition.name, snippet] as const) : undefined;
-				})
-				.filter((entry): entry is readonly [string, string] => entry !== undefined),
-		);
-		this._toolPromptGuidelines = new Map(
-			Array.from(definitionRegistry.values())
-				.map(({ definition }) => {
-					const guidelines = this._normalizePromptGuidelines(definition.promptGuidelines);
-					return guidelines.length > 0 ? ([definition.name, guidelines] as const) : undefined;
-				})
-				.filter((entry): entry is readonly [string, string[]] => entry !== undefined),
-		);
-		const runner = this._extensionRunner;
-		const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner);
-		const wrappedBuiltInTools = wrapRegisteredTools(
-			Array.from(this._baseToolDefinitions.values())
-				.filter((definition) => isAllowedTool(definition.name))
-				.map((definition) => ({
-					definition,
-					sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, { source: "builtin" }),
-				})),
-			runner,
-		);
-
-		const toolRegistry = new Map(wrappedBuiltInTools.map((tool) => [tool.name, tool]));
-		for (const tool of wrappedExtensionTools as AgentTool[]) {
-			toolRegistry.set(tool.name, tool);
-		}
-		this._toolRegistry = toolRegistry;
-
-		const nextActiveToolNames = (
-			options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]
-		).filter((name) => isAllowedTool(name));
-
-		if (allowedToolNames) {
-			for (const toolName of this._toolRegistry.keys()) {
-				if (allowedToolNames.has(toolName)) {
-					nextActiveToolNames.push(toolName);
-				}
-			}
-		} else if (options?.includeAllExtensionTools) {
-			for (const tool of wrappedExtensionTools) {
-				// lunr: a declared deferred tool stays unloaded until something loads it.
-				if (!this._deferredToolNames.includes(tool.name)) nextActiveToolNames.push(tool.name);
-			}
-		} else if (!options?.activeToolNames) {
-			for (const toolName of this._toolRegistry.keys()) {
-				if (!previousRegistryNames.has(toolName)) {
-					nextActiveToolNames.push(toolName);
-				}
-			}
-		}
-
-		this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
-	}
-
 	private _buildRuntime(options: {
 		activeToolNames?: string[];
 		flagValues?: Map<string, boolean | string>;
@@ -3153,7 +2969,7 @@ export class AgentSession {
 			? Object.keys(this._baseToolsOverride)
 			: ["read", "bash", "edit", "write"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
-		this._refreshToolRegistry({
+		rebuildToolRegistry(this._toolRegistryHost, {
 			activeToolNames: baseActiveToolNames,
 			includeAllExtensionTools: options.includeAllExtensionTools,
 		});
