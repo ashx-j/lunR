@@ -324,7 +324,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	const encodedToolBudget = encodeToolBudgetEnv(input.toolBudget);
 	if (encodedToolBudget) env[TOOL_BUDGET_ENV] = encodedToolBudget;
 	const encodedChildWatchdog = encodeChildWatchdogConfig(input.childWatchdog);
-	if (encodedChildWatchdog) env[CHILD_WATCHDOG_CONFIG_ENV] = encodedChildWatchdog;
+	// Set or clear it: callers spread this env over process.env, so a grandchild without a config
+	// of its own would otherwise inherit this child's. An empty value decodes to no config.
+	env[CHILD_WATCHDOG_CONFIG_ENV] = encodedChildWatchdog ?? "";
 
 	env[SUBAGENT_PARENT_SESSION_ENV] = input.parentSessionId ?? process.env[SUBAGENT_PARENT_SESSION_ENV] ?? "";
 

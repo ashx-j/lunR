@@ -42,8 +42,14 @@ afterEach(() => {
 	for (const dir of runDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+// The budgets an earlier launch recorded, and how much of them the child used.
+interface Recorded {
+	descriptor: Record<string, unknown>;
+	used: { turnCount: number; toolCount: number };
+}
+
 // A finished async run with a persisted child session, which a revive needs.
-function finishedRun(): string {
+function finishedRun(recorded?: Recorded): string {
 	// Revive only reads run directories under the async root.
 	const runDir = join(ASYNC_DIR, `revive-${process.pid}-${Date.now()}`);
 	runDirs.push(runDir);
@@ -68,12 +74,33 @@ function finishedRun(): string {
 					modelSelection: { kind: "tier", tier: "light" },
 				},
 			],
+			...(recorded ? recorded.used : {}),
 		}),
 	);
+	if (recorded) {
+		writeFileSync(
+			join(runDir, "recovery-descriptor.json"),
+			JSON.stringify({
+				version: 4,
+				lifecycleArtifactVersion: 4,
+				sourceRunId: basename(runDir),
+				childId: "child",
+				description: "Child",
+				permissions: "read-only",
+				agent: "child",
+				sessionFile,
+				cwd: root,
+				tier: "light",
+				outputMode: "inline",
+				maxSubagentDepth: 1,
+				...recorded.descriptor,
+			}),
+		);
+	}
 	return runDir;
 }
 
-function revive(params: Partial<SubagentParamsLike>) {
+function revive(params: Partial<SubagentParamsLike>, recorded?: Recorded) {
 	const executor = createSubagentExecutor({
 		pi: { getSessionName: () => "parent", events: { emit() {}, on() {} } } as never,
 		state: {
@@ -88,7 +115,7 @@ function revive(params: Partial<SubagentParamsLike>) {
 	});
 	return executor.execute(
 		"call",
-		{ action: "resume", dir: finishedRun(), message: "go on", ...params },
+		{ action: "resume", dir: finishedRun(recorded), message: "go on", ...params },
 		undefined,
 		undefined,
 		{
@@ -114,4 +141,27 @@ it("rejects an invalid turn budget before reviving", async () => {
 	const result = await revive({ turnBudget: { maxTurns: 0 } });
 	expect(result).toMatchObject({ isError: true, content: [{ text: "turnBudget.maxTurns must be an integer >= 1." }] });
 	expect(executeAsyncSingle).not.toHaveBeenCalled();
+});
+
+const recorded: Recorded = {
+	descriptor: { initialTurnBudget: { maxTurns: 4, graceTurns: 1 }, initialToolBudget: { hard: 3, block: "*" } },
+	used: { turnCount: 1, toolCount: 1 },
+};
+
+it("keeps what is left of the recorded budgets on a revive without budgets", async () => {
+	const result = await revive({}, recorded);
+	expect(result.isError).not.toBe(true);
+	expect(vi.mocked(executeAsyncSingle).mock.calls[0]?.[1]).toMatchObject({
+		turnBudget: { maxTurns: 3, graceTurns: 1 },
+		toolBudget: { hard: 2, block: "*" },
+	});
+});
+
+it("lets budgets passed with the revive win over the recorded ones", async () => {
+	const result = await revive({ turnBudget: { maxTurns: 6 }, toolBudget: { hard: 9 } }, recorded);
+	expect(result.isError).not.toBe(true);
+	expect(vi.mocked(executeAsyncSingle).mock.calls[0]?.[1]).toMatchObject({
+		turnBudget: { maxTurns: 6, graceTurns: 1 },
+		toolBudget: { hard: 9 },
+	});
 });
