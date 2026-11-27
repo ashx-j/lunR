@@ -35,6 +35,8 @@ beforeEach(async () => {
 	await writeFile(join(project, "auth.json"), '{"fixture":"FAKE-SECRET"}');
 	await symlink(join(agentDir, "auth.json"), join(project, "notes.json"));
 	await symlink(agentDir, join(project, "profile"));
+	// The bash glob check reuses the profile dir of the last lookup; this one reads the new profile.
+	credentialWalkFilter(agentDir);
 });
 
 afterEach(async () => {
@@ -174,22 +176,75 @@ describe("lunR's saved logins", () => {
 		expect(await gate(toolName, withProfile(input, toolName))).toBeUndefined();
 	});
 
-	// Spellings bash reads as a saved login, each next to one that names another file.
+	// Spellings bash reads as a saved login, each next to one that names another file. Any `[...]`
+	// counts as 1 character, so `au[x]h.json` is refused too.
 	it.each<[refused: string, allowed: string]>([
 		['cat <profile>/"auth".json', 'cat <profile>/"auth".json.bak'],
 		["cat <profile>/a''uth.json", "cat <profile>/a''uth.md"],
 		["cat <profile>/auth\\.json", 'cat "<profile>/auth\\.json"'],
 		["cat <profile>/auth\\\n.json", "cat <profile>/auth\\\n.md"],
 		["cat <profile>/auth.js*", "cat <profile>/settings*.json"],
-		["cat <profile>/au[t]h.json", "cat <profile>/au[x]h.json"],
+		["cat <profile>/au[t]h.json", "cat <profile>/au[t]h.md"],
 		["cd <profile> && cat *.json", "cat *.json"],
-		["cat profile/mcp-*/*/tokens.json", "ls profile/settings.*"],
+		["cat <profile>/mcp-*/*/tokens.json", "ls <profile>/settings.*"],
+		["cat <profile>/au[[:lower:]]h.json", "cat <profile>/au[[:lower:]]h.md"],
+		["cat <profile>/au[]t]h.json", "cat <profile>/au[]t]h.md"],
+		["cat <profile>/./a*.json", "cat <profile>/./s*.md"],
+		["cat <profile>/s*/../a*h.json", "cat sub/*/../a*h.json"],
+		["cat <profile>/a*.json", 'cat <profile>/a"*".json'],
+		["cat <profile>/auth.jso?", "cat <profile>/auth.jso\\?"],
 		["cd -- <profile> && cat auth.json", "cd -- sub && cat auth.json"],
 		["pushd <profile> && cat auth.json", "pushd sub && cat auth.json"],
+		["pushd <profile> >/dev/null && cat auth.json", "pushd <profile> >/dev/null && popd && cat auth.json"],
+		["cd <profile> 2>/dev/null && cat auth.json", "cd sub 2>/dev/null && cat auth.json"],
+		["cd -P <profile> && cat auth.json", "cd -P sub && cat auth.json"],
+		["cat <<EOF\nx\nEOF\ncat <profile>/auth.json", "cat << 'EOF'\n<profile>/*.json\nEOF"],
 	])("refuses bash %j and allows %j", async (refused, allowed) => {
 		const reason = { block: true, reason: CREDENTIAL_BLOCK_REASON };
 		expect(await gate("bash", withProfile({ command: refused }, "bash"))).toEqual(reason);
 		expect(await gate("bash", withProfile({ command: allowed }, "bash"))).toBeUndefined();
+	});
+
+	// Code and text with glob characters, from the families of real agent commands. The scratch
+	// project sits next to the profile, so each of these takes the full glob path.
+	const ORDINARY = [
+		`python3 -c "print('x'[:-1])"`,
+		"python3 -c 'import sys; print(sys.argv[1:])' a b",
+		"python3 - <<'PYEOF'\nimport re\nprint(re.findall(r'[\\w-.]+', 'a-b.c'))\nlines = open('f').read().split('\\n')\nprint([l[:-1] for l in lines][0])\nPYEOF",
+		"cat > tally.py <<'EOF'\nfor line in open('x'):\n    print(line[:-1], line[::-1], line[2:5])\nEOF",
+		"cat >> test/app.test.js <<'EOF'\nassert.equal(headers[\"Content-Length\"], 3);\nconst a = []; f(a); g([1]);\nEOF",
+		'node -e "const a = []; f(a); g([1])"',
+		"node -e 'console.log(process.argv[2]?.split(\",\")[0])' x",
+		'grep -E "[a-Z]+" README.md',
+		"grep -rnE '[[:space:]]+$' src",
+		"sed -i 's/[[:space:]]*$//' notes.md",
+		"tr '[:upper:]' '[:lower:]' < in.txt",
+		'echo "value: [z-a]"',
+		`echo "${"*".repeat(40)} DONE ${"*".repeat(40)}"`,
+		`cat > gen.c <<'EOF'\n// Don't edit by hand.\n/${"*".repeat(60)}\n * generated\n ${"*".repeat(60)}/\nEOF`,
+		`ls a*a*a*a*a*a*a*a*b${"a".repeat(5000)}`,
+		"ls src/*.ts test/**/*.test.ts",
+		"find . -name '*.json' -not -path './node_modules/*'",
+		"git ls-files '*.json' | head",
+		"[ -f package.json ] && [[ -d src ]] && echo ok",
+		"jq '.items[] | .name' data.json",
+		"kubectl get pods -o jsonpath='{.items[*].metadata.name}'",
+		"curl -s 'https://example.com/api?q=1&page=2'",
+		"rg -n 'foo\\[bar\\]' src",
+		"awk '{print $1}' log.txt | sort | uniq -c | sort -rn | head -5",
+		'for f in src/*.ts; do wc -l "$f"; done',
+		"cd sub && ls *.json && cat *.md",
+		`cat > big.ts <<'EOF'\n${"const x = a[i * 2]?.b ?? c[j];\n".repeat(400)}EOF`,
+		"printf '%s\\n' {a,b}*.txt",
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: bash parameter syntax, not a template.
+		"echo $((3 * 4)) ${HOME:-x} $'a\\tb'",
+		"python3 -c \"import json,sys; d=json.load(open('package.json')); print(d['scripts']['test'])\"",
+	];
+
+	it("allows ordinary commands with glob characters in code, quickly", async () => {
+		const started = performance.now();
+		for (const command of ORDINARY) expect(await gate("bash", { command }), command).toBeUndefined();
+		expect(performance.now() - started).toBeLessThan(50);
 	});
 
 	// The scratch root stands in for the home directory, so `$HOME/agent` is the profile.
