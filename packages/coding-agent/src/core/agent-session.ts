@@ -2985,8 +2985,9 @@ export class AgentSession {
 		await this._resourceLoader.reload();
 		// lunr: reload reactivates every extension tool; the loader declares its deferred set again at the next prompt.
 		this._deferredToolNames = [];
+		const activeToolNamesBeforeReload = this.getActiveToolNames();
 		this._buildRuntime({
-			activeToolNames: this.getActiveToolNames(),
+			activeToolNames: activeToolNamesBeforeReload,
 			flagValues: previousFlagValues,
 			includeAllExtensionTools: true,
 		});
@@ -3001,6 +3002,15 @@ export class AgentSession {
 			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
 			await this.extendResourcesFromExtensions("reload");
 		}
+		// Tools an extension registers again in session_start (subagent_supervisor, mcp) were missing when
+		// the runtime was rebuilt, so they came back at the end of the list. Put every still active tool back
+		// where it was, so the first request after a reload sends the same tool list and keeps its cached prefix.
+		const activeToolNames = this.getActiveToolNames();
+		const restored = [
+			...activeToolNamesBeforeReload.filter((name) => activeToolNames.includes(name)),
+			...activeToolNames.filter((name) => !activeToolNamesBeforeReload.includes(name)),
+		];
+		if (restored.some((name, index) => name !== activeToolNames[index])) this.setActiveToolsByName(restored);
 	}
 
 	// =========================================================================
