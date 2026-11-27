@@ -15,7 +15,6 @@ import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
 import { measureStartup } from "../timings.ts";
-import { getTypeboxPrebundleEntry } from "../typebox-prebundle.ts";
 import type {
 	EntryRenderer,
 	Extension,
@@ -59,10 +58,15 @@ function getAliases(): Record<string, string> {
 	const __dirname = path.dirname(fileURLToPath(import.meta.url));
 	const packageIndex = path.resolve(__dirname, "../..", isNodeBundle ? "node-runtime/index.js" : "index.js");
 
-	// The prebuilt copy when cli-runtime installed it, so extensions share the CLI's typebox.
-	const typeboxEntry = getTypeboxPrebundleEntry(".") ?? require.resolve("typebox");
-	const typeboxCompileEntry = getTypeboxPrebundleEntry("./compile") ?? require.resolve("typebox/compile");
-	const typeboxValueEntry = getTypeboxPrebundleEntry("./value") ?? require.resolve("typebox/value");
+	// import.meta.resolve goes through the typebox resolve hook (core/typebox-prebundle.ts), so the
+	// aliases get whichever copy the CLI loads. require.resolve skips that hook on Node 22.
+	const resolveTypebox = (specifier: string): string =>
+		typeof import.meta.resolve === "function"
+			? fileURLToPath(import.meta.resolve(specifier))
+			: require.resolve(specifier);
+	const typeboxEntry = resolveTypebox("typebox");
+	const typeboxCompileEntry = resolveTypebox("typebox/compile");
+	const typeboxValueEntry = resolveTypebox("typebox/value");
 
 	const packagesRoot = path.resolve(__dirname, "../../../../");
 	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {

@@ -41,11 +41,32 @@ export async function buildTypeboxPrebundle(outDir) {
 		const target = relative(typeboxBuild, resolve(root, meta.entryPoint)).replaceAll("\\", "/");
 		files[target] = relative(outDir, resolve(root, output)).replaceAll("\\", "/");
 	}
-	const exports = Object.fromEntries(
-		Object.entries(exportsToTarget).map(([subpath, target]) => [subpath, files[target]]),
-	);
 	writeFileSync(
 		join(outDir, "manifest.json"),
-		`${JSON.stringify({ version: typeboxPackage.version, files, exports }, null, "\t")}\n`,
+		`${JSON.stringify({ version: typeboxPackage.version, files }, null, "\t")}\n`,
 	);
+}
+
+/**
+ * The chain of output files by which `entry`'s static imports reach an external typebox import, or
+ * undefined. cli-runtime must not have one: its static imports run before it installs the redirect,
+ * so they would load the installed typebox next to the prebuilt one.
+ */
+export function findStaticTypeboxImport(metafile, entry) {
+	const seen = new Set();
+	const visit = (output, chain) => {
+		if (seen.has(output)) return undefined;
+		seen.add(output);
+		for (const imported of metafile.outputs[output]?.imports ?? []) {
+			if (imported.kind !== "import-statement") continue;
+			if (imported.external) {
+				if (/^(@sinclair\/)?typebox(\/|$)/.test(imported.path)) return [...chain, output, imported.path];
+				continue;
+			}
+			const found = visit(imported.path, [...chain, output]);
+			if (found) return found;
+		}
+		return undefined;
+	};
+	return visit(entry, []);
 }
