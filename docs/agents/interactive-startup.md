@@ -28,8 +28,13 @@ The expensive implementations load when needed:
   A server command that fails to spawn with `ENOENT` is not tried again in that
   session; `/lsp-restart <language>` clears it.
 - MCP registers the proxy and cached direct-tool definitions without loading its
-  connection engine. Configured eager servers, keep-alive, and metadata discovery
-  retain their background behavior.
+  connection engine, zod or the MCP SDK. Keep zod-backed values out of
+  `pi-mcp-adapter/types.ts`: its registration importers would load zod (about
+  15 ms) in every print run. Configured eager servers, keep-alive, and metadata
+  discovery retain their background behavior. With any server configured, the TUI
+  imports the engine (an event-loop block of about 100 ms) when the first answer's
+  assistant message starts, while the model works and the user is not typing. After
+  the answer, the user types, and a block there drops keystrokes.
 - Subagents keep restoration and watchers at startup, but load the executor on
   first use.
 - Third-party extensions load jiti when needed. On Node, lunR imports jiti's
