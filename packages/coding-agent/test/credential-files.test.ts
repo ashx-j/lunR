@@ -58,10 +58,14 @@ function withProfile(input: Record<string, unknown>, toolName: string): Record<s
 				.replaceAll("<profile>", toolName === "bash" ? slashed : agentDir)
 				.replaceAll("<native>", agentDir)
 				.replaceAll("<url>", pathToFileURL(agentDir).href)
-				.replaceAll("<msys>", slashed.replace(/^([a-z]):/i, (_, drive: string) => `/${drive.toLowerCase()}`));
+				.replaceAll(
+					"<msys>",
+					slashed.replace(/^([a-z]):/i, (_, drive: string) => `/${drive.toLowerCase()}`),
+				);
 		}
 		if (Array.isArray(value)) return value.map(swap);
-		if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, swap(v)]));
+		if (value && typeof value === "object")
+			return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, swap(v)]));
 		return value;
 	};
 	return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, swap(value)]));
@@ -146,7 +150,10 @@ describe("lunR's saved logins", () => {
 		["bash", { command: `cat "${join("<native>", "auth.json")}"` }],
 		["bash", { command: "cat <msys>/subscriptions.json" }],
 	])("refuses %s %j", async (toolName, input) => {
-		expect(await gate(toolName, withProfile(input, toolName))).toEqual({ block: true, reason: CREDENTIAL_BLOCK_REASON });
+		expect(await gate(toolName, withProfile(input, toolName))).toEqual({
+			block: true,
+			reason: CREDENTIAL_BLOCK_REASON,
+		});
 	});
 
 	it.each<[string, Record<string, unknown>]>([
