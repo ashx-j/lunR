@@ -9,7 +9,7 @@ import {
 	type RollbackResult,
 	rollbackLastTurn,
 } from "../src/core/rollback.ts";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { handleRollbackCommand, type RollbackCommandHost } from "../src/modes/interactive/rollback-command.ts";
 
 vi.mock("../src/core/rollback.ts", async (importOriginal) => {
 	const original = await importOriginal<typeof import("../src/core/rollback.ts")>();
@@ -44,9 +44,6 @@ function context() {
 		showError: vi.fn(),
 	};
 }
-const proto = InteractiveMode.prototype as unknown as {
-	handleRollbackCommand(this: ReturnType<typeof context>): Promise<void>;
-};
 function result(overrides: Partial<RollbackResult> = {}): RollbackResult {
 	return {
 		restored: ["/scratch/file.txt"],
@@ -73,7 +70,7 @@ describe("InteractiveMode coordinated rollback", () => {
 			vi.mocked(rollbackLastTurn).mockReturnValue(
 				result({ restored, complete: false, failed: [{ path: "/scratch/locked.txt", error: "locked" }] }),
 			);
-			await proto.handleRollbackCommand.call(ctx);
+			await handleRollbackCommand(ctx as unknown as RollbackCommandHost);
 			expect(ctx.runtimeHost.fork).not.toHaveBeenCalled();
 			expect(commitRollbackTurn).not.toHaveBeenCalled();
 			expect(ctx.redoStack).toEqual(["old-leaf"]);
@@ -84,7 +81,7 @@ describe("InteractiveMode coordinated rollback", () => {
 
 	it("restores before forking and releases recovery only after a successful fork", async () => {
 		const ctx = context();
-		await proto.handleRollbackCommand.call(ctx);
+		await handleRollbackCommand(ctx as unknown as RollbackCommandHost);
 		expect(isRollbackEnabled).toHaveBeenCalledWith("original-session");
 		expect(rollbackLastTurn).toHaveBeenCalledWith("original-session", { deferCommit: true, targetUserId: "second" });
 		expect(ctx.runtimeHost.fork).toHaveBeenCalledWith("second", { position: "before" });
@@ -107,14 +104,14 @@ describe("InteractiveMode coordinated rollback", () => {
 			const ctx = context();
 			if (failure === "cancelled") ctx.runtimeHost.fork.mockResolvedValueOnce({ cancelled: true, selectedText: "" });
 			else ctx.runtimeHost.fork.mockRejectedValueOnce(new Error("fork failed"));
-			await proto.handleRollbackCommand.call(ctx);
+			await handleRollbackCommand(ctx as unknown as RollbackCommandHost);
 			expect(commitRollbackTurn).not.toHaveBeenCalled();
 			expect(ctx.showStatus).not.toHaveBeenCalled();
 			expect(ctx.redoStack).toEqual(["old-leaf"]);
 			vi.mocked(getRollbackTargetUserId).mockReturnValue("second");
 			vi.mocked(peekRollbackTurnsConsumed).mockReturnValueOnce(1);
 			vi.mocked(rollbackLastTurn).mockReturnValue(result({ restored: [] }));
-			await proto.handleRollbackCommand.call(ctx);
+			await handleRollbackCommand(ctx as unknown as RollbackCommandHost);
 			expect(ctx.runtimeHost.fork).toHaveBeenLastCalledWith("second", { position: "before" });
 			expect(commitRollbackTurn).toHaveBeenCalledTimes(1);
 		},
@@ -123,7 +120,7 @@ describe("InteractiveMode coordinated rollback", () => {
 	it("retains recovery without selecting another turn when its target is outside the branch", async () => {
 		vi.mocked(getRollbackTargetUserId).mockReturnValue("other-branch-user");
 		const ctx = context();
-		await proto.handleRollbackCommand.call(ctx);
+		await handleRollbackCommand(ctx as unknown as RollbackCommandHost);
 		expect(rollbackLastTurn).not.toHaveBeenCalled();
 		expect(ctx.runtimeHost.fork).not.toHaveBeenCalled();
 		expect(ctx.showWarning).toHaveBeenCalledWith(expect.stringContaining("another chat branch"));

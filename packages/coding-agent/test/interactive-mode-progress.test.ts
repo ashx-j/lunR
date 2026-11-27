@@ -17,6 +17,7 @@ vi.mock("../src/modes/interactive/components/settings-selector.ts", () => ({
 }));
 
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { type SettingsScreenHost, showSettingsSelector } from "../src/modes/interactive/settings-screen.ts";
 
 function createMode() {
 	let enabled = true;
@@ -49,12 +50,16 @@ function createMode() {
 		sessionManager: { getCwd: () => "/inert", getSessionId: () => "inert" },
 		themeController: { getTerminalTheme: () => undefined, disableAutoSync: vi.fn() },
 		countSubscriptions: async () => 0,
+		// /settings opens through the settings host's showSelector; other pickers use dialogs.
 		showSelector: (create: (done: () => void) => { component: Component; focus: Component }) => create(() => {}),
+		dialogs: {
+			showSelector: (create: (done: () => void) => { component: Component; focus: Component }) => create(() => {}),
+		},
 		pendingTools: new Map(),
 		defaultEditor: {},
 		clearStatusIndicator: vi.fn(),
 		stopSmoothStreaming: vi.fn(),
-		maybeAutoNameSession: vi.fn(),
+		autoNamer: { maybeAutoNameSession: vi.fn() },
 		showStatus: vi.fn(),
 		flushCompactionQueue: vi.fn(),
 		setThinkingAnimation: vi.fn(),
@@ -70,9 +75,6 @@ const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
 	this: ReturnType<typeof createMode>["mode"],
 	event: AgentSessionEvent,
 ) => Promise<void>;
-const showSettings = Reflect.get(InteractiveMode.prototype, "showSettingsSelector") as (
-	this: ReturnType<typeof createMode>["mode"],
-) => Promise<void>;
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -87,7 +89,7 @@ describe("InteractiveMode progress cleanup", () => {
 		try {
 			await handleEvent.call(mode, { type: "agent_start" });
 			expect(vi.getTimerCount()).toBe(1);
-			await showSettings.call(mode);
+			await showSettingsSelector(mode as unknown as SettingsScreenHost);
 			captured.callbacks?.onShowTerminalProgressChange(false);
 			expect(setShowTerminalProgress).toHaveBeenCalledWith(false);
 			expect(vi.getTimerCount()).toBe(0);

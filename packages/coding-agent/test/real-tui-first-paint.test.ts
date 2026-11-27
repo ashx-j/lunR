@@ -10,6 +10,8 @@ const terminal = vi.hoisted(() => ({
 	screen: undefined as import("../../tui/test/virtual-terminal.ts").VirtualTerminal | undefined,
 }));
 vi.mock("../src/utils/tools-manager.ts", () => ({ getToolPath: () => undefined, ensureTool: async () => undefined }));
+// /settings typed before hydration must open the screen once InteractiveMode is ready.
+vi.mock("../src/modes/interactive/settings-screen.ts", () => ({ showSettingsSelector: vi.fn(async () => {}) }));
 vi.mock("@earendil-works/pi-tui", async (original) => {
 	const actual = await original<typeof import("@earendil-works/pi-tui")>();
 	const { VirtualTerminal } = await import("../../tui/test/virtual-terminal.ts");
@@ -36,6 +38,7 @@ vi.mock("@earendil-works/pi-tui", async (original) => {
 	};
 });
 
+import { showSettingsSelector } from "../src/modes/interactive/settings-screen.ts";
 import { InteractiveView } from "../src/startup/interactive-view.ts";
 
 let view: InteractiveView | undefined;
@@ -263,13 +266,13 @@ describe("real TUI first paint", () => {
 			});
 			const internal = mode as unknown as {
 				editor: typeof view.editor;
-				showSettingsSelector(): Promise<void>;
 				maybeNotifyCliUpdate(): Promise<void>;
 				startPlanUsagePolling(): void;
 			};
 			vi.spyOn(internal, "maybeNotifyCliUpdate").mockResolvedValue();
 			vi.spyOn(internal, "startPlanUsagePolling").mockImplementation(() => {});
-			const settings = vi.spyOn(internal, "showSettingsSelector").mockResolvedValue();
+			const settings = vi.mocked(showSettingsSelector);
+			settings.mockClear();
 			const prompt = vi.spyOn(session, "prompt");
 			// Accidental console output must move the emulator cursor just as it would in a real terminal.
 			const consoleLog = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import * as rollback from "../src/core/rollback.ts";
 import type { SettingsManager } from "../src/core/settings-manager.ts";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { handleRollbackCommand, type RollbackCommandHost } from "../src/modes/interactive/rollback-command.ts";
 
 vi.mock("node:os", async (original) => {
 	const os = await original<typeof import("node:os")>();
@@ -56,9 +56,6 @@ describe("coordinated recovery preservation", () => {
 				showStatus: vi.fn(),
 				showError: vi.fn(),
 			};
-			const handle = InteractiveMode.prototype as unknown as {
-				handleRollbackCommand(this: typeof ctx): Promise<void>;
-			};
 			try {
 				rollback.initRollback(sm, sid);
 				const a = join(cwd, "a.txt");
@@ -70,7 +67,7 @@ describe("coordinated recovery preservation", () => {
 					if (file === a) throw new Error("locked a");
 					return realFs.writeFileSync(file, ...args);
 				});
-				await handle.handleRollbackCommand.call(ctx);
+				await handleRollbackCommand(ctx as unknown as RollbackCommandHost);
 				expect(forks).toEqual([]);
 				vi.mocked(fs.writeFileSync).mockImplementation(realFs.writeFileSync);
 				const b = join(cwd, "b.txt");
@@ -85,7 +82,7 @@ describe("coordinated recovery preservation", () => {
 				}
 				// Restart also retains the refusal after an otherwise unpersisted chat-only turn.
 				rollback.initRollback(sm, sid);
-				await handle.handleRollbackCommand.call(ctx);
+				await handleRollbackCommand(ctx as unknown as RollbackCommandHost);
 				if (newer === "none") {
 					expect(forks).toEqual(["user-a"]);
 					expect(branch).toEqual([]);
@@ -104,7 +101,7 @@ describe("coordinated recovery preservation", () => {
 					branch.push({ type: "message", id: "user-c", message: { role: "user" } });
 					rollback.beginTurn(cwd, sid);
 					for (let attempt = 0; attempt < 2; attempt++) {
-						await handle.handleRollbackCommand.call(ctx);
+						await handleRollbackCommand(ctx as unknown as RollbackCommandHost);
 						expect(forks).toEqual([]);
 						expect(branch.map((entry) => entry.id)).toEqual(["user-a", "user-b", "user-c"]);
 						expect(fs.readFileSync(a, "utf8")).toBe("a changed");

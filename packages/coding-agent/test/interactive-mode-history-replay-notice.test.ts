@@ -4,7 +4,7 @@ import {
 	CLAUDE_CODE_HISTORY_REPLAYED_NOTE,
 } from "@earendil-works/pi-ai";
 import { describe, expect, test, vi } from "vitest";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { type ChatHistoryHost, maybeShowHistoryReplayNotice } from "../src/modes/interactive/chat-history.ts";
 
 function reply(replayed: boolean): AssistantMessage {
 	return {
@@ -31,11 +31,10 @@ describe("InteractiveMode history replay notice", () => {
 	test("warns each time a session crosses into the uncached replay, not on every reply after", () => {
 		const entries: { type: "message"; message: AssistantMessage }[] = [];
 		const fakeThis = { sessionManager: { getEntries: () => entries }, showWarning: vi.fn() };
-		const notice = InteractiveMode.prototype["maybeShowHistoryReplayNotice"];
 		// Each reply is checked before it is persisted, like message_end.
 		for (const replayed of [false, true, true, false, true]) {
 			const message = reply(replayed);
-			notice.call(fakeThis, message);
+			maybeShowHistoryReplayNotice(fakeThis as unknown as ChatHistoryHost, message);
 			entries.push({ type: "message", message });
 		}
 

@@ -1,4 +1,3 @@
-import { collectUsageRequests, usageTokens } from "../../core/usage-accounting.ts";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -8,25 +7,13 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { CLAUDE_CODE_HISTORY_REPLAYED_NOTE, claudeCodeHistoryReplayed } from "@earendil-works/pi-ai";
-import {
-	type Api,
-	type AssistantMessage,
-	getSupportedThinkingLevels,
-	type ImageContent,
-	type Message,
-	type Model,
-} from "@earendil-works/pi-ai/compat";
+import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
 	EditorComponent,
-	Keybinding,
 	KeyId,
 	MarkdownTheme,
-	OverlayHandle,
-	OverlayOptions,
 	SlashCommand,
 } from "@earendil-works/pi-tui";
 import {
@@ -38,7 +25,6 @@ import {
 	formatImageMarker,
 	fuzzyFilter,
 	isFocusable,
-	Markdown,
 	matchesKey,
 	ProcessTerminal,
 	Spacer,
@@ -49,79 +35,37 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { spawn } from "child_process";
-import {
-	APP_NAME,
-	APP_TITLE,
-	appendDebugLog,
-	CONFIG_DIR_NAME,
-	getAgentDir,
-	getDebugLogPath,
-	VERSION,
-} from "../../config.ts";
-import {
-	type AgentSession,
-	type AgentSessionEvent,
-	NothingToCompactError,
-	parseSkillBlock,
-} from "../../core/agent-session.ts";
-import {
-	type AgentSessionRuntime,
-	SessionImportFileNotFoundError,
-	SIGNAL_DISPOSE_LIMIT_MS,
-} from "../../core/agent-session-runtime.ts";
+import { APP_NAME, APP_TITLE, CONFIG_DIR_NAME, getAgentDir, getDebugLogPath, VERSION } from "../../config.ts";
+import { type AgentSession, type AgentSessionEvent, NothingToCompactError } from "../../core/agent-session.ts";
+import { type AgentSessionRuntime, SIGNAL_DISPOSE_LIMIT_MS } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
-import {
-	CACHE_TTL_MS,
-	type CacheMiss,
-	collectCacheMisses,
-	computeCacheWaste,
-	detectCacheMiss,
-} from "../../core/cache-stats.ts";
 import { startCatalogRefreshPolling } from "../../core/catalog-refresh-polling.ts";
-import { computeContextBreakdown } from "../../core/context-breakdown.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
-	ExtensionCommandContext,
 	ExtensionContext,
 	ExtensionRunner,
 	ExtensionUIContext,
-	ExtensionUIDialogOptions,
-	ExtensionWidgetOptions,
 	InlineExtension,
 	ProjectTrustContext,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { globalBridge } from "../../core/global-bridge.ts";
-import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
-import { detectInjectedPrompt } from "../../core/injected-prompt.ts";
+import { configureHttpDispatcher } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
-import { getGlobalInstructionsPath, getModelInstructionsPath } from "../../core/model-instructions.ts";
-import { getModelTiersBridge } from "../../core/model-tiers.ts";
 import { registerPermissionModeBridge } from "../../core/permission-mode.ts";
 import { registerPermissionModeControlBridge } from "../../core/permission-mode-control.ts";
-import { type ApprovalRequest, type ApprovalResponse, registerApprovalHandler } from "../../core/permissions.ts";
+import { registerApprovalHandler } from "../../core/permissions.ts";
 import * as processRegistry from "../../core/process-registry.ts";
 import {
 	captureTreeChanges,
 	clearRollback,
-	commitRollbackTurn,
-	getRollbackRecoveryBlockReason,
-	getRollbackTargetUserId,
 	initRollback,
-	isRollbackEnabled,
-	isRollbackSessionForceEnabled,
-	migrateRollbackSession,
-	peekRollbackTurnsConsumed,
-	type RollbackResult,
 	beginTurn as rollbackBeginTurn,
-	rollbackLastTurn,
 	setRollbackWarningHandler,
 } from "../../core/rollback.ts";
-import { getSearchCuratorSetting, setSearchCuratorSetting } from "../../core/search-curator.ts";
-import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import {
 	cancelSessionHandoff,
 	markSessionHandoff,
@@ -129,17 +73,15 @@ import {
 	registerTransferHandler,
 	requestSessionTransfer,
 } from "../../core/session-handoff.ts";
-import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { getSubagentCancellation, SubagentEscapeSequence } from "../../core/subagent-cancellation.ts";
 import { sweepStaleTempFiles } from "../../core/temp-files.ts";
 import { time } from "../../core/timings.ts";
-import { notifyTodosEnabledChanged } from "../../core/todo-settings.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { checkForUpdate, markUpdateNotified } from "../../core/update-check.ts";
-import { getAllPlanUsageResults, getUsageServiceBridge } from "../../core/usage-service.ts";
+import { getUsageServiceBridge } from "../../core/usage-service.ts";
 import type { InteractiveView } from "../../startup/interactive-view.ts";
 import { markStartupMilestone } from "../../startup/startup-milestones.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
@@ -148,23 +90,24 @@ import { parseGitUrl } from "../../utils/git.ts";
 import { processImage } from "../../utils/image-process.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool, getToolPath } from "../../utils/tools-manager.ts";
+import { type ApprovalDialogHost, showPlanApprovalDialog, showToolApprovalDialog } from "./approval-dialogs.ts";
+import {
+	addCustomEntryToChat,
+	addMessageToChat,
+	type ChatHistoryHost,
+	maybeShowCacheMissNotice,
+	maybeShowHistoryReplayNotice,
+	renderInitialMessages,
+	renderSessionEntries,
+} from "./chat-history.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BootScreenComponent, type BootScreenRow } from "./components/boot-screen.ts";
-import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
-import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
-import { renderContextBox } from "./components/context-view.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
-import { CustomEntryComponent } from "./components/custom-entry.ts";
-import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
-import { ExtensionEditorComponent } from "./components/extension-editor.ts";
-import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-import { FooterComponent, formatTokens } from "./components/footer.ts";
-import { InjectedPromptMessageComponent } from "./components/injected-prompt-message.ts";
+import { FooterComponent } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyText } from "./components/keybinding-hints.ts";
-import { ModelSelectorComponent } from "./components/model-selector.ts";
 import { type AuthSelectorProvider, formatAuthSelectorProviderType } from "./components/oauth-selector.ts";
 import {
 	buildOnboardingOptions,
@@ -176,13 +119,8 @@ import {
 	shouldShowOnboarding,
 	WELCOME_TEXT,
 } from "./components/onboarding.ts";
-import { PlanMessageComponent } from "./components/plan-message.ts";
 import { ProcessesSelectorComponent } from "./components/processes-selector.ts";
-import { SessionSelectorComponent } from "./components/session-selector.ts";
-import { SettingsSelectorComponent } from "./components/settings-selector.ts";
-import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
-	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
 	IdleStatus,
 	RetryStatusIndicator,
@@ -191,17 +129,11 @@ import {
 } from "./components/status-indicator.ts";
 import { type ThinkingRunTiming, updateThinkingRunTimings } from "./components/thinking-summary.ts";
 import { applySameToolGrouping, applyToolRunSpacing, ToolExecutionComponent } from "./components/tool-execution.ts";
-import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
-import { renderUsageBox } from "./components/usage-view.ts";
-import { UserMessageComponent } from "./components/user-message.ts";
-import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { ExitConfirmation } from "./exit-confirmation.ts";
-import {
-	orderedExtensionWidgets,
-	replaceExtensionWidget,
-	widgetSeparatorNeedsSpacer,
-} from "./extension-widget-order.ts";
+import { ExtensionDialogs, type ExtensionDialogsHost } from "./extension-dialogs.ts";
+import { ExtensionWidgets, type ExtensionWidgetsHost } from "./extension-widgets.ts";
+import { type HelpCommandHost, handleHelpCommand, handleHotkeysCommand } from "./help-commands.ts";
 import { type LoadedResourcesOptions, showLoadedResources } from "./loaded-resources.ts";
 import {
 	getLoginProviderOptions,
@@ -212,17 +144,35 @@ import {
 	showOAuthSelector,
 } from "./login-flow.ts";
 import {
-	countSubscriptions,
 	getModelCandidates,
 	handleModelCommand,
 	handleRefreshCommand,
-	listSubscriptionRows,
 	type ModelCommandHost,
 	showModelSelector,
 	showModelsSelector,
 } from "./model-commands.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { type PermissionControllerHost, PermissionModeController } from "./permission-controller.ts";
+import { handleRollbackCommand, type RollbackCommandHost } from "./rollback-command.ts";
+import { handleExportCommand, handleImportCommand, type SessionFileCommandHost } from "./session-files.ts";
+import {
+	handleNameCommand,
+	SessionAutoNamer,
+	type SessionAutoNamerHost,
+	type SessionNameHost,
+} from "./session-naming.ts";
+import {
+	handleCloneCommand,
+	handleEditCommand,
+	handleRedoCommand,
+	handleResumeSession,
+	handleUndoCommand,
+	type SessionNavigationHost,
+	showSessionSelector,
+	showTreeSelector,
+	showUserMessageSelector,
+} from "./session-navigation.ts";
+import { type SettingsScreenHost, showSettingsSelector } from "./settings-screen.ts";
 import { wrapSkillTagAutocomplete } from "./skill-tag-autocomplete.ts";
 import {
 	findArgumentlessSlashCommand,
@@ -231,7 +181,6 @@ import {
 	type SlashCommandHost,
 } from "./slash-dispatch.ts";
 import {
-	buildHelpLines,
 	findUnknownSlashCommand,
 	formatArgumentlessSlashCommandStatus,
 	formatUnknownSlashCommandStatus,
@@ -247,7 +196,6 @@ import {
 } from "./smooth-streaming.ts";
 import { logStrayOutput } from "./stray-output.ts";
 import {
-	getAvailableThemes,
 	getAvailableThemesWithPaths,
 	getEditorTheme,
 	getMarkdownTheme,
@@ -260,6 +208,12 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
+import {
+	handleContextCommand,
+	handleSessionCommand,
+	handleUsageCommand,
+	type UsageCommandHost,
+} from "./usage-commands.ts";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
@@ -280,12 +234,6 @@ type QueuedUserInput = {
 	text: string;
 	images?: ImageContent[];
 };
-
-type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }>;
-
-function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
-	return "type" in item && item.type === "custom";
-}
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
 
@@ -508,9 +456,6 @@ export class InteractiveMode {
 	// new user message, never persisted — undone turns reappear after restart)
 	private redoStack: string[] = [];
 
-	// lunr: one-shot guard for the session auto-name LLM call (first assistant response)
-	private autoNameTriggered = false;
-
 	// Track current bash execution component
 	private bashComponent: BashExecutionComponent | undefined = undefined;
 
@@ -531,16 +476,10 @@ export class InteractiveMode {
 	private shutdownRequested = false;
 
 	// Extension UI state
-	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
-	private extensionInput: ExtensionInputComponent | undefined = undefined;
-	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
-	// Extension widgets (components rendered above/below the editor)
-	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
-	private extensionWidgetsBelow = new Map<string, Component & { dispose?(): void }>();
-	private widgetContainerAbove!: Container;
-	private widgetContainerBelow!: Container;
+	// The extension widget areas above and below the editor; see extension-widgets.ts.
+	private readonly widgets = new ExtensionWidgets(this.createExtensionWidgetsHost());
 
 	// Custom footer from extension (undefined = use built-in footer)
 	private customFooter: (Component & { dispose?(): void }) | undefined = undefined;
@@ -563,6 +502,12 @@ export class InteractiveMode {
 	private startupReadyPromise?: Promise<void>;
 	private startupFeatureError?: Error;
 	private deferredBuiltinAttachPromise: Promise<void> | undefined;
+	// The hosts below are built in field initializers, before the constructor assigns `ui`,
+	// `chatContainer` and the editor, so every member that reads a field must be a getter.
+	// Owns the dialog shown in place of the editor; see extension-dialogs.ts.
+	private readonly dialogs = new ExtensionDialogs(this.createExtensionDialogsHost());
+	// Passed to chat-history.ts, which draws the session's messages into the chat.
+	private readonly chatHistoryHost: ChatHistoryHost = this.createChatHistoryHost();
 	// Passed to the login-flow.ts functions so /login reaches this UI and the current session.
 	private readonly loginFlowHost: LoginFlowHost = this.createLoginFlowHost();
 	// Passed to the slash-dispatch.ts handlers when a builtin slash command is submitted.
@@ -570,6 +515,20 @@ export class InteractiveMode {
 	// Owns permission mode changes and their history; see permission-controller.ts.
 	private readonly permissions = new PermissionModeController(this.createPermissionControllerHost());
 	private readonly modelCommandHost: ModelCommandHost = this.createModelCommandHost();
+	// Passed to the usage-commands.ts and help-commands.ts views.
+	private readonly chatViewHost: UsageCommandHost & HelpCommandHost = this.createChatViewHost();
+	// Passed to the session-navigation.ts functions for /tree, /fork, /clone, /resume, /undo, /edit and /redo.
+	private readonly sessionNavigationHost: SessionNavigationHost = this.createSessionNavigationHost();
+	// Passed to the session-files.ts and session-naming.ts functions for /export, /import and /name.
+	private readonly sessionCommandHost: SessionFileCommandHost & SessionNameHost & SessionAutoNamerHost =
+		this.createSessionCommandHost();
+	private readonly autoNamer = new SessionAutoNamer(this.sessionCommandHost);
+	// Passed to the approval-dialogs.ts questions the approval handler in `init` asks.
+	private readonly approvalDialogHost: ApprovalDialogHost = this.createApprovalDialogHost();
+	// Passed to rollback-command.ts for /rollback.
+	private readonly rollbackCommandHost: RollbackCommandHost = this.createRollbackCommandHost();
+	// Passed to settings-screen.ts for /settings.
+	private readonly settingsScreenHost: SettingsScreenHost = this.createSettingsScreenHost();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -634,8 +593,6 @@ export class InteractiveMode {
 		this.statusContainer = options.startupView?.statusContainer ?? new Container();
 		// Share the startup view's window so a Ctrl+D pressed just before hydration still counts.
 		this.exitConfirmation = options.startupView?.exitConfirmation ?? new ExitConfirmation();
-		this.widgetContainerAbove = new Container();
-		this.widgetContainerBelow = new Container();
 		this.keybindings = options.startupView?.keybindings ?? KeybindingsManager.create();
 		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
@@ -848,13 +805,13 @@ export class InteractiveMode {
 		this.ui.addChild(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
-		this.renderWidgets(); // Initialize with default spacer
-		this.ui.addChild(this.widgetContainerAbove);
+		this.widgets.render(); // Initialize with default spacer
+		this.ui.addChild(this.widgets.above);
 		this.ui.addChild(this.editorContainer);
-		this.ui.addChild(this.widgetContainerBelow);
+		this.ui.addChild(this.widgets.below);
 		this.ui.addChild(this.customFooter ?? this.footer);
 		this.ui.setFocus(this.editor);
-		this.ui.pinFrom(this.widgetContainerAbove);
+		this.ui.pinFrom(this.widgets.above);
 
 		this.setupKeyHandlers();
 		if (!this.options.startupView) this.setupEditorSubmitHandler();
@@ -872,11 +829,11 @@ export class InteractiveMode {
 		registerApprovalHandler(async (req) => {
 			this.notifyAttention("input");
 			if (req.kind === "large-subagent-launch" || req.kind === "tool") {
-				return this.showToolApprovalDialog(req);
+				return showToolApprovalDialog(this.approvalDialogHost, req);
 			}
 			// Approval restores writing access before the model's next tool call.
 			if (req.kind === "plan") {
-				const resp = await this.showPlanApprovalDialog(req.detail);
+				const resp = await showPlanApprovalDialog(this.approvalDialogHost, req.detail);
 				const decision = typeof resp === "string" ? resp : resp.decision;
 				if (decision !== "reject") {
 					const target = this.permissions.restoreTargetAfterPlan();
@@ -918,7 +875,7 @@ export class InteractiveMode {
 		// MCP/LSP/web/intercom attach in the background so the editor is usable.
 		await this.rebindCurrentSession();
 		time("rebindCurrentSession");
-		this.renderInitialMessages();
+		renderInitialMessages(this.chatHistoryHost);
 		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
 			const modelList = this.session.scopedModels
 				.map((sm) => {
@@ -1171,7 +1128,7 @@ export class InteractiveMode {
 	// Each onboarding choice hands off to the /login flow; a login then opens /model if no model is set.
 	private showOnboarding(): void {
 		const options = buildOnboardingOptions(getLoginProviderOptions(this.session.modelRuntime));
-		this.showSelector((done) => {
+		this.dialogs.showSelector((done) => {
 			const onboarding = new OnboardingComponent(options, WELCOME_TEXT, (choice) => {
 				done();
 				if (choice === "skip") {
@@ -1199,7 +1156,7 @@ export class InteractiveMode {
 		if (!shouldAskPermissionMode({ onboardingShown: this.onboardingShown, savedDefault })) return;
 		this.onboardingShown = false;
 		const choice = await new Promise<PermissionModeChoice>((resolve) => {
-			this.showSelector((done) => {
+			this.dialogs.showSelector((done) => {
 				const step = new OnboardingComponent<PermissionModeChoice>(
 					PERMISSION_MODE_OPTIONS,
 					permissionModeStepText(this.session.permissionMode),
@@ -1390,7 +1347,7 @@ export class InteractiveMode {
 					}
 
 					this.clearChatContainer();
-					this.renderInitialMessages();
+					renderInitialMessages(this.chatHistoryHost);
 					if (result.editorText && !this.editor.getText().trim()) {
 						this.restoreEditorFromTreeResult(result);
 					}
@@ -1399,7 +1356,7 @@ export class InteractiveMode {
 					return { cancelled: false };
 				},
 				switchSession: async (sessionPath, options) => {
-					return this.handleResumeSession(sessionPath, options);
+					return handleResumeSession(this.sessionNavigationHost, sessionPath, options);
 				},
 				reload: async () => {
 					await this.handleReloadCommand();
@@ -1523,7 +1480,7 @@ export class InteractiveMode {
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.pendingTools.clear();
-		this.renderInitialMessages();
+		renderInitialMessages(this.chatHistoryHost);
 	}
 
 	/**
@@ -1658,61 +1615,13 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	/**
-	 * Set an extension widget (string array or custom component).
-	 */
-	private setExtensionWidget(
-		key: string,
-		content: string[] | ((tui: TUI, thm: Theme) => Component & { dispose?(): void }) | undefined,
-		options?: ExtensionWidgetOptions,
-	): void {
-		const placement = options?.placement ?? "aboveEditor";
-		let component: (Component & { dispose?(): void }) | undefined;
-
-		if (Array.isArray(content)) {
-			const container = new Container();
-			for (const line of content.slice(0, InteractiveMode.MAX_WIDGET_LINES)) {
-				container.addChild(new Text(line, 1, 0));
-			}
-			if (content.length > InteractiveMode.MAX_WIDGET_LINES) {
-				container.addChild(new Text(theme.fg("muted", "... (widget truncated)"), 1, 0));
-			}
-			component = container;
-		} else if (content) {
-			component = content(this.ui, theme);
-		}
-
-		replaceExtensionWidget(this.extensionWidgetsAbove, this.extensionWidgetsBelow, key, component, placement);
-		this.renderWidgets();
-	}
-
-	private clearExtensionWidgets(): void {
-		for (const widget of this.extensionWidgetsAbove.values()) {
-			widget.dispose?.();
-		}
-		for (const widget of this.extensionWidgetsBelow.values()) {
-			widget.dispose?.();
-		}
-		this.extensionWidgetsAbove.clear();
-		this.extensionWidgetsBelow.clear();
-		this.renderWidgets();
-	}
-
 	private resetExtensionUI(): void {
-		if (this.extensionSelector) {
-			this.hideExtensionSelector();
-		}
-		if (this.extensionInput) {
-			this.hideExtensionInput();
-		}
-		if (this.extensionEditor) {
-			this.hideExtensionEditor();
-		}
+		this.dialogs.hideAll();
 		this.ui.hideOverlay();
 		this.clearExtensionTerminalInputListeners();
 		this.setExtensionFooter(undefined);
 		this.setExtensionHeader(undefined);
-		this.clearExtensionWidgets();
+		this.widgets.clear();
 		this.footerDataProvider.clearExtensionStatuses();
 		this.footer.invalidate();
 		this.autocompleteProviderWrappers = [];
@@ -1729,48 +1638,6 @@ export class InteractiveMode {
 			);
 		}
 		this.setHiddenThinkingLabel();
-	}
-
-	// Maximum total widget lines to prevent viewport overflow
-	private static readonly MAX_WIDGET_LINES = 10;
-
-	/**
-	 * Render all extension widgets to the widget container.
-	 */
-	private renderWidgets(): void {
-		if (!this.widgetContainerAbove || !this.widgetContainerBelow) return;
-		this.renderWidgetContainer(this.widgetContainerAbove, this.extensionWidgetsAbove, true, true);
-		this.renderWidgetContainer(this.widgetContainerBelow, this.extensionWidgetsBelow, false, false);
-		this.ui.requestRender();
-	}
-
-	private renderWidgetContainer(
-		container: Container,
-		widgets: Map<string, Component & { dispose?(): void }>,
-		spacerWhenEmpty: boolean,
-		leadingSpacer: boolean,
-	): void {
-		container.clear();
-
-		if (widgets.size === 0) {
-			if (spacerWhenEmpty) {
-				container.addChild(new Spacer(1));
-			}
-			return;
-		}
-
-		if (leadingSpacer) {
-			container.addChild(new Spacer(1));
-		}
-		let previousKey: string | undefined;
-		for (const [key, component] of orderedExtensionWidgets(widgets)) {
-			if (previousKey !== undefined) {
-				if (widgetSeparatorNeedsSpacer(previousKey, key)) container.addChild(new Spacer(1));
-				container.addChild(new DynamicBorder((s) => theme.fg("dim", s)));
-			}
-			previousKey = key;
-			container.addChild(component);
-		}
 	}
 
 	/**
@@ -1890,17 +1757,17 @@ export class InteractiveMode {
 		return {
 			select: (title, options, opts) => {
 				this.notifyAttentionIfRunning();
-				return this.showExtensionSelector(title, options, opts);
+				return this.dialogs.select(title, options, opts);
 			},
 			confirm: (title, message, opts) => {
 				this.notifyAttentionIfRunning();
-				return this.showExtensionConfirm(title, message, opts);
+				return this.dialogs.confirm(title, message, opts);
 			},
 			input: (title, placeholder, opts) => {
 				this.notifyAttentionIfRunning();
-				return this.showExtensionInput(title, placeholder, opts);
+				return this.dialogs.input(title, placeholder, opts);
 			},
-			notify: (message, type) => this.showExtensionNotify(message, type),
+			notify: (message, type) => this.dialogs.notify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
 			setWorkingMessage: (message) => {
@@ -1912,19 +1779,19 @@ export class InteractiveMode {
 			setWorkingVisible: (visible) => this.setWorkingVisible(visible),
 			setWorkingIndicator: (options) => this.setWorkingIndicator(options),
 			setHiddenThinkingLabel: (label) => this.setHiddenThinkingLabel(label),
-			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
+			setWidget: (key, content, options) => this.widgets.set(key, content, options),
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => {
 				if (!this.isShuttingDown) this.ui.terminal.setTitle(title);
 			},
-			custom: (factory, options) => this.showExtensionCustom(factory, options),
+			custom: (factory, options) => this.dialogs.custom(factory, options),
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
 			setEditorText: (text) => this.editor.setText(text),
 			getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),
 			editor: (title, prefill) => {
 				this.notifyAttentionIfRunning();
-				return this.showExtensionEditor(title, prefill);
+				return this.dialogs.editText(title, prefill);
 			},
 			addAutocompleteProvider: (factory) => {
 				this.autocompleteProviderWrappers.push(factory);
@@ -1952,177 +1819,6 @@ export class InteractiveMode {
 			getToolsExpanded: () => this.toolOutputExpanded,
 			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
 		};
-	}
-
-	/**
-	 * Show a selector for extensions.
-	 */
-	private showExtensionSelector(
-		title: string,
-		options: string[],
-		opts?: ExtensionUIDialogOptions,
-	): Promise<string | undefined> {
-		return new Promise((resolve) => {
-			if (opts?.signal?.aborted) {
-				resolve(undefined);
-				return;
-			}
-
-			const onAbort = () => {
-				this.hideExtensionSelector();
-				resolve(undefined);
-			};
-			opts?.signal?.addEventListener("abort", onAbort, { once: true });
-
-			this.extensionSelector = new ExtensionSelectorComponent(
-				title,
-				options,
-				(option) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(option);
-				},
-				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(undefined);
-				},
-				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
-			);
-			if (opts?.initialIndex !== undefined) this.extensionSelector.setSelectedIndex(opts.initialIndex);
-
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionSelector);
-			this.ui.setFocus(this.extensionSelector);
-			this.ui.requestRender();
-		});
-	}
-
-	/**
-	 * Hide the extension selector.
-	 */
-	private hideExtensionSelector(): void {
-		this.extensionSelector?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
-		this.extensionSelector = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
-	}
-
-	/**
-	 * Show a confirmation dialog for extensions.
-	 */
-	private async showExtensionConfirm(
-		title: string,
-		message: string,
-		opts?: ExtensionUIDialogOptions,
-	): Promise<boolean> {
-		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts);
-		return result === "Yes";
-	}
-
-	private async promptForMissingSessionCwd(error: MissingSessionCwdError): Promise<string | undefined> {
-		const confirmed = await this.showExtensionConfirm(
-			"Session cwd not found",
-			formatMissingSessionCwdPrompt(error.issue),
-		);
-		return confirmed ? error.issue.fallbackCwd : undefined;
-	}
-
-	/**
-	 * Show a text input for extensions.
-	 */
-	private showExtensionInput(
-		title: string,
-		placeholder?: string,
-		opts?: ExtensionUIDialogOptions,
-	): Promise<string | undefined> {
-		return new Promise((resolve) => {
-			if (opts?.signal?.aborted) {
-				resolve(undefined);
-				return;
-			}
-
-			const onAbort = () => {
-				this.hideExtensionInput();
-				resolve(undefined);
-			};
-			opts?.signal?.addEventListener("abort", onAbort, { once: true });
-
-			this.extensionInput = new ExtensionInputComponent(
-				title,
-				placeholder,
-				(value) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionInput();
-					resolve(value);
-				},
-				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionInput();
-					resolve(undefined);
-				},
-				{ tui: this.ui, timeout: opts?.timeout },
-			);
-
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionInput);
-			this.ui.setFocus(this.extensionInput);
-			this.ui.requestRender();
-		});
-	}
-
-	/**
-	 * Hide the extension input.
-	 */
-	private hideExtensionInput(): void {
-		this.extensionInput?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
-		this.extensionInput = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
-	}
-
-	/**
-	 * Show a multi-line editor for extensions (with Ctrl+G support).
-	 */
-	private showExtensionEditor(title: string, prefill?: string): Promise<string | undefined> {
-		return new Promise((resolve) => {
-			this.extensionEditor = new ExtensionEditorComponent(
-				this.ui,
-				this.keybindings,
-				title,
-				prefill,
-				(value) => {
-					this.hideExtensionEditor();
-					resolve(value);
-				},
-				() => {
-					this.hideExtensionEditor();
-					resolve(undefined);
-				},
-				undefined,
-				this.settingsManager.getExternalEditorCommand(),
-			);
-
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionEditor);
-			this.ui.setFocus(this.extensionEditor);
-			this.ui.requestRender();
-		});
-	}
-
-	/**
-	 * Hide the extension editor.
-	 */
-	private hideExtensionEditor(): void {
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
-		this.extensionEditor = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
 	}
 
 	/**
@@ -2203,98 +1899,6 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	/**
-	 * Show a notification for extensions.
-	 */
-	private showExtensionNotify(message: string, type?: "info" | "warning" | "error"): void {
-		if (type === "error") {
-			this.showError(message);
-		} else if (type === "warning") {
-			this.showWarning(message);
-		} else {
-			this.showStatus(message);
-		}
-	}
-
-	/** Show a custom component with keyboard focus. Overlay mode renders on top of existing content. */
-	private async showExtensionCustom<T>(
-		factory: (
-			tui: TUI,
-			theme: Theme,
-			keybindings: KeybindingsManager,
-			done: (result: T) => void,
-		) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
-		options?: {
-			overlay?: boolean;
-			overlayOptions?: OverlayOptions | (() => OverlayOptions);
-			onHandle?: (handle: OverlayHandle) => void;
-		},
-	): Promise<T> {
-		const savedText = this.editor.getText();
-		const isOverlay = options?.overlay ?? false;
-
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.editor.setText(savedText);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
-		return new Promise((resolve, reject) => {
-			let component: Component & { dispose?(): void };
-			let closed = false;
-
-			const close = (result: T) => {
-				if (closed) return;
-				closed = true;
-				if (isOverlay) this.ui.hideOverlay();
-				else restoreEditor();
-				// Note: both branches above already call requestRender
-				resolve(result);
-				try {
-					component?.dispose?.();
-				} catch {
-					/* ignore dispose errors */
-				}
-			};
-
-			Promise.resolve(factory(this.ui, theme, this.keybindings, close))
-				.then((c) => {
-					if (closed) return;
-					component = c;
-					if (isOverlay) {
-						// Resolve overlay options - can be static or dynamic function
-						const resolveOptions = (): OverlayOptions | undefined => {
-							if (options?.overlayOptions) {
-								const opts =
-									typeof options.overlayOptions === "function"
-										? options.overlayOptions()
-										: options.overlayOptions;
-								return opts;
-							}
-							// Fallback: use component's width property if available
-							const w = (component as { width?: number }).width;
-							return w ? { width: w } : undefined;
-						};
-						const handle = this.ui.showOverlay(component, resolveOptions());
-						// Expose handle to caller for visibility control
-						options?.onHandle?.(handle);
-					} else {
-						this.editorContainer.clear();
-						this.editorContainer.addChild(component);
-						this.ui.setFocus(component);
-						this.ui.requestRender();
-					}
-				})
-				.catch((err) => {
-					if (closed) return;
-					if (!isOverlay) restoreEditor();
-					reject(err);
-				});
-		});
-	}
-
 	/** The TUI for a launch without a startup view, which already made its own the same way. */
 	private createTui(): TUI {
 		const terminal = new ProcessTerminal();
@@ -2370,9 +1974,9 @@ export class InteractiveMode {
 					const now = Date.now();
 					if (now - this.lastEscapeTime < 500) {
 						if (action === "tree") {
-							this.showTreeSelector();
+							showTreeSelector(this.sessionNavigationHost);
 						} else {
-							this.showUserMessageSelector();
+							showUserMessageSelector(this.sessionNavigationHost);
 						}
 						this.lastEscapeTime = 0;
 					} else {
@@ -2402,9 +2006,9 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
-		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
-		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
-		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
+		this.defaultEditor.onAction("app.session.tree", () => showTreeSelector(this.sessionNavigationHost));
+		this.defaultEditor.onAction("app.session.fork", () => showUserMessageSelector(this.sessionNavigationHost));
+		this.defaultEditor.onAction("app.session.resume", () => showSessionSelector(this.sessionNavigationHost));
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -2899,7 +2503,7 @@ export class InteractiveMode {
 
 			case "entry_appended":
 				if (event.entry.type === "custom") {
-					this.addCustomEntryToChat(event.entry);
+					addCustomEntryToChat(this.chatHistoryHost, event.entry);
 					this.ui.requestRender();
 				}
 				break;
@@ -2917,7 +2521,7 @@ export class InteractiveMode {
 
 			case "message_start":
 				if (event.message.role === "custom") {
-					this.addMessageToChat(event.message);
+					addMessageToChat(this.chatHistoryHost, event.message);
 					this.ui.requestRender();
 				} else if (event.message.role === "user") {
 					// lunr: a new user message invalidates /redo
@@ -2925,7 +2529,7 @@ export class InteractiveMode {
 					// lunr: begin a new rollback turn (captures tree-scope baseline when enabled)
 					rollbackBeginTurn(this.sessionManager.getCwd(), this.sessionManager.getSessionId());
 					this.stopSmoothStreaming();
-					this.addMessageToChat(event.message);
+					addMessageToChat(this.chatHistoryHost, event.message);
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
@@ -3011,7 +2615,7 @@ export class InteractiveMode {
 					updateThinkingRunTimings(this.thinkingRunTimings, this.streamingMessage.content, Date.now(), true);
 					this.thinkingTimingsByMessage.set(this.streamingMessage, this.thinkingRunTimings);
 					this.streamingComponent.updateContent(this.streamingMessage);
-					this.maybeShowHistoryReplayNotice(this.streamingMessage);
+					maybeShowHistoryReplayNotice(this.chatHistoryHost, this.streamingMessage);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
@@ -3029,7 +2633,7 @@ export class InteractiveMode {
 						for (const [, component] of this.pendingTools.entries()) {
 							component.setArgsComplete();
 						}
-						this.maybeShowCacheMissNotice(this.streamingMessage);
+						maybeShowCacheMissNotice(this.chatHistoryHost, this.streamingMessage);
 					}
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
@@ -3095,7 +2699,7 @@ export class InteractiveMode {
 				this.pendingTools.clear();
 				this.browserActivityComponent = undefined;
 
-				this.maybeAutoNameSession();
+				this.autoNamer.maybeAutoNameSession();
 
 				// lunr: capture tree-scope changes at turn boundary (bash side-effects).
 				captureTreeChanges(this.sessionManager.getCwd(), this.sessionManager.getSessionId());
@@ -3227,321 +2831,6 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): void {
-		const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
-		if (!renderer) {
-			return;
-		}
-		const component = new CustomEntryComponent(entry, renderer);
-		component.setExpanded(this.toolOutputExpanded);
-		if (!component.hasContent()) {
-			return;
-		}
-
-		if (this.streamingComponent) {
-			const streamingIndex = this.chatContainer.children.indexOf(this.streamingComponent);
-			if (streamingIndex >= 0) {
-				this.chatContainer.children.splice(streamingIndex, 0, component);
-				return;
-			}
-		}
-
-		this.chatContainer.addChild(component);
-	}
-
-	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
-		switch (message.role) {
-			case "bashExecution": {
-				const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
-				if (message.output) {
-					component.appendOutput(message.output);
-				}
-				component.setComplete(
-					message.exitCode,
-					message.cancelled,
-					message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
-					message.fullOutputPath,
-				);
-				this.chatContainer.addChild(component);
-				break;
-			}
-			case "custom": {
-				if (message.display) {
-					const renderer = this.session.extensionRunner.getMessageRenderer(message.customType);
-					const component = new CustomMessageComponent(message, renderer, this.getMarkdownThemeWithSettings());
-					component.setExpanded(this.toolOutputExpanded);
-					this.chatContainer.addChild(component);
-				}
-				break;
-			}
-			case "compactionSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new CompactionSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
-				break;
-			}
-			case "branchSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new BranchSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
-				break;
-			}
-			case "user": {
-				const textContent = this.getUserMessageText(message);
-				if (textContent) {
-					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(new Spacer(1));
-					}
-					const skillBlock = parseSkillBlock(textContent);
-					// lunr: render injected prompts (/research /goal) collapsed instead
-					// of dumping the full multi-line prompt body verbatim.
-					const injected = detectInjectedPrompt(textContent);
-					if (injected) {
-						const component = new InjectedPromptMessageComponent(
-							injected.kind,
-							injected.summary,
-							textContent,
-							this.getMarkdownThemeWithSettings(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-					} else if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
-							this.getMarkdownThemeWithSettings(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-						// Render user message separately if present
-						if (skillBlock.userMessage) {
-							this.chatContainer.addChild(new Spacer(1));
-							const userComponent = new UserMessageComponent(
-								skillBlock.userMessage,
-								this.getMarkdownThemeWithSettings(),
-								this.outputPad,
-							);
-							this.chatContainer.addChild(userComponent);
-						}
-					} else {
-						const userComponent = new UserMessageComponent(
-							textContent,
-							this.getMarkdownThemeWithSettings(),
-							this.outputPad,
-						);
-						this.chatContainer.addChild(userComponent);
-					}
-					if (options?.populateHistory) {
-						this.editor.addToHistory?.(textContent);
-					}
-				}
-				break;
-			}
-			case "assistant": {
-				const assistantComponent = new AssistantMessageComponent(
-					message,
-					this.hideThinkingBlock,
-					this.getMarkdownThemeWithSettings(),
-					this.hiddenThinkingLabel,
-					this.outputPad,
-					this.thinkingCollapse,
-					{
-						requestRender: () => this.ui.requestRender(),
-						reasoningDisplay: this.settingsManager.getReasoningDisplay(),
-					},
-				);
-				// lunr: collapsible reasoning — re-attach live timings when this
-				// message was streamed in this session (undefined = history).
-				assistantComponent.setThinkingTimings(this.thinkingTimingsByMessage.get(message));
-				// lunr: ctrl+o expansion — inherit the global expand state.
-				assistantComponent.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(assistantComponent);
-				break;
-			}
-			case "toolResult": {
-				// Tool results are rendered inline with tool calls, handled separately
-				break;
-			}
-			default: {
-				const _exhaustive: never = message;
-			}
-		}
-	}
-
-	private renderSessionItems(
-		items: readonly RenderSessionItem[],
-		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
-	): void {
-		this.pendingTools.clear();
-		let browserActivityComponent: ToolExecutionComponent | undefined;
-		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
-		// Cache-miss notices are not persisted; re-derive them from the full entry
-		// list and re-inject them after the assistant messages that paid for them.
-		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
-			? collectCacheMisses(this.sessionManager.getEntries(), this.session.modelRuntime)
-			: new Map<AssistantMessage, CacheMiss>();
-
-		if (options.updateFooter) {
-			this.footer.invalidate();
-			this.updateEditorBorderColor();
-		}
-
-		for (const item of items) {
-			if (isCustomSessionEntry(item)) {
-				this.addCustomEntryToChat(item);
-				continue;
-			}
-
-			const message = item;
-			// Assistant messages need special handling for tool calls
-			if (message.role === "assistant") {
-				this.addMessageToChat(message);
-				// Render tool call components
-				for (const content of message.content) {
-					if (content.type === "toolCall") {
-						let component = content.name === "browser" ? browserActivityComponent : undefined;
-						if (component) {
-							component.beginNextExecution(content.id, content.arguments);
-						} else {
-							component = new ToolExecutionComponent(
-								content.name,
-								content.id,
-								content.arguments,
-								{
-									showImages: this.settingsManager.getShowImages(),
-									imageWidthCells: this.settingsManager.getImageWidthCells(),
-								},
-								this.getRegisteredToolDefinition(content.name),
-								this.ui,
-								this.sessionManager.getCwd(),
-							);
-							component.setExpanded(this.toolOutputExpanded);
-							this.addToolComponentToChat(component);
-							if (content.name === "browser") browserActivityComponent = component;
-						}
-
-						if (message.stopReason === "aborted" || message.stopReason === "error") {
-							let errorMessage: string;
-							if (message.stopReason === "aborted") {
-								const retryAttempt = this.session.retryAttempt;
-								errorMessage =
-									retryAttempt > 0
-										? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-										: "Operation aborted";
-							} else {
-								errorMessage = message.errorMessage || "Error";
-							}
-							component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
-						} else {
-							renderedPendingTools.set(content.id, component);
-						}
-					}
-				}
-				if (message.stopReason !== "aborted" && message.stopReason !== "error") {
-					const miss = cacheMisses.get(message);
-					if (miss) this.addCacheMissNotice(miss);
-				}
-			} else if (message.role === "toolResult") {
-				// Match tool results to pending tool components
-				const component = renderedPendingTools.get(message.toolCallId);
-				if (component) {
-					component.updateResult(message);
-					renderedPendingTools.delete(message.toolCallId);
-				}
-			} else {
-				if (message.role === "user") browserActivityComponent = undefined;
-				// All other messages use standard rendering
-				this.addMessageToChat(message, options);
-			}
-		}
-
-		for (const [toolCallId, component] of renderedPendingTools) {
-			this.pendingTools.set(toolCallId, component);
-		}
-		this.ui.requestRender();
-	}
-
-	/**
-	 * Render session entries to chat. Used for initial load and rebuild after compaction.
-	 * @param entries Compaction-aware session entries to render
-	 * @param options.updateFooter Update footer state
-	 * @param options.populateHistory Add user messages to editor history
-	 */
-	private renderSessionEntries(
-		entries: SessionEntry[],
-		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
-	): void {
-		const items = entries.flatMap((entry): RenderSessionItem[] => {
-			if (entry.type === "custom") {
-				return [entry];
-			}
-			return sessionEntryToContextMessages(entry);
-		});
-		this.renderSessionItems(items, options);
-	}
-
-	/**
-	 * Show a transcript notice when a completed assistant message paid for a
-	 * significant cache miss. The overlap estimate cannot establish identical prompt content. It also shows
-	 * a model switch, or an idle gap past the cache TTL.
-	 */
-	private maybeShowCacheMissNotice(message: AssistantMessage): void {
-		if (!this.settingsManager.getShowCacheMissNotices()) return;
-
-		// Entries don't contain `message` yet: message_end fires before persistence.
-		const miss = detectCacheMiss(this.sessionManager.getEntries(), message, this.session.modelRuntime);
-		if (miss) this.addCacheMissNotice(miss);
-	}
-
-	/** Warns when a Claude subscription session first grows past what Claude Code can send prompt-cached. */
-	private maybeShowHistoryReplayNotice(message: AssistantMessage): void {
-		if (!claudeCodeHistoryReplayed(message)) return;
-		// Entries don't contain `message` yet: message_end fires before persistence.
-		const entries = this.sessionManager.getEntries();
-		for (let index = entries.length - 1; index >= 0; index--) {
-			const entry = entries[index];
-			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-			if (claudeCodeHistoryReplayed(entry.message)) return;
-			break;
-		}
-		this.showWarning(CLAUDE_CODE_HISTORY_REPLAYED_NOTE);
-	}
-
-	private addCacheMissNotice(miss: CacheMiss): void {
-		if (miss.missedTokens < 20_000 && miss.missedCost < 0.1) return;
-
-		const cost = miss.missedCost >= 0.01 ? ` (~$${miss.missedCost.toFixed(2)})` : "";
-		const reBilled = `~${formatTokens(miss.missedTokens)} tokens may have missed cache${cost}`;
-		let label = "Estimated cache miss";
-		if (miss.modelChanged) {
-			label = "Estimated cache miss after model switch";
-		} else if (miss.idleMs >= CACHE_TTL_MS) {
-			label = `Cache miss after ${Math.round(miss.idleMs / 60_000)}m idle`;
-		}
-		const text = theme.fg("warning", `${label}: ${reBilled}`);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(text, 1, 0));
-	}
-
-	renderInitialMessages(): void {
-		const entries = this.sessionManager.buildContextEntries();
-		this.renderSessionEntries(entries, {
-			updateFooter: true,
-			populateHistory: true,
-		});
-		this.renderProjectTrustWarningIfNeeded();
-
-		// Show compaction info if session was compacted
-		const allEntries = this.sessionManager.getEntries();
-		const compactionCount = allEntries.filter((e) => e.type === "compaction").length;
-		if (compactionCount > 0) {
-			const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
-			this.showStatus(`Session compacted ${times}`);
-		}
-	}
-
 	private renderProjectTrustWarningIfNeeded(): void {
 		if (this.settingsManager.isProjectTrusted() || !hasTrustRequiringProjectResources(this.sessionManager.getCwd())) {
 			return;
@@ -3578,7 +2867,7 @@ export class InteractiveMode {
 
 	private rebuildChatFromMessages(): void {
 		this.clearChatContainer();
-		this.renderSessionEntries(this.sessionManager.buildContextEntries());
+		renderSessionEntries(this.chatHistoryHost, this.sessionManager.buildContextEntries());
 	}
 
 	// =========================================================================
@@ -4298,7 +3587,8 @@ export class InteractiveMode {
 
 	private renderCompactionResult(result: { summary: string; tokensBefore: number }): void {
 		this.rebuildChatFromMessages();
-		this.addMessageToChat(
+		addMessageToChat(
+			this.chatHistoryHost,
 			createCompactionSummaryMessage(result.summary, result.tokensBefore, new Date().toISOString()),
 		);
 		this.footer.invalidate();
@@ -4397,488 +3687,6 @@ export class InteractiveMode {
 	// Selectors
 	// =========================================================================
 
-	/**
-	 * Shows a selector component in place of the editor.
-	 * @param create Factory that receives a `done` callback and returns the component and focus target
-	 */
-	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
-		const done = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-		};
-		const { component, focus } = create(done);
-		this.editorContainer.clear();
-		this.editorContainer.addChild(component);
-		this.ui.setFocus(focus);
-		this.ui.requestRender();
-	}
-
-	private async showSettingsSelector(): Promise<void> {
-		// lunr: prefetch the pool size for the API keys row label (render paths stay sync).
-		const subscriptionCount = await countSubscriptions(this.session);
-		this.showSelector((done) => {
-			const selector = new SettingsSelectorComponent(
-				{
-					autoCompact: this.session.autoCompactionEnabled,
-					compactionCeilingTokens: this.settingsManager.getCompactionCeilingTokens(),
-					compactionCeilingFloorTokens: this.session.getCompactionCeilingFloor().floor,
-					compactionCeilingKeptTokens: this.session.getCompactionCeilingFloor().keptTokens,
-					showImages: this.settingsManager.getShowImages(),
-					imageWidthCells: this.settingsManager.getImageWidthCells(),
-					autoResizeImages: this.settingsManager.getImageAutoResize(),
-					blockImages: this.settingsManager.getBlockImages(),
-					enableSkillCommands: this.settingsManager.getEnableSkillCommands(),
-					skillTagCharacter: this.settingsManager.getSkillTagCharacter(),
-					steeringMode: this.session.steeringMode,
-					followUpMode: this.session.followUpMode,
-					transport: this.settingsManager.getTransport(),
-					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
-					thinkingLevel: this.session.thinkingLevel,
-					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
-					currentTheme: this.settingsManager.getThemeSetting() || "moon",
-					terminalTheme: this.themeController.getTerminalTheme(),
-					availableThemes: getAvailableThemes(),
-					hideThinkingBlock: this.hideThinkingBlock,
-					thinkingCollapse: this.thinkingCollapse,
-					reasoningDisplay: this.settingsManager.getReasoningDisplay(),
-					cacheRetention: this.settingsManager.getCacheRetention() ?? "short",
-					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
-					treeFilterMode: this.settingsManager.getTreeFilterMode(),
-					showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
-					showCacheMissNotices: this.settingsManager.getShowCacheMissNotices(),
-					defaultProjectTrust: this.settingsManager.getDefaultProjectTrust(),
-					editorPaddingX: this.settingsManager.getEditorPaddingX(),
-					outputPad: this.settingsManager.getOutputPad(),
-					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
-					quietStartup: this.settingsManager.getQuietStartup(),
-					smoothStreaming: this.settingsManager.getSmoothStreaming(),
-					subagentSpinner: this.settingsManager.getSubagentSpinner(),
-					sessionRetentionDays: this.settingsManager.getSessionRetentionDays(),
-					clearOnShrink: this.settingsManager.getClearOnShrink(),
-					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
-					attentionNotification: this.settingsManager.getAttentionNotification(),
-					modelTiers: this.settingsManager.getModelTiers(),
-					modelInstructions: this.settingsManager.getModelInstructions(),
-					globalInstructionsPath: getGlobalInstructionsPath(getAgentDir()),
-					modelInstructionsPath: getModelInstructionsPath(
-						getAgentDir(),
-						this.session.model?.id ?? "no-model-selected",
-					),
-					confirmLargeSubagentLaunches: this.settingsManager.getConfirmLargeSubagentLaunches(),
-					clientScopedModelsOnly: this.settingsManager.getClientScopedModelsOnly(),
-					computerUse: this.settingsManager.getComputerUse(),
-					computerForeground: this.settingsManager.getComputerForeground(),
-					subagentCommunicationEnabled: this.settingsManager.getSubagentCommunicationEnabled(),
-					automaticSubagentDelegation: this.settingsManager.getAutomaticSubagentDelegation(),
-					browserEnabled: this.settingsManager.getBrowserEnabled(),
-					prWatchDurationMs: this.settingsManager.getPrWatchDurationMs(),
-					memoryEnabled: this.settingsManager.getMemoryEnabled(),
-					memoryCharCap: this.settingsManager.getMemoryCharCap(),
-					todosEnabled: this.settingsManager.getTodosEnabled(),
-					deferredToolsEnabled: this.settingsManager.getDeferredToolsEnabled(),
-					searchCurator: getSearchCuratorSetting(),
-					// lunr: TUI customize settings
-					footerMcp: this.settingsManager.getFooterMcp(),
-					footerLsp: this.settingsManager.getFooterLsp(),
-					footerContext: this.settingsManager.getFooterContext(),
-					footerTokens: this.settingsManager.getFooterTokens(),
-					footerCacheHitRate: this.settingsManager.getFooterCacheHitRate(),
-					footerTps: this.settingsManager.getFooterTps(),
-					footerStatuses: this.settingsManager.getFooterStatuses(),
-					footerGit: this.settingsManager.getFooterGit(),
-					footerPlan: this.settingsManager.getFooterPlan(),
-					footerPlanBar: this.settingsManager.getFooterPlanBar(),
-					planUsageWindow: this.settingsManager.getPlanUsageWindow(),
-					defaultPermissionMode: this.settingsManager.getDefaultPermissionMode(),
-					autoReviewModel: this.settingsManager.getAutoReviewModel(),
-					rollbackEnabled: this.settingsManager.getRollbackEnabled(),
-					rollbackTurns: this.settingsManager.getRollbackTurns(),
-					rollbackCapture: this.settingsManager.getRollbackCapture(),
-					rollbackScope: this.settingsManager.getRollbackScope(),
-					// lunr: multi-subscription pools
-					autoManageSubscriptions: this.settingsManager.getAutoManageSubscriptions(),
-					subscriptionCount,
-				},
-				{
-					onAutoCompactChange: (enabled) => {
-						this.session.setAutoCompactionEnabled(enabled);
-						this.footer.setAutoCompactEnabled(enabled);
-					},
-					onCompactionCeilingChange: (ceilingTokens) => {
-						this.settingsManager.setCompactionCeilingTokens(ceilingTokens);
-					},
-					onShowImagesChange: (enabled) => {
-						this.settingsManager.setShowImages(enabled);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setShowImages(enabled);
-							}
-						}
-					},
-					onImageWidthCellsChange: (width) => {
-						this.settingsManager.setImageWidthCells(width);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setImageWidthCells(width);
-							}
-						}
-					},
-					onAutoResizeImagesChange: (enabled) => {
-						this.settingsManager.setImageAutoResize(enabled);
-					},
-					onBlockImagesChange: (blocked) => {
-						this.settingsManager.setBlockImages(blocked);
-					},
-					onEnableSkillCommandsChange: (enabled) => {
-						this.settingsManager.setEnableSkillCommands(enabled);
-						this.setupAutocompleteProvider();
-					},
-					onSkillTagCharacterChange: (character) => {
-						this.settingsManager.setSkillTagCharacter(character);
-						this.setupAutocompleteProvider();
-					},
-					onSteeringModeChange: (mode) => {
-						this.session.setSteeringMode(mode);
-					},
-					onFollowUpModeChange: (mode) => {
-						this.session.setFollowUpMode(mode);
-					},
-					onTransportChange: (transport) => {
-						this.settingsManager.setTransport(transport);
-						this.session.agent.transport = transport;
-					},
-					onHttpIdleTimeoutMsChange: (timeoutMs) => {
-						this.settingsManager.setHttpIdleTimeoutMs(timeoutMs);
-						configureHttpDispatcher(timeoutMs);
-						this.showStatus(`HTTP idle timeout: ${formatHttpIdleTimeoutMs(timeoutMs)}`);
-					},
-					onThinkingLevelChange: (level) => {
-						this.session.setThinkingLevel(level);
-						this.footer.invalidate();
-						this.updateEditorBorderColor();
-					},
-					onThemeChange: (themeSetting) => {
-						this.settingsManager.setTheme(themeSetting);
-						void this.themeController.applyFromSettings();
-					},
-					onThemePreview: (themeName) => this.themeController.preview(themeName),
-					onHideThinkingBlockChange: (hidden) => {
-						this.hideThinkingBlock = hidden;
-						this.settingsManager.setHideThinkingBlock(hidden);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof AssistantMessageComponent) {
-								child.setHideThinkingBlock(hidden);
-							}
-						}
-						this.rebuildChatFromMessages();
-					},
-					onThinkingCollapseChange: (collapse) => {
-						this.thinkingCollapse = collapse;
-						this.settingsManager.setThinkingCollapse(collapse);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof AssistantMessageComponent) {
-								child.setThinkingCollapse(collapse);
-							}
-						}
-						this.rebuildChatFromMessages();
-					},
-					onReasoningDisplayChange: (display) => {
-						this.settingsManager.setReasoningDisplay(display);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof AssistantMessageComponent) {
-								child.setReasoningDisplay(this.settingsManager.getReasoningDisplay());
-							}
-						}
-						this.ui.requestRender();
-					},
-					onShowCacheMissNoticesChange: (shown) => {
-						this.settingsManager.setShowCacheMissNotices(shown);
-						this.rebuildChatFromMessages();
-					},
-					onCacheRetentionChange: (retention) => {
-						this.settingsManager.setCacheRetention(retention);
-					},
-					onQuietStartupChange: (enabled) => {
-						this.settingsManager.setQuietStartup(enabled);
-					},
-					onSmoothStreamingChange: (enabled) => {
-						this.applySmoothStreamingSettingChange(enabled);
-					},
-					onSubagentSpinnerChange: (spinner) => {
-						this.settingsManager.setSubagentSpinner(spinner);
-						this.ui.requestRender();
-					},
-					onSessionRetentionDaysChange: (days) => {
-						this.settingsManager.setSessionRetentionDays(days);
-					},
-					onDefaultProjectTrustChange: (defaultProjectTrust) => {
-						this.settingsManager.setDefaultProjectTrust(defaultProjectTrust);
-					},
-					onDoubleEscapeActionChange: (action) => {
-						this.settingsManager.setDoubleEscapeAction(action);
-					},
-					onTreeFilterModeChange: (mode) => {
-						this.settingsManager.setTreeFilterMode(mode);
-					},
-					onShowHardwareCursorChange: (enabled) => {
-						this.settingsManager.setShowHardwareCursor(enabled);
-						this.ui.setShowHardwareCursor(enabled);
-					},
-					onEditorPaddingXChange: (padding) => {
-						this.settingsManager.setEditorPaddingX(padding);
-						this.defaultEditor.setPaddingX(padding);
-						if (this.editor !== this.defaultEditor && this.editor.setPaddingX !== undefined) {
-							this.editor.setPaddingX(padding);
-						}
-					},
-					onOutputPadChange: (padding) => {
-						this.settingsManager.setOutputPad(padding);
-						this.outputPad = padding;
-						if (this.streamingComponent || this.session.isStreaming) {
-							for (const child of this.chatContainer.children) {
-								if (child instanceof AssistantMessageComponent || child instanceof UserMessageComponent) {
-									child.setOutputPad(padding);
-								}
-							}
-							if (this.streamingComponent) {
-								this.streamingComponent.setOutputPad(padding);
-							}
-							this.ui.requestRender();
-							return;
-						}
-						this.rebuildChatFromMessages();
-					},
-					onAutocompleteMaxVisibleChange: (maxVisible) => {
-						this.settingsManager.setAutocompleteMaxVisible(maxVisible);
-						this.defaultEditor.setAutocompleteMaxVisible(maxVisible);
-						if (this.editor !== this.defaultEditor && this.editor.setAutocompleteMaxVisible !== undefined) {
-							this.editor.setAutocompleteMaxVisible(maxVisible);
-						}
-					},
-					onClearOnShrinkChange: (enabled) => {
-						this.settingsManager.setClearOnShrink(enabled);
-						this.ui.setClearOnShrink(enabled);
-						if (!enabled && !this.activeStatusIndicator) {
-							this.statusContainer.clear();
-						}
-					},
-					onShowTerminalProgressChange: (enabled) => {
-						this.settingsManager.setShowTerminalProgress(enabled);
-						if (!enabled) this.ui.terminal.setProgress(false);
-					},
-					onAttentionNotificationChange: (mode) => {
-						this.settingsManager.setAttentionNotification(mode);
-						this.ui.setFocusReporting(mode !== "off");
-					},
-					onModelTiersEnabledChange: (enabled) => {
-						this.settingsManager.setModelTiersEnabled(enabled);
-						getModelTiersBridge()?.refreshToolDescription();
-					},
-					onModelTierModelChange: (tier, model) => {
-						this.settingsManager.setTierModel(tier, model);
-					},
-					onModelTierThinkingChange: (tier, level) => {
-						this.settingsManager.setTierThinking(tier, level);
-					},
-					onModelInstructionsEnabledChange: (enabled) => {
-						this.settingsManager.setModelInstructionsEnabled(enabled);
-						this.session.refreshToolRegistry();
-					},
-					onModelInstructionsModeChange: (mode) => {
-						this.settingsManager.setModelInstructionsMode(mode);
-						this.session.refreshToolRegistry();
-					},
-					onConfirmLargeSubagentLaunchesChange: (enabled) => {
-						this.settingsManager.setConfirmLargeSubagentLaunches(enabled);
-					},
-					onClientScopedModelsOnlyChange: (enabled) => {
-						this.settingsManager.setClientScopedModelsOnly(enabled);
-					},
-					onSubagentCommunicationChange: (enabled) => {
-						this.settingsManager.setSubagentCommunicationEnabled(enabled);
-					},
-					onAutomaticSubagentDelegationChange: (enabled) => {
-						this.settingsManager.setAutomaticSubagentDelegation(enabled);
-						this.session.refreshToolRegistry();
-					},
-					getTierThinkingLevels: (tier) => {
-						const model = this.resolveModelReference(this.settingsManager.getTierModel(tier));
-						if (model) return getSupportedThinkingLevels(model);
-						return this.session.getAvailableThinkingLevels();
-					},
-					onMemoryCharCapChange: (cap) => {
-						this.settingsManager.setMemoryCharCap(cap);
-					},
-					onComputerUseChange: (enabled) => {
-						this.settingsManager.setComputerUse(enabled);
-					},
-					onComputerForegroundChange: (enabled) => {
-						this.settingsManager.setComputerForeground(enabled);
-					},
-					onBrowserEnabledChange: (enabled) => {
-						this.settingsManager.setBrowserEnabled(enabled);
-						this.session.refreshToolRegistry();
-					},
-					onPrWatchDurationChange: (durationMs) => {
-						this.settingsManager.setPrWatchDurationMs(durationMs);
-					},
-					onMemoryEnabledChange: (enabled) => {
-						this.settingsManager.setMemoryEnabled(enabled);
-						this.session.refreshToolRegistry();
-						this.showStatus(`Agent memory: ${enabled ? "on" : "off"}`);
-					},
-					// lunr: saved only; a running session keeps its tool list.
-					onDeferredToolsEnabledChange: (enabled) => {
-						this.settingsManager.setDeferredToolsEnabled(enabled);
-					},
-					onTodosEnabledChange: (enabled) => {
-						this.settingsManager.setTodosEnabled(enabled);
-						notifyTodosEnabledChanged(enabled);
-						this.session.refreshToolRegistry();
-					},
-					onSearchCuratorChange: (setting) => {
-						if (!setSearchCuratorSetting(setting)) {
-							this.showError("pi-web-access is not loaded; curator setting unavailable.");
-						}
-					},
-					// lunr: TUI customize callbacks
-					onFooterMcpChange: (enabled) => {
-						this.settingsManager.setFooterMcp(enabled);
-					},
-					onFooterLspChange: (enabled) => {
-						this.settingsManager.setFooterLsp(enabled);
-					},
-					onFooterContextChange: (enabled) => {
-						this.settingsManager.setFooterContext(enabled);
-					},
-					onFooterTokensChange: (enabled) => {
-						this.settingsManager.setFooterTokens(enabled);
-					},
-					onFooterCacheHitRateChange: (enabled) => {
-						this.settingsManager.setFooterCacheHitRate(enabled);
-					},
-					onFooterTpsChange: (enabled) => {
-						this.settingsManager.setFooterTps(enabled);
-					},
-					onFooterStatusesChange: (enabled) => {
-						this.settingsManager.setFooterStatuses(enabled);
-					},
-					onFooterGitChange: (enabled) => {
-						this.settingsManager.setFooterGit(enabled);
-					},
-					onFooterPlanChange: (enabled) => {
-						this.settingsManager.setFooterPlan(enabled);
-					},
-					onFooterPlanBarChange: (enabled) => {
-						this.settingsManager.setFooterPlanBar(enabled);
-					},
-					onPlanUsageWindowChange: (window) => {
-						this.settingsManager.setPlanUsageWindow(window);
-					},
-					onGatewayAction: (action) => {
-						void (async () => {
-							if (this.session.isStreaming) {
-								this.showStatus("Wait for the current turn before managing the gateway.");
-								return;
-							}
-							if (action === "status") {
-								this.showStatus((await import("../../gateway/service.ts")).serviceStatusText());
-								return;
-							}
-							this.ui.stop();
-							try {
-								await new Promise<void>((resolve, reject) => {
-									const child = spawn(process.execPath, [process.argv[1], "gateway", ...action.split(" ")], {
-										stdio: "inherit",
-										env: process.env,
-									});
-									child.once("error", reject);
-									child.once("exit", (code) =>
-										code === 0
-											? resolve()
-											: reject(
-													new Error(`Gateway command exited with code ${code}. Run lunr gateway doctor.`),
-												),
-									);
-								});
-							} finally {
-								this.ui.start();
-								this.ui.requestRender(true);
-							}
-							this.showStatus((await import("../../gateway/service.ts")).serviceStatusText());
-						})().catch((error) => this.showStatus(error instanceof Error ? error.message : String(error)));
-					},
-					onDefaultPermissionModeChange: (mode) => {
-						this.settingsManager.setDefaultPermissionMode(mode);
-					},
-					onAutoReviewModelChange: (ref) => {
-						this.settingsManager.setAutoReviewModel(ref);
-					},
-					onChooseAutoReviewModel: () => {
-						done();
-						this.permissions.showAutoReviewModelPicker();
-					},
-					onRollbackEnabledChange: (enabled) => {
-						this.settingsManager.setRollbackEnabled(enabled);
-					},
-					onRollbackTurnsChange: (turns) => {
-						this.settingsManager.setRollbackTurns(turns);
-					},
-					onRollbackCaptureChange: (mode) => {
-						this.settingsManager.setRollbackCapture(mode);
-					},
-					onRollbackScopeChange: (scope) => {
-						this.settingsManager.setRollbackScope(scope);
-					},
-					isRollbackSessionForceEnabled: () => isRollbackSessionForceEnabled(this.sessionManager.getSessionId()),
-					// lunr: multi-subscription pool callbacks
-					onAutoManageSubscriptionsChange: (enabled) => {
-						this.settingsManager.setAutoManageSubscriptions(enabled);
-					},
-					subscriptions: {
-						list: () => listSubscriptionRows(this.session),
-						setActive: (providerId, id) =>
-							this.session.modelRuntime.subscriptionManager.setActive(providerId, id),
-						rename: (providerId, id, name) =>
-							this.session.modelRuntime.subscriptionManager.renameKey(providerId, id, name),
-						clearExhaustion: (providerId, id) =>
-							this.session.modelRuntime.subscriptionManager.clearExhaustion(providerId, id),
-						remove: (providerId, id) => this.session.modelRuntime.subscriptionManager.removeKey(providerId, id),
-						autoManage: () => this.settingsManager.getAutoManageSubscriptions(),
-						requestRender: () => this.ui.requestRender(),
-					},
-					requestRender: () => this.ui.requestRender(),
-					createModelTierPicker: (_tier, currentModelRef, done) => {
-						const selector = new ModelSelectorComponent(
-							this.ui,
-							this.resolveModelReference(currentModelRef),
-							this.settingsManager,
-							this.session.modelRuntime,
-							this.session.scopedModels,
-							(model) => {
-								done(`${model.provider}/${model.id}`);
-								this.ui.requestRender();
-							},
-							() => {
-								done();
-								this.ui.requestRender();
-							},
-							undefined,
-							{ persistDefault: false },
-						);
-						return selector;
-					},
-					onCancel: () => {
-						done();
-						this.ui.requestRender();
-					},
-				},
-			);
-			return { component: selector, focus: selector.getSettingsList() };
-		});
-	}
-
 	/** Resolve a "provider/model" settings string to a runtime model, if it still exists. */
 	private resolveModelReference(reference: string | undefined): Model<Api> | undefined {
 		if (!reference) return undefined;
@@ -4948,7 +3756,7 @@ export class InteractiveMode {
 		const cwd = this.sessionManager.getCwd();
 		const trustStore = new ProjectTrustStore(this.runtimeHost.services.agentDir);
 		const savedDecision = trustStore.getEntry(cwd);
-		this.showSelector((done) => {
+		this.dialogs.showSelector((done) => {
 			const selector = new TrustSelectorComponent({
 				cwd,
 				savedDecision,
@@ -4969,289 +3777,6 @@ export class InteractiveMode {
 		});
 	}
 
-	private showUserMessageSelector(): void {
-		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		const userMessages = this.session.getUserMessagesForForking();
-
-		if (userMessages.length === 0) {
-			this.showStatus("No messages to fork from");
-			return;
-		}
-
-		const initialSelectedId = userMessages[userMessages.length - 1]?.entryId;
-
-		this.showSelector((done) => {
-			const selector = new UserMessageSelectorComponent(
-				userMessages.map((m) => ({ id: m.entryId, text: m.text })),
-				async (entryId) => {
-					done();
-					try {
-						const result = await this.runtimeHost.fork(entryId);
-						if (result.cancelled) {
-							this.ui.requestRender();
-							return;
-						}
-
-						this.editor.setText(result.selectedText ?? "");
-						this.showStatus("Forked to new session");
-					} catch (error: unknown) {
-						this.showError(error instanceof Error ? error.message : String(error));
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				initialSelectedId,
-			);
-			return { component: selector, focus: selector.getMessageList() };
-		});
-	}
-
-	private async handleCloneCommand(): Promise<void> {
-		const leafId = this.sessionManager.getLeafId();
-		if (!leafId) {
-			this.showStatus("Nothing to clone yet");
-			return;
-		}
-
-		try {
-			const result = await this.runtimeHost.fork(leafId, { position: "at" });
-			if (result.cancelled) {
-				this.ui.requestRender();
-				return;
-			}
-
-			this.editor.setText("");
-			this.showStatus("Cloned to new session");
-		} catch (error: unknown) {
-			this.showError(error instanceof Error ? error.message : String(error));
-		}
-	}
-
-	private showTreeSelector(initialSelectedId?: string): void {
-		if (this.runtimeHost.isDetached || this.transferInProgress) return;
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /tree.");
-			return;
-		}
-		const tree = this.sessionManager.getTree();
-		const realLeafId = this.sessionManager.getLeafId();
-		const initialFilterMode = this.settingsManager.getTreeFilterMode();
-
-		if (tree.length === 0) {
-			this.showStatus("No entries in session");
-			return;
-		}
-
-		this.showSelector((done) => {
-			const selector = new TreeSelectorComponent(
-				tree,
-				realLeafId,
-				this.ui.terminal.rows,
-				async (entryId) => {
-					// Selecting the current leaf is a no-op (already there)
-					if (entryId === realLeafId) {
-						done();
-						this.showStatus("Already at this point");
-						return;
-					}
-
-					// Ask about summarization
-					done(); // Close selector first
-
-					// Loop until user makes a complete choice or cancels to tree
-					let wantsSummary = false;
-					let customInstructions: string | undefined;
-
-					// Check if we should skip the prompt (user preference to always default to no summary)
-					if (!this.settingsManager.getBranchSummarySkipPrompt()) {
-						while (true) {
-							const summaryChoice = await this.showExtensionSelector("Summarize branch?", [
-								"No summary",
-								"Summarize",
-								"Summarize with custom prompt",
-							]);
-
-							if (summaryChoice === undefined) {
-								// User pressed escape - re-show tree selector with same selection
-								this.showTreeSelector(entryId);
-								return;
-							}
-
-							wantsSummary = summaryChoice !== "No summary";
-
-							if (summaryChoice === "Summarize with custom prompt") {
-								customInstructions = await this.showExtensionEditor("Custom summarization instructions");
-								if (customInstructions === undefined) {
-									// User cancelled - loop back to summary selector
-									continue;
-								}
-							}
-
-							// User made a complete choice
-							break;
-						}
-					}
-
-					// Set up escape handler and status indicator if summarizing
-					let showingSummaryIndicator = false;
-					const originalOnEscape = this.defaultEditor.onEscape;
-
-					if (wantsSummary) {
-						this.defaultEditor.onEscape = () => {
-							this.session.abortBranchSummary();
-						};
-						this.chatContainer.addChild(new Spacer(1));
-						this.showStatusIndicator(new BranchSummaryStatusIndicator(this.ui));
-						showingSummaryIndicator = true;
-						this.ui.requestRender();
-					}
-
-					try {
-						const result = await this.session.navigateTree(entryId, {
-							summarize: wantsSummary,
-							customInstructions,
-						});
-
-						if (result.aborted) {
-							// Summarization aborted - re-show tree selector with same selection
-							this.showStatus("Branch summarization cancelled");
-							this.showTreeSelector(entryId);
-							return;
-						}
-						if (result.cancelled) {
-							this.showStatus("Navigation cancelled");
-							return;
-						}
-
-						// Update UI
-						this.clearChatContainer();
-						this.renderInitialMessages();
-						if (result.editorText && !this.editor.getText().trim()) {
-							this.restoreEditorFromTreeResult(result);
-						}
-						this.showStatus("Navigated to selected point");
-						void this.flushCompactionQueue({ willRetry: false });
-					} catch (error) {
-						this.showError(error instanceof Error ? error.message : String(error));
-					} finally {
-						if (showingSummaryIndicator) {
-							this.clearStatusIndicator("branchSummary");
-						}
-						this.defaultEditor.onEscape = originalOnEscape;
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				(entryId, label) => {
-					this.sessionManager.appendLabelChange(entryId, label);
-					this.ui.requestRender();
-				},
-				initialSelectedId,
-				initialFilterMode,
-			);
-			selector.onCopy = async (text) => {
-				if (!text) {
-					this.showError("Selected entry has no text to copy");
-					return;
-				}
-				try {
-					await copyToClipboard(text);
-					this.showStatus("Copied selected message to clipboard");
-				} catch (error) {
-					this.showError(error instanceof Error ? error.message : String(error));
-				}
-			};
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private showSessionSelector(): void {
-		this.showSelector((done) => {
-			const selector = new SessionSelectorComponent(
-				(onProgress) =>
-					SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir(), onProgress),
-				(onProgress) =>
-					this.sessionManager.usesDefaultSessionDir()
-						? SessionManager.listAll(onProgress)
-						: SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress),
-				async (sessionPath) => {
-					done();
-					await this.handleResumeSession(sessionPath);
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				() => {
-					void this.shutdown();
-				},
-				() => this.ui.requestRender(),
-				{
-					renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
-						const next = (nextName ?? "").trim();
-						if (!next) return;
-						if (sessionFilePath === this.sessionManager.getSessionFile() && !this.runtimeHost.isDetached) {
-							this.sessionManager.appendSessionInfo(next);
-							return;
-						}
-						const mgr = SessionManager.open(sessionFilePath);
-						try {
-							mgr.appendSessionInfo(next);
-						} finally {
-							mgr.dispose();
-						}
-					},
-					showRenameHint: true,
-					keybindings: this.keybindings,
-				},
-
-				this.sessionManager.getSessionFile(),
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private async handleResumeSession(
-		sessionPath: string,
-		options?: Parameters<ExtensionCommandContext["switchSession"]>[1],
-	): Promise<{ cancelled: boolean }> {
-		this.clearStatusIndicator();
-		try {
-			const result = await this.runtimeHost.switchSession(sessionPath, {
-				withSession: options?.withSession,
-				projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
-			});
-			if (result.cancelled) {
-				return result;
-			}
-			this.showStatus("Resumed session");
-			return result;
-		} catch (error: unknown) {
-			if (error instanceof MissingSessionCwdError) {
-				const selectedCwd = await this.promptForMissingSessionCwd(error);
-				if (!selectedCwd) {
-					this.showStatus("Resume cancelled");
-					return { cancelled: true };
-				}
-				const result = await this.runtimeHost.switchSession(sessionPath, {
-					cwdOverride: selectedCwd,
-					withSession: options?.withSession,
-					projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
-				});
-				if (result.cancelled) {
-					return result;
-				}
-				this.showStatus("Resumed session in current cwd");
-				return result;
-			}
-			return this.handleFatalRuntimeError("Failed to resume session", error);
-		}
-	}
-
 	// Builds the LoginFlowHost without making InteractiveMode members public. `session` and `editor`
 	// stay getters because /new, /resume and /fork replace the session and extensions can replace the editor.
 	private createLoginFlowHost(): LoginFlowHost {
@@ -5269,12 +3794,12 @@ export class InteractiveMode {
 			get editor() {
 				return mode.editor;
 			},
-			showSelector: (create) => this.showSelector(create),
+			showSelector: (create) => this.dialogs.showSelector(create),
 			showStatus: (message) => this.showStatus(message),
 			showError: (message) => this.showError(message),
 			confirmDisclaimer: (title, message) => this.confirmDisclaimer(title, message),
-			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
-			showExtensionInput: (title, placeholder) => this.showExtensionInput(title, placeholder),
+			showExtensionSelector: (title, options) => this.dialogs.select(title, options),
+			showExtensionInput: (title, placeholder) => this.dialogs.input(title, placeholder),
 			requestRender: () => this.ui.requestRender(),
 			maybeWarnAboutAnthropicSubscriptionAuth: (providerId) =>
 				this.maybeWarnAboutAnthropicSubscriptionAuth(providerId),
@@ -5299,10 +3824,344 @@ export class InteractiveMode {
 			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
 			showStatus: (message) => this.showStatus(message),
 			showError: (message) => this.showError(message),
-			showSelector: (create) => this.showSelector(create),
+			showSelector: (create) => this.dialogs.showSelector(create),
 			invalidateFooter: () => this.footer.invalidate(),
 			updateEditorBorderColor: () => this.updateEditorBorderColor(),
 			updateAvailableProviderCount: () => this.updateAvailableProviderCount(),
+		};
+	}
+
+	// Builds the host for /usage, /context, /session, /help and /hotkeys. `session` stays a getter because
+	// /new, /resume and /fork replace it.
+	private createChatViewHost(): UsageCommandHost & HelpCommandHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get keybindings() {
+				return mode.keybindings;
+			},
+			showStatus: (message) => this.showStatus(message),
+			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
+		};
+	}
+
+	// Builds the SessionNavigationHost. `session`, `editor` and `chatContainer` stay getters because
+	// /new, /resume and /fork replace the session and extensions can replace the editor.
+	private createSessionNavigationHost(): SessionNavigationHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			get runtimeHost() {
+				return mode.runtimeHost;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get keybindings() {
+				return mode.keybindings;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get defaultEditor() {
+				return mode.defaultEditor;
+			},
+			get redoStack() {
+				return mode.redoStack;
+			},
+			isSessionDetached: () => this.runtimeHost.isDetached || this.transferInProgress,
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+			showSelector: (create) => this.dialogs.showSelector(create),
+			showExtensionSelector: (title, options) => this.dialogs.select(title, options),
+			showExtensionEditor: (title, prefill) => this.dialogs.editText(title, prefill),
+			showStatusIndicator: (indicator) => this.showStatusIndicator(indicator),
+			clearStatusIndicator: (kind) => this.clearStatusIndicator(kind),
+			clearChatContainer: () => this.clearChatContainer(),
+			renderInitialMessages: () => renderInitialMessages(this.chatHistoryHost),
+			restoreEditorFromTreeResult: (result) => this.restoreEditorFromTreeResult(result),
+			flushCompactionQueue: (options) => this.flushCompactionQueue(options),
+			createProjectTrustContext: (cwd) => this.createProjectTrustContext(cwd),
+			promptForMissingSessionCwd: (error) => this.dialogs.promptForMissingSessionCwd(error),
+			handleFatalRuntimeError: (prefix, error) => this.handleFatalRuntimeError(prefix, error),
+			shutdown: () => this.shutdown(),
+		};
+	}
+
+	// Builds the host for /export, /import, /name and auto-naming. `session` stays a getter because
+	// /new, /resume and /fork replace it.
+	private createSessionCommandHost(): SessionFileCommandHost & SessionNameHost & SessionAutoNamerHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			get runtimeHost() {
+				return mode.runtimeHost;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+			showExtensionConfirm: (title, message) => this.dialogs.confirm(title, message),
+			clearStatusIndicator: () => this.clearStatusIndicator(),
+			promptForMissingSessionCwd: (error) => this.dialogs.promptForMissingSessionCwd(error),
+			handleFatalRuntimeError: (prefix, error) => this.handleFatalRuntimeError(prefix, error),
+			get isShuttingDown() {
+				return mode.isShuttingDown;
+			},
+			resolveModelReference: (reference) => this.resolveModelReference(reference),
+		};
+	}
+
+	// Builds the ApprovalDialogHost. `lastStartedTool` and `outputPad` stay getters because each
+	// tool start and each settings reload changes them.
+	private createApprovalDialogHost(): ApprovalDialogHost {
+		const mode = this;
+		return {
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get lastStartedTool() {
+				return mode.lastStartedTool;
+			},
+			get outputPad() {
+				return mode.outputPad;
+			},
+			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
+			showSelector: (create) => this.dialogs.showSelector(create),
+			showExtensionInput: (title, placeholder) => this.dialogs.input(title, placeholder),
+		};
+	}
+
+	// Builds the RollbackCommandHost. `session` and `editor` stay getters because /new, /resume and
+	// /fork replace the session and extensions can replace the editor.
+	private createRollbackCommandHost(): RollbackCommandHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get runtimeHost() {
+				return mode.runtimeHost;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get redoStack() {
+				return mode.redoStack;
+			},
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+		};
+	}
+
+	// Builds the SettingsScreenHost. Every field member is a getter (see the note above the host fields);
+	// the 3 display flags are getter/setter pairs because rows change them.
+	private createSettingsScreenHost(): SettingsScreenHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get statusContainer() {
+				return mode.statusContainer;
+			},
+			get footer() {
+				return mode.footer;
+			},
+			get themeController() {
+				return mode.themeController;
+			},
+			get defaultEditor() {
+				return mode.defaultEditor;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get streamingComponent() {
+				return mode.streamingComponent;
+			},
+			get activeStatusIndicator() {
+				return mode.activeStatusIndicator;
+			},
+			get hideThinkingBlock() {
+				return mode.hideThinkingBlock;
+			},
+			set hideThinkingBlock(hidden) {
+				mode.hideThinkingBlock = hidden;
+			},
+			get thinkingCollapse() {
+				return mode.thinkingCollapse;
+			},
+			set thinkingCollapse(collapse) {
+				mode.thinkingCollapse = collapse;
+			},
+			get outputPad() {
+				return mode.outputPad;
+			},
+			set outputPad(padding) {
+				mode.outputPad = padding;
+			},
+			showStatus: (message) => this.showStatus(message),
+			showError: (message) => this.showError(message),
+			showSelector: (create) => this.dialogs.showSelector(create),
+			rebuildChatFromMessages: () => this.rebuildChatFromMessages(),
+			setupAutocompleteProvider: () => this.setupAutocompleteProvider(),
+			updateEditorBorderColor: () => this.updateEditorBorderColor(),
+			applySmoothStreamingSettingChange: (enabled) => this.applySmoothStreamingSettingChange(enabled),
+			resolveModelReference: (reference) => this.resolveModelReference(reference),
+			showAutoReviewModelPicker: () => this.permissions.showAutoReviewModelPicker(),
+		};
+	}
+
+	// Builds the ExtensionDialogsHost. Every field member is a getter (see the note above the host fields).
+	private createExtensionDialogsHost(): ExtensionDialogsHost {
+		const mode = this;
+		return {
+			get ui() {
+				return mode.ui;
+			},
+			get editorContainer() {
+				return mode.editorContainer;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get keybindings() {
+				return mode.keybindings;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			toggleToolOutputExpansion: () => this.toggleToolOutputExpansion(),
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			showError: (message) => this.showError(message),
+		};
+	}
+
+	// Builds the ExtensionWidgetsHost. `ui` is a getter (see the note above the host fields).
+	private createExtensionWidgetsHost(): ExtensionWidgetsHost {
+		const mode = this;
+		return {
+			get ui() {
+				return mode.ui;
+			},
+		};
+	}
+
+	// Builds the ChatHistoryHost. Every field member is a getter (see the note above the host fields),
+	// so each message is drawn with the display state current when it renders.
+	private createChatHistoryHost(): ChatHistoryHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get sessionManager() {
+				return mode.sessionManager;
+			},
+			get settingsManager() {
+				return mode.settingsManager;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get footer() {
+				return mode.footer;
+			},
+			get streamingComponent() {
+				return mode.streamingComponent;
+			},
+			get pendingTools() {
+				return mode.pendingTools;
+			},
+			get thinkingTimingsByMessage() {
+				return mode.thinkingTimingsByMessage;
+			},
+			get toolOutputExpanded() {
+				return mode.toolOutputExpanded;
+			},
+			get hideThinkingBlock() {
+				return mode.hideThinkingBlock;
+			},
+			get thinkingCollapse() {
+				return mode.thinkingCollapse;
+			},
+			get hiddenThinkingLabel() {
+				return mode.hiddenThinkingLabel;
+			},
+			get outputPad() {
+				return mode.outputPad;
+			},
+			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
+			getRegisteredToolDefinition: (toolName) => this.getRegisteredToolDefinition(toolName),
+			getUserMessageText: (message) => this.getUserMessageText(message),
+			addToolComponentToChat: (component) => this.addToolComponentToChat(component),
+			renderProjectTrustWarningIfNeeded: () => this.renderProjectTrustWarningIfNeeded(),
+			showStatus: (message) => this.showStatus(message),
+			showWarning: (message) => this.showWarning(message),
+			updateEditorBorderColor: () => this.updateEditorBorderColor(),
 		};
 	}
 
@@ -5320,8 +4179,8 @@ export class InteractiveMode {
 			recordActivity: () => recordTuiActivity(this.sessionManager, this.runtimeHost.services.agentDir),
 			showStatus: (message) => this.showStatus(message),
 			showWarning: (message) => this.showWarning(message),
-			showSelector: (create) => this.showSelector(create),
-			showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
+			showSelector: (create) => this.dialogs.showSelector(create),
+			showExtensionSelector: (title, options) => this.dialogs.select(title, options),
 			resolveModelReference: (reference) => this.resolveModelReference(reference),
 			sendUserMessageAfterDeferredBuiltins: (text) => this.sendUserMessageAfterDeferredBuiltins(text),
 		};
@@ -5337,31 +4196,31 @@ export class InteractiveMode {
 			},
 			loginFlowHost: this.loginFlowHost,
 			handleClipboardPaste: (options) => this.handleClipboardPaste(options),
-			showSettingsSelector: () => this.showSettingsSelector(),
+			showSettingsSelector: () => showSettingsSelector(this.settingsScreenHost),
 			showModelsSelector: () => showModelsSelector(this.modelCommandHost),
 			handleModelCommand: (searchTerm) => handleModelCommand(this.modelCommandHost, searchTerm),
 			handleRefreshCommand: () => handleRefreshCommand(this.modelCommandHost),
-			handleExportCommand: (text) => this.handleExportCommand(text),
-			handleImportCommand: (text) => this.handleImportCommand(text),
+			handleExportCommand: (text) => handleExportCommand(this.sessionCommandHost, text),
+			handleImportCommand: (text) => handleImportCommand(this.sessionCommandHost, text),
 			handleCopyCommand: () => this.handleCopyCommand(),
-			handleNameCommand: (text) => this.handleNameCommand(text),
-			handleSessionCommand: () => this.handleSessionCommand(),
-			handleUsageCommand: () => this.handleUsageCommand(),
+			handleNameCommand: (text) => handleNameCommand(this.sessionCommandHost, text),
+			handleSessionCommand: () => handleSessionCommand(this.chatViewHost),
+			handleUsageCommand: () => handleUsageCommand(this.chatViewHost),
 			handleFastCommand: (arg) => this.handleFastCommand(arg),
-			handleContextCommand: () => this.handleContextCommand(),
+			handleContextCommand: () => handleContextCommand(this.chatViewHost),
 			handlePlanCommand: (args) => this.permissions.handlePlanCommand(args),
-			handleHotkeysCommand: () => this.handleHotkeysCommand(),
-			handleHelpCommand: () => this.handleHelpCommand(),
-			showUserMessageSelector: () => this.showUserMessageSelector(),
-			handleCloneCommand: () => this.handleCloneCommand(),
-			showTreeSelector: () => this.showTreeSelector(),
-			handleUndoCommand: () => this.handleUndoCommand(),
-			handleEditCommand: () => this.handleEditCommand(),
-			handleRedoCommand: () => this.handleRedoCommand(),
+			handleHotkeysCommand: () => handleHotkeysCommand(this.chatViewHost),
+			handleHelpCommand: () => handleHelpCommand(this.chatViewHost),
+			showUserMessageSelector: () => showUserMessageSelector(this.sessionNavigationHost),
+			handleCloneCommand: () => handleCloneCommand(this.sessionNavigationHost),
+			showTreeSelector: () => showTreeSelector(this.sessionNavigationHost),
+			handleUndoCommand: () => handleUndoCommand(this.sessionNavigationHost),
+			handleEditCommand: () => handleEditCommand(this.sessionNavigationHost),
+			handleRedoCommand: () => handleRedoCommand(this.sessionNavigationHost),
 			handleModeCommand: (args) => this.permissions.handleModeCommand(args),
 			applyPermissionMode: (permissionMode) => this.permissions.applyPermissionMode(permissionMode),
 			showProcessesSelector: () => this.showProcessesSelector(),
-			handleRollbackCommand: () => this.handleRollbackCommand(),
+			handleRollbackCommand: () => handleRollbackCommand(this.rollbackCommandHost),
 			showTrustSelector: () => this.showTrustSelector(),
 			showOAuthSelector: (oauthMode) => showOAuthSelector(this.loginFlowHost, oauthMode),
 			handleClearCommand: () => this.handleClearCommand(),
@@ -5369,7 +4228,7 @@ export class InteractiveMode {
 			handleReloadCommand: () => this.handleReloadCommand(),
 			handleInitCommand: () => this.handleInitCommand(),
 			handleDebugCommand: () => this.handleDebugCommand(),
-			showSessionSelector: () => this.showSessionSelector(),
+			showSessionSelector: () => showSessionSelector(this.sessionNavigationHost),
 			shutdown: () => this.shutdown(),
 		};
 	}
@@ -5377,7 +4236,7 @@ export class InteractiveMode {
 	/** lunr: show a Yes/No disclaimer dialog using the existing selector pattern. */
 	private confirmDisclaimer(title: string, message: string): Promise<boolean> {
 		return new Promise<boolean>((resolve) => {
-			this.showSelector((done) => {
+			this.dialogs.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
 					title,
 					["Continue", "Cancel"],
@@ -5407,7 +4266,7 @@ export class InteractiveMode {
 		const labels = opts?.labels ?? (["Kill all", "Leave running"] as [string, string]);
 		const defaultIndex = opts?.defaultIndex ?? 1;
 		return new Promise<boolean>((resolve) => {
-			this.showSelector((done) => {
+			this.dialogs.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
 					title,
 					labels,
@@ -5440,7 +4299,7 @@ export class InteractiveMode {
 		let prompt = INIT_PROMPT;
 		const agentsMdPath = path.join(this.sessionManager.getCwd(), "AGENTS.md");
 		if (fs.existsSync(agentsMdPath)) {
-			const choice = await this.showExtensionSelector("AGENTS.md already exists in this project.", [
+			const choice = await this.dialogs.select("AGENTS.md already exists in this project.", [
 				"Cancel",
 				"Overwrite",
 				"Append",
@@ -5457,111 +4316,6 @@ export class InteractiveMode {
 
 		await this.sendUserMessageAfterDeferredBuiltins(prompt);
 		this.showStatus("AGENTS.md is being generated — run /reload when it finishes to load it into context.");
-	}
-
-	// lunr: /undo and /edit rewind the same session via navigateTree (no fork).
-	// /undo leaves the editor alone; /edit pastes the undone user text. /redo
-	// pops the previous leaf and navigates back.
-	private async rewindLastTurn(
-		command: "undo" | "edit",
-	): Promise<{ editorText?: string; editorImages?: ImageContent[] } | undefined> {
-		if (this.session.isStreaming) {
-			this.showWarning(`Wait for the current response to finish before running /${command}.`);
-			return undefined;
-		}
-
-		const nothingLabel = command === "undo" ? "Nothing to undo" : "Nothing to edit";
-		const branch = this.sessionManager.getBranch();
-		let lastUserIndex = -1;
-		for (let i = branch.length - 1; i >= 0; i--) {
-			const entry = branch[i];
-			if (entry.type === "message" && entry.message.role === "user") {
-				lastUserIndex = i;
-				break;
-			}
-		}
-		if (lastUserIndex === -1) {
-			this.showStatus(nothingLabel);
-			return undefined;
-		}
-
-		const lastUser = branch[lastUserIndex];
-		const leafId = this.sessionManager.getLeafId();
-		let targetId: string;
-		if (lastUser.id === leafId) {
-			if (!lastUser.parentId) {
-				this.showStatus(nothingLabel);
-				return undefined;
-			}
-			targetId = lastUser.parentId;
-		} else {
-			targetId = lastUser.id;
-		}
-
-		try {
-			const result = await this.session.navigateTree(targetId, {});
-			if (result.cancelled) {
-				this.showStatus(command === "undo" ? "Undo cancelled" : "Edit cancelled");
-				return undefined;
-			}
-			if (leafId) {
-				this.redoStack.push(leafId);
-			}
-			this.clearChatContainer();
-			this.renderInitialMessages();
-			void this.flushCompactionQueue({ willRetry: false });
-			return { editorText: result.editorText, editorImages: result.editorImages };
-		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
-			return undefined;
-		}
-	}
-
-	private async handleUndoCommand(): Promise<void> {
-		const result = await this.rewindLastTurn("undo");
-		if (!result) return;
-		this.showStatus("Conversation rewound. Files are unchanged; /rollback restores them. /redo to restore the turn.");
-	}
-
-	private async handleEditCommand(): Promise<void> {
-		const result = await this.rewindLastTurn("edit");
-		if (!result) return;
-		this.restoreEditorFromTreeResult({
-			editorText: result.editorText ?? "",
-			editorImages: result.editorImages,
-		});
-		this.showStatus("Editing last message. /redo to restore.");
-	}
-
-	private async handleRedoCommand(): Promise<void> {
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /redo.");
-			return;
-		}
-
-		const targetId = this.redoStack.pop();
-		if (!targetId) {
-			this.showStatus("Nothing to redo");
-			return;
-		}
-
-		try {
-			const result = await this.session.navigateTree(targetId, {});
-			if (result.cancelled) {
-				this.redoStack.push(targetId);
-				this.showStatus("Navigation cancelled");
-				return;
-			}
-			this.clearChatContainer();
-			this.renderInitialMessages();
-			if (result.editorText && !this.editor.getText().trim()) {
-				this.restoreEditorFromTreeResult(result);
-			}
-			this.showStatus("Redone");
-			void this.flushCompactionQueue({ willRetry: false });
-		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
-		}
 	}
 
 	private async handleReloadCommand(): Promise<void> {
@@ -5670,95 +4424,6 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleExportCommand(text: string): Promise<void> {
-		const outputPath = this.getPathCommandArgument(text, "/export");
-
-		try {
-			if (outputPath?.endsWith(".jsonl")) {
-				const filePath = this.session.exportToJsonl(outputPath);
-				this.showStatus(`Session exported to: ${filePath}`);
-			} else {
-				const filePath = await this.session.exportToHtml(outputPath);
-				this.showStatus(`Session exported to: ${filePath}`);
-			}
-		} catch (error: unknown) {
-			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
-		}
-	}
-
-	private getPathCommandArgument(text: string, command: "/export" | "/import"): string | undefined {
-		if (text === command) {
-			return undefined;
-		}
-		if (!text.startsWith(`${command} `)) {
-			return undefined;
-		}
-
-		const argsString = text.slice(command.length + 1).trimStart();
-		if (!argsString) {
-			return undefined;
-		}
-
-		const firstChar = argsString[0];
-		if (firstChar === '"' || firstChar === "'") {
-			const closingQuoteIndex = argsString.indexOf(firstChar, 1);
-			if (closingQuoteIndex < 0) {
-				return undefined;
-			}
-			return argsString.slice(1, closingQuoteIndex);
-		}
-
-		const firstWhitespaceIndex = argsString.search(/\s/);
-		if (firstWhitespaceIndex < 0) {
-			return argsString;
-		}
-		return argsString.slice(0, firstWhitespaceIndex);
-	}
-
-	private async handleImportCommand(text: string): Promise<void> {
-		const inputPath = this.getPathCommandArgument(text, "/import");
-		if (!inputPath) {
-			this.showError("Usage: /import <path.jsonl>");
-			return;
-		}
-
-		const confirmed = await this.showExtensionConfirm("Import session", `Replace current session with ${inputPath}?`);
-		if (!confirmed) {
-			this.showStatus("Import cancelled");
-			return;
-		}
-
-		try {
-			this.clearStatusIndicator();
-			const result = await this.runtimeHost.importFromJsonl(inputPath);
-			if (result.cancelled) {
-				this.showStatus("Import cancelled");
-				return;
-			}
-			this.showStatus(`Session imported from: ${inputPath}`);
-		} catch (error: unknown) {
-			if (error instanceof MissingSessionCwdError) {
-				const selectedCwd = await this.promptForMissingSessionCwd(error);
-				if (!selectedCwd) {
-					this.showStatus("Import cancelled");
-					return;
-				}
-				const result = await this.runtimeHost.importFromJsonl(inputPath, selectedCwd);
-				if (result.cancelled) {
-					this.showStatus("Import cancelled");
-					return;
-				}
-				this.showStatus(`Session imported from: ${inputPath}`);
-				return;
-			}
-			if (error instanceof SessionImportFileNotFoundError) {
-				this.showError(`Failed to import session: ${error.message}`);
-				return;
-			}
-			await this.handleFatalRuntimeError("Failed to import session", error);
-		}
-	}
-
 	private async handleCopyCommand(): Promise<void> {
 		const text = this.session.getLastAssistantText();
 		if (!text) {
@@ -5772,199 +4437,6 @@ export class InteractiveMode {
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
-	}
-
-	private handleNameCommand(text: string): void {
-		const name = text.replace(/^\/(?:name|title)\s*/, "").trim();
-		if (!name) {
-			const currentName = this.sessionManager.getSessionName();
-			if (currentName) {
-				this.chatContainer.addChild(new Spacer(1));
-				this.chatContainer.addChild(new Text(theme.fg("dim", `Session name: ${currentName}`), 1, 0));
-			} else {
-				this.showWarning("Usage: /name <name>");
-			}
-			this.ui.requestRender();
-			return;
-		}
-
-		this.session.setSessionName(name);
-		const sessionName = this.sessionManager.getSessionName();
-		if (sessionName !== name) {
-			this.showWarning(`Session name was normalized from ${JSON.stringify(name)} to ${JSON.stringify(sessionName)}`);
-		}
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
-		this.ui.requestRender();
-	}
-
-	/**
-	 * lunr: fire-and-forget session auto-naming. After the FIRST assistant response in an
-	 * unnamed session, asks the model for a short title derived from the first user message.
-	 * Uses the light tier model when model tiers are enabled; otherwise the session model.
-	 * Never blocks the UI; failures are swallowed to the debug log. Skipped entirely when
-	 * the user has already named the session (via /name, /title, or --name), and during shutdown,
-	 * whose abort of a running first turn also ends in agent_end.
-	 */
-	private maybeAutoNameSession(): void {
-		if (this.autoNameTriggered || this.isShuttingDown) return;
-		if (this.sessionManager.getSessionName()) return;
-		const userMessages = this.session.getUserMessagesForForking();
-		if (userMessages.length === 0) return; // No real turn yet; try again on the next agent_end.
-		if (userMessages.length > 1) {
-			// Resumed/older unnamed session — only auto-name fresh sessions.
-			this.autoNameTriggered = true;
-			return;
-		}
-		this.autoNameTriggered = true;
-		void this.generateSessionTitle(userMessages[0].text);
-	}
-
-	private async generateSessionTitle(firstUserText: string): Promise<void> {
-		try {
-			let model = this.session.model;
-			if (this.settingsManager.getModelTiersEnabled()) {
-				const tierModel = this.resolveModelReference(this.settingsManager.getTierModel("light"));
-				if (tierModel) {
-					model = tierModel;
-				}
-			}
-			if (!model) return;
-			const prompt =
-				"Generate a title of at most 6 words summarizing this request. " +
-				"Reply with the title only — no quotes, no trailing punctuation, no prefix.\n\n" +
-				`Request:\n${firstUserText.slice(0, 2000)}`;
-			const requestSessionId = this.sessionManager.getSessionId();
-			const requestSessionFile = this.sessionManager.getSessionFile();
-			const response = await this.session.modelRuntime.complete(model, {
-				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
-			});
-			if (this.sessionManager.getSessionId() !== requestSessionId) {
-				if (requestSessionFile) {
-					const target = SessionManager.open(requestSessionFile);
-					try {
-						target.appendRequestUsage("title", response);
-					} finally {
-						target.dispose();
-					}
-				}
-				return;
-			}
-			this.sessionManager.appendRequestUsage("title", response);
-			let title = response.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join(" ")
-				.replace(/\s+/g, " ")
-				.trim();
-			title = title.replace(/^["'`]+|["'`.!?]+$/g, "").trim();
-			if (!title) return;
-			if (this.sessionManager.getSessionName()) return; // User named it while the request was in flight.
-			this.session.setSessionName(title);
-		} catch (error) {
-			appendDebugLog(
-				`auto-name: title generation failed: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
-
-	private handleSessionCommand(): void {
-		const stats = this.session.getSessionStats();
-		const sessionName = this.sessionManager.getSessionName();
-		const entries = this.sessionManager.getEntries();
-		const cacheWaste = computeCacheWaste(entries, this.session.modelRuntime);
-
-		// Cost/token totals per provider/model actually used (e.g. OpenRouter `auto`
-		// resolves to a concrete responseModel), sorted by cost descending.
-		const perModelMap = new Map<string, { key: string; cost: number; tokens: number }>();
-		for (const request of collectUsageRequests(entries)) {
-			const key = `${request.provider}/${request.model}`;
-			const bucket = perModelMap.get(key) ?? { key, cost: 0, tokens: 0 };
-			bucket.cost += request.usage.cost.total;
-			bucket.tokens += usageTokens(request.usage);
-			perModelMap.set(key, bucket);
-		}
-		const perModel = Array.from(perModelMap.values()).sort((a, b) => b.cost - a.cost);
-
-		let info = `${theme.bold("Session Info")}\n\n`;
-		if (sessionName) {
-			info += `${theme.fg("dim", "Name:")} ${sessionName}\n`;
-		}
-		info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? "In-memory"}\n`;
-		info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n\n`;
-		info += `${theme.bold("Messages")}\n`;
-		info += `${theme.fg("dim", "Total:")} ${stats.totalMessages}\n`;
-		info += `${theme.fg("dim", "User:")} ${stats.userMessages}\n`;
-		info += `${theme.fg("dim", "Assistant:")} ${stats.assistantMessages}\n`;
-		info += `${theme.fg("dim", "Tools:")} ${stats.toolCalls} calls, ${stats.toolResults} results\n\n`;
-		info += `${theme.bold("Parent tokens including auxiliary requests")}\n`;
-		// "Input" is the full prompt volume. With cache activity, split it into
-		// cached (served from cache) vs uncached (everything else) - the only
-		// provider-independent split. Cache writes, where reported, are a detail
-		// of the uncached portion.
-		const { input, cacheRead, cacheWrite } = stats.tokens;
-		const promptTokens = input + cacheRead + cacheWrite;
-		info += `${theme.fg("dim", "Input:")} ${promptTokens.toLocaleString()}\n`;
-		if (promptTokens > 0 && (cacheRead > 0 || cacheWrite > 0)) {
-			const hitRate = theme.fg("dim", `(${((cacheRead / promptTokens) * 100).toFixed(1)}%)`);
-			info += `  ${theme.fg("dim", "Cached:")} ${cacheRead.toLocaleString()} ${hitRate}\n`;
-			const written =
-				cacheWrite > 0 ? ` ${theme.fg("dim", `(${cacheWrite.toLocaleString()} written to cache)`)}` : "";
-			info += `  ${theme.fg("dim", "Uncached:")} ${(input + cacheWrite).toLocaleString()}${written}\n`;
-		}
-		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
-		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
-		if (stats.childUsage?.total) {
-			info += `Children: ${stats.childUsage.total.toLocaleString()} tokens, $${stats.childUsage.cost.toFixed(3)}\n`;
-			info += `Combined: ${stats.combinedUsage?.total.toLocaleString()} tokens, $${stats.combinedUsage?.cost.toFixed(3)}\n`;
-		}
-		if (stats.parentUsage?.unknownRequests)
-			info += `Usage unavailable for ${stats.parentUsage.unknownRequests} request(s).\n`;
-		if (stats.parentUsage?.partialRequests)
-			info += `Usage incomplete for ${stats.parentUsage.partialRequests} request(s).\n`;
-		if (stats.parentUsage?.unknownCosts)
-			info += `Pricing unavailable for ${stats.parentUsage.unknownCosts} request(s).\n`;
-		info += "Costs use catalog estimates unless the provider reports its account charge.\n";
-
-		if (stats.cost > 0 || cacheWaste.missedTokens > 0) {
-			info += `\n${theme.bold("Cost")}\n`;
-			info += `${theme.fg("dim", "Total:")} $${stats.cost.toFixed(3)}`;
-			if (perModel.length > 1) {
-				for (const entry of perModel) {
-					info += `\n  ${theme.fg("dim", `${entry.key}:`)} $${entry.cost.toFixed(3)} ${theme.fg("dim", `(${formatTokens(entry.tokens)} tokens)`)}`;
-				}
-			}
-			if (cacheWaste.missedTokens > 0) {
-				const missLabel = cacheWaste.missCount === 1 ? "1 miss" : `${cacheWaste.missCount} misses`;
-				const detail = `${cacheWaste.missedTokens.toLocaleString()} tokens, ${missLabel}`;
-				info +=
-					cacheWaste.missedCost >= 0.0001
-						? `\n${theme.fg("dim", "Estimated cache misses:")} $${cacheWaste.missedCost.toFixed(3)} ${theme.fg("dim", `(${detail})`)}`
-						: `\n${theme.fg("dim", "Estimated cache misses:")} ${detail}`;
-			}
-		}
-
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(info, 1, 0));
-		this.ui.requestRender();
-	}
-
-	private collectUsageBreakdown(): ReturnType<typeof computeContextBreakdown> | undefined {
-		const model = this.session.model;
-		const contextWindow = model?.contextWindow ?? 0;
-		if (!model || contextWindow <= 0) return undefined;
-		const tools = this.session
-			.getActiveToolNames()
-			.map((name) => this.session.getToolDefinition(name))
-			.filter((definition) => definition !== undefined);
-		return computeContextBreakdown({
-			systemPrompt: this.session.systemPrompt,
-			tools,
-			messages: this.session.messages,
-			contextWindow,
-			globalAgentsPath: getGlobalInstructionsPath(getAgentDir()),
-			modelAgentsPath: getModelInstructionsPath(getAgentDir(), model.id),
-		});
 	}
 
 	private handleFastCommand(arg: string): void {
@@ -5989,85 +4461,6 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	// lunr: /usage — current session only: token totals, live context split,
-	// context-window bar, and subscription plan usage.
-	private async handleUsageCommand(): Promise<void> {
-		const stats = this.session.getSessionStats();
-		const sessionTotals =
-			stats.tokens.total > 0 ||
-			stats.parentUsage?.requests ||
-			stats.parentUsage?.unknownRequests ||
-			stats.parentUsage?.partialRequests
-				? {
-						input: stats.tokens.input,
-						output: stats.tokens.output,
-						cacheRead: stats.tokens.cacheRead,
-						cacheWrite: stats.tokens.cacheWrite,
-						total: stats.tokens.total,
-						requests: stats.parentUsage?.requests,
-						unknownRequests: stats.parentUsage?.unknownRequests,
-						partialRequests: stats.parentUsage?.partialRequests,
-					}
-				: undefined;
-
-		const context = this.session.getContextUsage();
-		const provider = this.session.model?.provider;
-		const planResult = await getAllPlanUsageResults(provider, this.session.modelRuntime);
-		const breakdown = this.collectUsageBreakdown();
-
-		const lines = renderUsageBox(
-			{
-				sessionTotals,
-				childTotals: stats.childUsage,
-				combinedTotals: stats.combinedUsage,
-				context,
-				plan: planResult.usages,
-				breakdown,
-			},
-			this.ui.terminal.columns,
-		);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
-		if (planResult.errors.length > 0) this.showStatus(planResult.errors.join("\n"));
-		this.ui.requestRender();
-	}
-
-	// lunr: /context — estimated breakdown of what consumes the context window
-	// (system prompt incl. project context files, tool definitions, and the live
-	// session messages). Uses session.messages, so post-compaction renders match
-	// the context the model actually sees.
-	private handleContextCommand(): void {
-		const model = this.session.model;
-		const contextWindow = model?.contextWindow ?? 0;
-		if (!model || contextWindow <= 0) {
-			this.showStatus("No model selected or context window unknown.");
-			return;
-		}
-
-		const breakdown = this.collectUsageBreakdown();
-		if (!breakdown) {
-			this.showStatus("No model selected or context window unknown.");
-			return;
-		}
-
-		const lastReply = [...this.session.messages].reverse().find((message) => message.role === "assistant");
-		const lines = renderContextBox(
-			{
-				breakdown,
-				model: `${model.provider}/${model.id}`,
-				compactionCeiling: this.session.getCompactionCeiling(),
-				notice:
-					lastReply?.role === "assistant" && claudeCodeHistoryReplayed(lastReply)
-						? CLAUDE_CODE_HISTORY_REPLAYED_NOTE
-						: undefined,
-			},
-			this.ui.terminal.columns,
-		);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
-		this.ui.requestRender();
-	}
-
 	/**
 	 * Rings the bell or sends a desktop notice, per the Notifications setting, when a run
 	 * finishes or waits for the user. Skipped while the terminal reports it has focus.
@@ -6083,109 +4476,9 @@ export class InteractiveMode {
 		if (this.session.isStreaming) this.notifyAttention("input");
 	}
 
-	// Approval dialog for one subagent call launching more than two children, and for ask mode's
-	// question before one call (`title`; no session answer when `allowSession` is false; "Always
-	// allow" when the request carries a `rule`). "Reject with feedback" collects a one-line
-	// reason that becomes the block reason the model sees, so it can adjust the plan.
-	private async showToolApprovalDialog(req: ApprovalRequest): Promise<ApprovalResponse> {
-		// Ask mode's question belongs to the call that started last. Its card leaves the time spent
-		// deciding out of "Took" and says "rejected" in words.
-		const card = req.kind === "tool" ? this.lastStartedTool : undefined;
-		card?.beginApproval();
-		const response = await this.askToolApproval(req);
-		card?.endApproval((typeof response === "string" ? response : response.decision) !== "reject");
-		return response;
-	}
-
-	private askToolApproval(req: ApprovalRequest): Promise<ApprovalResponse> {
-		const always = req.rule ? `Always allow in every project (saves ${req.rule} to global settings)` : undefined;
-		return new Promise((resolve) => {
-			this.showSelector((done) => {
-				const selector = new ExtensionSelectorComponent(
-					req.title ?? "Approve large subagent launch?",
-					[
-						"Approve once",
-						...(req.allowSession === false ? [] : ["Approve for this session"]),
-						...(always ? [always] : []),
-						"Reject",
-						"Reject with feedback",
-					],
-					(option) => {
-						done();
-						if (option === "Approve once") resolve("once");
-						else if (option === "Approve for this session") resolve("session");
-						else if (option === always) resolve("always");
-						else if (option === "Reject with feedback") {
-							void this.showExtensionInput(
-								req.kind === "tool" ? `Reject ${req.toolName}` : "Reject large subagent launch",
-								"feedback for the agent (optional)",
-							).then((feedback) => {
-								const trimmed = feedback?.trim();
-								resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
-							});
-						} else resolve("reject");
-					},
-					() => {
-						done();
-						resolve("reject");
-					},
-					{ message: req.detail.slice(0, 500) },
-				);
-				return { component: selector, focus: selector };
-			});
-		});
-	}
-
-	// Approval dialog for present_plan (read-only mode). The "with feedback"
-	// options collect a one-line note via showExtensionInput that becomes part of
-	// the result text the model sees. Esc/close counts as Decline.
-	private showPlanInChat(summary: string): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(
-			new PlanMessageComponent(summary, this.getMarkdownThemeWithSettings(), this.outputPad),
-		);
-		this.ui.requestRender();
-	}
-
-	private async showPlanApprovalDialog(summary: string): Promise<ApprovalResponse> {
-		this.showPlanInChat(summary);
-		return new Promise((resolve) => {
-			this.showSelector((done) => {
-				const selector = new ExtensionSelectorComponent(
-					"▶ Approve plan?",
-					["Approve", "Approve with feedback", "Decline", "Decline with feedback"],
-					(option) => {
-						done();
-						if (option === "Approve") resolve({ decision: "approve" });
-						else if (option === "Approve with feedback") {
-							void this.showExtensionInput("Approve plan", "feedback for the agent (optional)").then(
-								(feedback) => {
-									const trimmed = feedback?.trim();
-									resolve(trimmed ? { decision: "approve", feedback: trimmed } : { decision: "approve" });
-								},
-							);
-						} else if (option === "Decline with feedback") {
-							void this.showExtensionInput("Decline plan", "feedback for the agent (optional)").then(
-								(feedback) => {
-									const trimmed = feedback?.trim();
-									resolve(trimmed ? { decision: "reject", feedback: trimmed } : "reject");
-								},
-							);
-						} else resolve("reject");
-					},
-					() => {
-						done();
-						resolve("reject");
-					},
-				);
-				return { component: selector, focus: selector };
-			});
-		});
-	}
-
 	// lunr: /processes — view and manage background processes.
 	private showProcessesSelector(): void {
-		this.showSelector((done) => {
+		this.dialogs.showSelector((done) => {
 			const component = new ProcessesSelectorComponent(() => {
 				done();
 			});
@@ -6193,266 +4486,11 @@ export class InteractiveMode {
 		});
 	}
 
-	// lunr: /rollback — restore last turn's file changes + persistently rewind the conversation.
-	private async handleRollbackCommand(): Promise<void> {
-		if (this.session.isStreaming) {
-			this.showWarning("Wait for the current response to finish before running /rollback.");
-			return;
-		}
-		if (!isRollbackEnabled(this.sessionManager.getSessionId())) {
-			this.showStatus("Rollback is disabled — enable it in /settings → Rollback");
-			return;
-		}
-		const recoveryBlocked = getRollbackRecoveryBlockReason(this.sessionManager.getSessionId());
-		if (recoveryBlocked) {
-			this.showWarning(recoveryBlocked);
-			return;
-		}
-
-		// lunr: how many turns the rollback will consume — the newest non-empty turn
-		// plus any empty (chat-only) turns on top of it. The conversation must rewind
-		// past the same number of user messages or files and messages desync.
-		// Defaults to 1 so /rollback still rewinds one exchange when there's nothing to restore.
-		const turnsToConsume = Math.max(1, peekRollbackTurnsConsumed(this.sessionManager.getSessionId()));
-
-		// Find the rewind target (the turnsToConsume-th user message from the end of
-		// the current branch) BEFORE mutating anything — forking to it is what makes
-		// the rewind persistent.
-		const branch = this.sessionManager.getBranch();
-		let targetUserId = getRollbackTargetUserId(this.sessionManager.getSessionId());
-		if (targetUserId && !branch.some((entry) => entry.id === targetUserId)) {
-			this.showWarning("Rollback recovery belongs to another chat branch. Return to that branch to retry.");
-			return;
-		}
-		let userMessagesSeen = 0;
-		let fallbackUserId: string | undefined;
-		for (let i = branch.length - 1; !targetUserId && i >= 0; i--) {
-			const entry = branch[i];
-			if (entry.type === "message" && entry.message.role === "user") {
-				userMessagesSeen++;
-				fallbackUserId = entry.id;
-				if (userMessagesSeen >= turnsToConsume) break;
-			}
-		}
-		targetUserId ??= fallbackUserId;
-		if (!targetUserId) {
-			this.showStatus("Nothing to roll back");
-			return;
-		}
-
-		let result: RollbackResult;
-		try {
-			result = rollbackLastTurn(this.sessionManager.getSessionId(), { deferCommit: true, targetUserId });
-		} catch (error) {
-			this.showError(
-				`Rollback could not prepare recovery: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			return;
-		}
-		if (!result.complete) {
-			const failures = result.failed
-				.slice(0, 3)
-				.map(({ path: file, error }) => `${path.basename(file)}: ${error}`)
-				.join("; ");
-			this.showWarning(
-				`Rollback incomplete. ${result.restored.length} file(s) restored, ${result.deleted.length} deleted, ${result.failed.length} failed. ${failures}. Chat unchanged. /rollback retries this turn's unfinished recovery.`,
-			);
-			return;
-		}
-
-		let chatRewound = false;
-		try {
-			// Restore first, but keep snapshots and completed-path receipts until
-			// the fork succeeds. A veto or exception retries only this chat rewind.
-			const oldSid = this.sessionManager.getSessionId();
-			const forkResult = await this.runtimeHost.fork(targetUserId, { position: "before" });
-			if (forkResult.cancelled) {
-				this.showWarning(
-					"File recovery complete. Chat rewind cancelled. /rollback retries the same turn without restoring completed files again.",
-				);
-				return;
-			}
-			chatRewound = true;
-			migrateRollbackSession(oldSid, this.sessionManager.getSessionId());
-			if (result.turnIndex !== undefined) commitRollbackTurn(this.sessionManager.getSessionId(), result.turnIndex);
-			// /redo cannot cross a fork because the branched session has new entry ids.
-			this.redoStack.length = 0;
-			if (forkResult.selectedText && !this.editor.getText().trim()) {
-				this.editor.setText(forkResult.selectedText);
-			}
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			this.showError(
-				chatRewound
-					? `Chat rewound, but finishing rollback failed: ${message}`
-					: `File recovery complete; chat rewind failed: ${message}. /rollback retries the same turn.`,
-			);
-			return;
-		}
-
-		const names = (paths: string[]): string => {
-			const base = paths
-				.slice(0, 3)
-				.map((p) => path.basename(p))
-				.join(", ");
-			return paths.length > 3 ? `${base}, …` : base;
-		};
-		const parts: string[] = [];
-		if (result.restored.length > 0)
-			parts.push(`${result.restored.length} file(s) restored (${names(result.restored)})`);
-		if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted (${names(result.deleted)})`);
-		if (parts.length === 0)
-			parts.push(result.turnIndex === undefined ? "no file changes to restore" : "file recovery complete");
-		this.showStatus(`Rollback complete — ${parts.join("; ")}.`);
-	}
-
 	/**
 	 * Get capitalized display string for an app keybinding action.
 	 */
 	private getAppKeyDisplay(action: AppKeybinding): string {
 		return keyDisplayText(action);
-	}
-
-	/**
-	 * Get capitalized display string for an editor keybinding action.
-	 */
-	private getEditorKeyDisplay(action: Keybinding): string {
-		return keyDisplayText(action);
-	}
-
-	/** Prints the short /help block: the commands and keys a new user needs first. */
-	private handleHelpCommand(): void {
-		const lines = buildHelpLines(
-			{
-				cyclePermissionMode: this.getAppKeyDisplay("app.mode.cycle"),
-				interrupt: this.getAppKeyDisplay("app.interrupt"),
-			},
-			(title) => theme.bold(theme.fg("accent", title)),
-		);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.ui.requestRender();
-	}
-
-	private handleHotkeysCommand(): void {
-		// Navigation keybindings
-		const cursorUp = this.getEditorKeyDisplay("tui.editor.cursorUp");
-		const cursorDown = this.getEditorKeyDisplay("tui.editor.cursorDown");
-		const cursorLeft = this.getEditorKeyDisplay("tui.editor.cursorLeft");
-		const cursorRight = this.getEditorKeyDisplay("tui.editor.cursorRight");
-		const cursorWordLeft = this.getEditorKeyDisplay("tui.editor.cursorWordLeft");
-		const cursorWordRight = this.getEditorKeyDisplay("tui.editor.cursorWordRight");
-		const cursorLineStart = this.getEditorKeyDisplay("tui.editor.cursorLineStart");
-		const cursorLineEnd = this.getEditorKeyDisplay("tui.editor.cursorLineEnd");
-		const jumpForward = this.getEditorKeyDisplay("tui.editor.jumpForward");
-		const jumpBackward = this.getEditorKeyDisplay("tui.editor.jumpBackward");
-		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
-		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
-
-		// Editing keybindings
-		const submit = this.getEditorKeyDisplay("tui.input.submit");
-		const newLine = this.getEditorKeyDisplay("tui.input.newLine");
-		const deleteWordBackward = this.getEditorKeyDisplay("tui.editor.deleteWordBackward");
-		const deleteWordForward = this.getEditorKeyDisplay("tui.editor.deleteWordForward");
-		const deleteToLineStart = this.getEditorKeyDisplay("tui.editor.deleteToLineStart");
-		const deleteToLineEnd = this.getEditorKeyDisplay("tui.editor.deleteToLineEnd");
-		const yank = this.getEditorKeyDisplay("tui.editor.yank");
-		const yankPop = this.getEditorKeyDisplay("tui.editor.yankPop");
-		const undo = this.getEditorKeyDisplay("tui.editor.undo");
-		const tab = this.getEditorKeyDisplay("tui.input.tab");
-
-		// App keybindings
-		const interrupt = this.getAppKeyDisplay("app.interrupt");
-		const clear = this.getAppKeyDisplay("app.clear");
-		const exit = this.getAppKeyDisplay("app.exit");
-		const suspend = this.getAppKeyDisplay("app.suspend");
-		const cycleThinkingLevel = this.getAppKeyDisplay("app.thinking.cycle");
-		const cyclePermissionMode = this.getAppKeyDisplay("app.mode.cycle");
-		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
-		const selectModel = this.getAppKeyDisplay("app.model.select");
-		const expandTools = "click";
-		const toggleThinking = this.getAppKeyDisplay("app.thinking.toggle");
-		const externalEditor = this.getAppKeyDisplay("app.editor.external");
-		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
-		const copyMessage = this.getAppKeyDisplay("app.message.copy");
-		const followUp = this.getAppKeyDisplay("app.message.followUp");
-		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
-		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
-
-		let hotkeys = `
-**Navigation**
-| Key | Action |
-|-----|--------|
-| \`${cursorUp}\` / \`${cursorDown}\` / \`${cursorLeft}\` / \`${cursorRight}\` | Move cursor / browse history |
-| \`${cursorWordLeft}\` / \`${cursorWordRight}\` | Move by word |
-| \`${cursorLineStart}\` | Start of line |
-| \`${cursorLineEnd}\` | End of line |
-| \`${jumpForward}\` | Jump forward to character |
-| \`${jumpBackward}\` | Jump backward to character |
-| \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
-| Mouse wheel | Scroll session (Ctrl+wheel pages) |
-
-**Editing**
-| Key | Action |
-|-----|--------|
-| \`${submit}\` | Send message |
-| \`${newLine}\` | New line${process.platform === "win32" ? " (Ctrl+Enter on Windows Terminal)" : ""} |
-| \`${deleteWordBackward}\` | Delete word backwards |
-| \`${deleteWordForward}\` | Delete word forwards |
-| \`${deleteToLineStart}\` | Delete to start of line |
-| \`${deleteToLineEnd}\` | Delete to end of line |
-| \`${yank}\` | Paste the most-recently-deleted text |
-| \`${yankPop}\` | Cycle through the deleted text after pasting |
-| \`${undo}\` | Undo |
-
-**Other**
-| Key | Action |
-|-----|--------|
-| \`${tab}\` | Path completion / accept autocomplete |
-| \`${interrupt}\` | Cancel autocomplete / abort streaming |
-| \`${clear}\` | Clear editor (first) / exit (second) |
-| \`${exit}\` twice | Exit (when editor is empty) |
-| \`${suspend}\` | Suspend to background |
-| \`${cyclePermissionMode}\` | Cycle permission mode |
-${cycleThinkingLevel ? `| \`${cycleThinkingLevel}\` | Cycle thinking level |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
-| \`${selectModel}\` | Open model selector |
-| \`${expandTools}\` | Expand or collapse a thinking/tool card |
-${toggleThinking ? `| \`${toggleThinking}\` | Toggle thinking block visibility |\n` : ""}| \`${externalEditor}\` | Edit message in external editor |
-| \`${copyMessage}\` | Copy last assistant message |
-| \`${followUp}\` | Queue follow-up message |
-| \`${dequeue}\` | Restore queued messages |
-| \`${pasteImage}\` | Paste image or text from clipboard |
-| \`/paste-image\` | Paste image without a terminal shortcut |
-| \`/\` | Slash commands |
-| \`!\` | Run bash command |
-| \`!!\` | Run bash command (excluded from context) |
-`;
-
-		// Add extension-registered shortcuts
-		const extensionRunner = this.session.extensionRunner;
-		const shortcuts = extensionRunner.getShortcuts(this.keybindings.getEffectiveConfig());
-		if (shortcuts.size > 0) {
-			hotkeys += `
-**Extensions**
-| Key | Action |
-|-----|--------|
-`;
-			for (const [key, shortcut] of shortcuts) {
-				const description = shortcut.description ?? shortcut.extensionPath;
-				const keyDisplay = formatKeyText(key, { capitalize: true });
-				hotkeys += `| \`${keyDisplay}\` | ${description} |\n`;
-			}
-		}
-
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Keyboard Shortcuts")), 1, 0));
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Markdown(hotkeys.trim(), 1, 1, this.getMarkdownThemeWithSettings()));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.ui.requestRender();
 	}
 
 	private async handleClearCommand(): Promise<void> {
