@@ -9,7 +9,8 @@ import { lazyApi } from "./lazy.ts";
  */
 const importNodeOnlyApi = (specifier: string): Promise<unknown> => {
 	const runtimeSpecifier = import.meta.url.endsWith(".js") ? specifier.replace(/\.ts$/, ".js") : specifier;
-	return import(runtimeSpecifier);
+	// Against import.meta.url, which a bundle rewrites to this file's mirrored entry path.
+	return import(new URL(runtimeSpecifier, import.meta.url).href);
 };
 
 let bedrockModuleOverride: ProviderStreams | undefined;
