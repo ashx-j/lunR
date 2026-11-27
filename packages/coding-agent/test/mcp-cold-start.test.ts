@@ -134,9 +134,9 @@ function createMockPi(cwd: string) {
 	return pi;
 }
 
-async function emit(pi: ReturnType<typeof createMockPi>, event: string) {
+async function emit(pi: ReturnType<typeof createMockPi>, event: string, payload: object = {}) {
 	for (const handler of pi.handlers.get(event) ?? []) {
-		await handler({}, pi.ctx);
+		await handler(payload, pi.ctx);
 	}
 }
 
@@ -384,7 +384,7 @@ describe("mcp cold-start dependency split", () => {
 		expect(heavyLoaded).toBe(false);
 	});
 
-	it("preloads the engine after the first TUI answer when servers are configured, never in print mode", async () => {
+	it("preloads the engine when the first TUI answer starts and servers are configured, never in print mode", async () => {
 		const agentDir = tempAgentDir();
 		const serverDef = { command: "true", lifecycle: "lazy" };
 		const configPath = writeConfig(agentDir, { mcpServers: { lazy: serverDef } });
@@ -408,16 +408,21 @@ describe("mcp cold-start dependency split", () => {
 		const pi = createMockPi(agentDir);
 		mod.default(pi);
 		await emit(pi, "session_start");
-		await emit(pi, "agent_end");
-		await new Promise((resolve) => setTimeout(resolve, 20));
+		// The preload is the only thing the message_start handler schedules.
+		const timeouts = vi.spyOn(globalThis, "setTimeout");
+		const assistantStart = { type: "message_start", message: { role: "assistant" } };
+		await emit(pi, "message_start", assistantStart);
+		pi.ctx.mode = "tui";
+		await emit(pi, "message_start", { type: "message_start", message: { role: "user" } });
+		expect(timeouts).not.toHaveBeenCalled();
 		expect(loadCount).toBe(0);
 
-		pi.ctx.mode = "tui";
-		await emit(pi, "agent_end");
+		await emit(pi, "message_start", assistantStart);
+		expect(timeouts).toHaveBeenCalledTimes(1);
 		await vi.waitFor(() => expect(loadCount).toBe(1));
-		await emit(pi, "agent_end");
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(loadCount).toBe(1);
+		const scheduled = timeouts.mock.calls.length;
+		await emit(pi, "message_start", assistantStart);
+		expect(timeouts.mock.calls.length).toBe(scheduled);
 		await emit(pi, "session_shutdown");
 	});
 

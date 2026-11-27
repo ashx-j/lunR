@@ -348,10 +348,13 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     startSessionInit(generation, pi, ctx);
   });
 
-  // The engine (with zod and the MCP SDK) costs about 100 ms to import, which a lazy server's
-  // first call would wait for. In the TUI, import it once the first answer is done.
-  pi.on("agent_end", (_event, ctx) => {
-    if (enginePreloadStarted || ctx.mode !== "tui" || !hasConfiguredServers) return;
+  // The engine (with zod and the MCP SDK) blocks the event loop for about 100 ms while it imports,
+  // and a lazy server's first call would wait for it. In the TUI with any server configured, import
+  // it when the first answer starts (the assistant message_start, which providers emit when the
+  // response headers arrive): the model is still working and the user is not typing. Eager servers
+  // have already started the import, and a tool call that comes first awaits the same promise.
+  pi.on("message_start", (event, ctx) => {
+    if (enginePreloadStarted || event.message.role !== "assistant" || ctx.mode !== "tui" || !hasConfiguredServers) return;
     enginePreloadStarted = true;
     setTimeout(() => void loadHeavyModules().catch(() => {}), 0);
   });
