@@ -1,8 +1,9 @@
 /**
  * lunR: reviewed auto mode. In auto, a review model checks each risky tool call before it runs,
  * the way Claude Code, Codex, Grok Build and Qwen Code do in their own auto modes. Reads, edits
- * inside the project and lunR's own bookkeeping tools skip review; everything else that read-only
- * mode would block goes to the reviewer. AgentSession calls these helpers from its tool gate.
+ * inside the project and lunR's own bookkeeping tools skip review, and so do the shell commands
+ * `auto-review-skip.ts` proves harmless; everything else that read-only mode would block goes to
+ * the reviewer. AgentSession calls these helpers from its tool gate.
  */
 
 import { isAbsolute, relative, sep } from "node:path";

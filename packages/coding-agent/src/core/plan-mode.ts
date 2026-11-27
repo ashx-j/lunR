@@ -789,11 +789,22 @@ function isMutatingSed(args: string[], hasGlob: boolean): boolean {
 	return sedScriptWritesOrRuns(script);
 }
 
+/** The files a sed script reads with `r`/`R`, or undefined when it writes, runs a command or doesn't parse. */
+export function sedScriptReads(script: string): string[] | undefined {
+	const reads: string[] = [];
+	try {
+		return sedScriptWritesOrRuns(script, reads) ? undefined : reads;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Walks a sed script with GNU sed's grammar. True when a command or `s` flag writes a file or runs a
- * command, and for anything the walk does not understand. `r` and `R` only read.
+ * command, and for anything the walk does not understand. `r` and `R` only read; their
+ * file names go to `reads`.
  */
-function sedScriptWritesOrRuns(script: string): boolean {
+function sedScriptWritesOrRuns(script: string, reads?: string[]): boolean {
 	let i = 0;
 	const fail = (): never => {
 		throw new Error("unparsed sed script");
@@ -935,9 +946,12 @@ function sedScriptWritesOrRuns(script: string): boolean {
 					while (i < script.length && script[i] !== "\n") i += script[i] === "\\" ? 2 : 1;
 					break;
 				case "r":
-				case "R":
+				case "R": {
+					const file = i;
 					skipToLineEnd();
+					reads?.push(script.slice(file, i).trim());
 					break;
+				}
 				case "s": {
 					const delim = delimiter();
 					skipRegex(delim);

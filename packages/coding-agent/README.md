@@ -211,7 +211,7 @@ Some commands still work when typed but stay out of the `/` list: the aliases `/
 
 `yolo` is the default. Every tool call runs without an approval prompt.
 
-`auto` works like `yolo`, but a reviewer model checks risky calls before they run, such as shell commands that change things, writes outside the project or to hidden files, and web fetches. Pick the reviewer in `/settings` under Auto review model.
+`auto` works like `yolo`, but a reviewer model checks risky calls before they run, such as shell commands that do more than plain file work inside the project, writes outside the project or to hidden files, and web fetches. Pick the reviewer in `/settings` under Auto review model.
 
 `ask` asks you before each change: shell commands that change things, edits, writes, MCP calls and full-access subagents. Reads run without asking.
 
