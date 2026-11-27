@@ -135,13 +135,13 @@ export function credentialArgsReason(input: Record<string, unknown>, cwd: string
 export function credentialBashReason(command: string, cwd: string): string | undefined {
 	if (!CREDENTIAL_NAME.test(command)) return undefined;
 	let base = cwd;
-	for (const words of literalSegments(command)) {
+	for (const words of literalSegments(command).map((segment) => segment.map(fromMsysPath))) {
 		if (words[0] === "cd" && words.length === 2) {
 			base = resolveToCwd(words[1], base);
 			continue;
 		}
 		for (const word of words) {
-			const value = word.slice(word.lastIndexOf("=") + 1);
+			const value = fromMsysPath(word.slice(word.lastIndexOf("=") + 1));
 			if (credentialPathReason(word, base) || (value !== word && value && credentialPathReason(value, base))) {
 				return CREDENTIAL_BLOCK_REASON;
 			}
@@ -149,6 +149,19 @@ export function credentialBashReason(command: string, cwd: string): string | und
 	}
 	return undefined;
 }
+
+/**
+ * Bash on Windows names drive `C:` as `/c` (Git Bash, MSYS2), `/cygdrive/c` (Cygwin) or `/mnt/c`
+ * (WSL), so `/c/Users/me` is `C:/Users/me` there. `/c` alone is the drive's root, not `C:`, which
+ * Node reads as the current directory on that drive.
+ */
+function fromMsysPath(word: string): string {
+	return process.platform === "win32" ? word.replace(/^(?:\/cygdrive|\/mnt)?\/([a-z])(?=\/|$)/i, "$1:/") : word;
+}
+
+// Inside double quotes bash keeps a backslash unless it escapes one of these, so a quoted Windows
+// path such as "C:\Users\me\auth.json" keeps its separators.
+const DOUBLE_QUOTE_ESCAPES = new Set(["$", "`", '"', "\\", "\n"]);
 
 /** Bash words with quotes and escapes removed, grouped by `;`, `|`, `&` and newline. */
 function literalSegments(command: string): string[][] {
@@ -162,7 +175,8 @@ function literalSegments(command: string): string[][] {
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
 		if (ch === "\\" && quote !== "'" && i + 1 < command.length) {
-			word += command[++i];
+			if (quote === '"' && !DOUBLE_QUOTE_ESCAPES.has(command[i + 1])) word += ch;
+			else word += command[++i];
 		} else if (quote) {
 			if (ch === quote) quote = undefined;
 			else word += ch;

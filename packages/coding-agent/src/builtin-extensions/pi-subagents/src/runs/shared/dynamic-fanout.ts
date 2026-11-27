@@ -1,4 +1,4 @@
-import type { DynamicParallelStep, ParallelTaskItem } from "../../shared/settings.ts";
+import type { DynamicParallelStep, Materialized, ParallelTaskItem } from "../../shared/settings.ts";
 import type { ArtifactPaths, ChainOutputMap, JsonSchemaObject, SingleResult } from "../../shared/types.ts";
 import { getSingleResultOutput } from "../../shared/utils.ts";
 import { validateChildDescription } from "../../shared/child-spec.ts";
@@ -35,7 +35,7 @@ export interface DynamicCollectedResult {
 
 export interface DynamicMaterializedGroup {
 	items: DynamicMaterializedItem[];
-	parallel: ParallelTaskItem[];
+	parallel: Materialized<ParallelTaskItem>[];
 	collectedOnEmpty?: DynamicCollectedResult[];
 }
 

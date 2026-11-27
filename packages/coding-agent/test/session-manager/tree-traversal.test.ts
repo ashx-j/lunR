@@ -1,7 +1,9 @@
+import { estimateContextTokens } from "@earendil-works/pi-ai/compat";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
+import { convertToLlm } from "../../src/core/messages.ts";
 import { type CustomEntry, SessionManager } from "../../src/core/session-manager.ts";
 import { assistantMsg, userMsg } from "../utilities.ts";
 
@@ -64,6 +66,19 @@ describe("SessionManager append and tree traversal", () => {
 			}
 
 			expect(entries[2].parentId).toBe(modelId);
+		});
+
+		it("stamps a compaction later than a kept reply from a faster clock, so its usage is not trusted", () => {
+			const session = SessionManager.inMemory();
+			session.appendMessage(userMsg("1"));
+			const reply = { ...assistantMsg("2"), timestamp: Date.now() + 60_000 };
+			reply.usage = { ...reply.usage, input: 50_000, totalTokens: 50_000 };
+			const kept = session.appendMessage(reply);
+			session.appendCompaction("summary", kept, 50_000);
+			const { messages } = session.buildSessionContext();
+			expect(messages.map((message) => message.role)).toEqual(["compactionSummary", "assistant"]);
+			expect(messages[0].timestamp).toBeGreaterThan(reply.timestamp);
+			expect(estimateContextTokens(convertToLlm(messages)).lastUsageIndex).toBeNull();
 		});
 
 		it("appendCompaction integrates into tree", () => {

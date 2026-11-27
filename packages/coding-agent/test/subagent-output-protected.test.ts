@@ -89,7 +89,13 @@ describe("subagent output to a protected target", () => {
 		} as never);
 	}
 
-	const child = (output?: string) => ({ description: "probe", model, thinking: "high", task: "say hi", output });
+	const child = (output?: string) => ({
+		description: "probe",
+		model,
+		thinking: "high" as const,
+		task: "say hi",
+		output,
+	});
 
 	it("starts a child for an output inside the project", async () => {
 		const result = await launch(child(join(root, "report.md")));

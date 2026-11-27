@@ -29,8 +29,8 @@ export interface AsyncResumeOptions {
 	requireSessionFile?: boolean;
 }
 
-export type AsyncResumeTarget = {
-	kind: "live" | "revive";
+// A union on kind so that checking kind narrows the target.
+export type AsyncResumeTarget = ({ kind: "live" } | { kind: "revive" }) & {
 	runId: string;
 	asyncDir?: string;
 	state: AsyncStatus["state"];

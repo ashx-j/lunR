@@ -172,7 +172,9 @@ export class BashJobs {
 		}
 		const id = `j${this.nextId++}`;
 		const logPath = join(this.logDir, `${id}.log`);
-		const logFd = openSync(logPath, "a");
+		// Git Bash cannot write to an append-only Windows handle ("a" opens one): echo fails and the
+		// log stays empty. The log is new, so "w" writes the same bytes there.
+		const logFd = openSync(logPath, process.platform === "win32" ? "w" : "a");
 		const commandFromStdin = shellConfig.commandTransport === "stdin";
 		const child = (() => {
 			try {

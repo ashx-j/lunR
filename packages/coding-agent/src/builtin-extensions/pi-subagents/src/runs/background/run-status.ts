@@ -15,7 +15,8 @@ import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-
 import { attachRootChildrenToSteps, findNestedRouteForRootId, projectNestedRegistryForRoot, type NestedRunResolutionScope } from "../shared/nested-events.ts";
 
 interface RunStatusParams {
-	action?: "status";
+	// The caller passes its whole params object; this file never reads action.
+	action?: string;
 	id?: string;
 	runId?: string;
 	dir?: string;

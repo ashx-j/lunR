@@ -295,12 +295,13 @@ const CWD_CONFIG_COMMANDS = new Set(["git", "gh", "npm", "pnpm", "bun"]);
  * True when `cd <target>` stays in `cwd`: `.`, `./`, or `cwd` spelled as an absolute path. Other
  * spellings are refused even when Node resolves them to `cwd`, because bash can read them
  * differently: `~/..` expands first, a relative name is searched in `CDPATH`, and `..` after a
- * symlink leaves the tree under `set -P`. Off on Windows, where Node and Git Bash disagree on `/`.
+ * symlink leaves the tree under `set -P`. Absolute paths are refused on Windows, where Node and Git Bash
+ * disagree on `/`.
  */
 function isCdToSessionDirectory(target: string, cwd: string | undefined): boolean {
-	if (cwd === undefined || process.platform === "win32") return false;
+	if (cwd === undefined) return false;
 	if (target === "." || target === "./") return true;
-	if (!target.startsWith("/") || target.split("/").includes("..")) return false;
+	if (process.platform === "win32" || !target.startsWith("/") || target.split("/").includes("..")) return false;
 	return resolve(target) === resolve(cwd);
 }
 

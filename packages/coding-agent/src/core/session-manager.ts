@@ -1267,7 +1267,7 @@ export class SessionManager {
 			type: "compaction",
 			id: generateId(this.byId),
 			parentId: this.leafId,
-			timestamp: new Date().toISOString(),
+			timestamp: new Date(Math.max(Date.now(), this.newestTimestampFrom(firstKeptEntryId) + 1)).toISOString(),
 			summary,
 			firstKeptEntryId,
 			tokensBefore,
@@ -1276,6 +1276,27 @@ export class SessionManager {
 		};
 		this._appendEntry(entry);
 		return entry.id;
+	}
+
+	/**
+	 * The newest timestamp (ms) on the current branch from `fromId` to the leaf, or 0. A compaction is
+	 * stamped later than every message it keeps: the context estimate trusts a kept reply's usage
+	 * while the reply is not older than the summary (`getLastAssistantUsageInfo`), and `Date.now()`
+	 * alone can tie with a reply, step backwards, or run behind the machine that wrote the session.
+	 */
+	private newestTimestampFrom(fromId: string): number {
+		const branch = this.getBranch();
+		let newest = 0;
+		for (const entry of branch.slice(
+			Math.max(
+				0,
+				branch.findIndex((item) => item.id === fromId),
+			),
+		)) {
+			const time = entry.type === "message" ? entry.message.timestamp : Date.parse(entry.timestamp);
+			if (Number.isFinite(time) && time > newest) newest = time;
+		}
+		return newest;
 	}
 
 	/** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */

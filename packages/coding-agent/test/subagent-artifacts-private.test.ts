@@ -21,6 +21,8 @@ import {
 } from "../src/builtin-extensions/pi-subagents/src/shared/artifacts.ts";
 
 const mode = (path: string) => lstatSync(path).mode & 0o777;
+// Windows has no owner-only mode bits (Node reports 0o666 for any writable entry); the user profile's ACLs keep the tree private there.
+const posixModes = process.platform !== "win32";
 
 // Transcripts hold the user's code and prompts, so the tree must stay private whatever the umask.
 describe("subagent artifacts dir", () => {
@@ -43,11 +45,13 @@ describe("subagent artifacts dir", () => {
 		writeArtifact(join(dir, "a_input.md"), "task");
 		writeMetadata(join(dir, "a_meta.json"), { ok: true });
 		appendJsonl(join(dir, "a.jsonl"), "{}");
+		expect(readdirSync(dir).sort()).toEqual(["a.jsonl", "a_input.md", "a_meta.json"]);
+		if (!posixModes) return;
 		expect(mode(dir)).toBe(0o700);
 		for (const name of readdirSync(dir)) expect(mode(join(dir, name)), name).toBe(0o600);
 	});
 
-	it("tightens a tree an older lunR left loose", () => {
+	it.skipIf(!posixModes)("tightens a tree an older lunR left loose", () => {
 		const dir = join(root, "loose", "subagent-artifacts");
 		mkdirSync(join(dir, "outputs", "run"), { recursive: true, mode: 0o775 });
 		writeFileSync(join(dir, "outputs", "run", "r.md"), "x", { mode: 0o664 });

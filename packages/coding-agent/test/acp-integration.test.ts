@@ -430,7 +430,10 @@ describe("compiled ACP stdio integration", () => {
 					finished = true;
 				});
 			await vi.waitFor(() => expect(forms).toHaveLength(1));
-			await vi.waitFor(() => expect(noticeText(updates).join("\n")).toContain("Dismiss it or stop the turn"));
+			// The 200 ms form timeout plus settle round trips can pass vitest's 1 s default on a loaded runner.
+			await vi.waitFor(() => expect(noticeText(updates).join("\n")).toContain("Dismiss it or stop the turn"), {
+				timeout: 10_000,
+			});
 			expect(assistantText(updates)).not.toContain("Dismiss it");
 			expect(readFileSync(join(project, `${kind}-answer`), "utf8")).toBe("cancelled");
 			expect(finished).toBe(false);

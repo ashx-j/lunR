@@ -35,7 +35,7 @@ export function renderCommunicationCall(
 	name: string,
 	args: CommunicationArgs,
 	theme: Theme,
-	context: Pick<ToolRenderContext<unknown, CommunicationArgs>, "result" | "expanded"> | undefined,
+	context: Partial<Pick<ToolRenderContext<unknown, CommunicationArgs>, "result" | "expanded">> | undefined,
 	communication?: SubagentCommunication,
 	displayTitle?: string,
 ): Container {

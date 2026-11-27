@@ -1,18 +1,23 @@
+import { globalBridge } from "./global-bridge.ts";
+
 interface StdoutTakeoverState {
 	rawStdoutWrite: (chunk: string, callback?: (error?: Error | null) => void) => boolean;
 	rawStderrWrite: (chunk: string, callback?: (error?: Error | null) => void) => boolean;
 	originalStdoutWrite: typeof process.stdout.write;
 }
 
-let stdoutTakeoverState: StdoutTakeoverState | undefined;
+// The CLI runs from a bundle, while built-in extensions import this file unbundled. Both copies
+// keep the takeover and the raw write queue on globalThis, so an extension's writeRawStdout()
+// reaches real stdout after the CLI took it over.
+const takeoverSlot = globalBridge<StdoutTakeoverState>(Symbol.for("@lunr/stdout-takeover"));
+const writeTailSlot = globalBridge<Promise<void>>(Symbol.for("@lunr/raw-stdout-write-tail"));
 
 const RAW_STDOUT_RETRY_DELAY_MS = 10;
 
-let rawStdoutWriteTail: Promise<void> = Promise.resolve();
-
 function getRawStdoutWrite(): StdoutTakeoverState["rawStdoutWrite"] {
-	if (stdoutTakeoverState) {
-		return stdoutTakeoverState.rawStdoutWrite;
+	const takeover = takeoverSlot.get();
+	if (takeover) {
+		return takeover.rawStdoutWrite;
 	}
 	return process.stdout.write.bind(process.stdout) as StdoutTakeoverState["rawStdoutWrite"];
 }
@@ -43,7 +48,7 @@ async function writeRawStdoutChunk(text: string): Promise<void> {
 }
 
 export function takeOverStdout(): void {
-	if (stdoutTakeoverState) {
+	if (takeoverSlot.get()) {
 		return;
 	}
 
@@ -62,41 +67,43 @@ export function takeOverStdout(): void {
 		return rawStderrWrite(String(chunk), callback);
 	}) as typeof process.stdout.write;
 
-	stdoutTakeoverState = {
+	takeoverSlot.set({
 		rawStdoutWrite,
 		rawStderrWrite,
 		originalStdoutWrite,
-	};
+	});
 }
 
 export function restoreStdout(): void {
-	if (!stdoutTakeoverState) {
+	const takeover = takeoverSlot.get();
+	if (!takeover) {
 		return;
 	}
 
-	process.stdout.write = stdoutTakeoverState.originalStdoutWrite;
-	stdoutTakeoverState = undefined;
+	process.stdout.write = takeover.originalStdoutWrite;
+	takeoverSlot.set(undefined);
 }
 
 export function isStdoutTakenOver(): boolean {
-	return stdoutTakeoverState !== undefined;
+	return takeoverSlot.get() !== undefined;
 }
 
 export function writeRawStdout(text: string): void {
 	if (text.length === 0) {
 		return;
 	}
-	rawStdoutWriteTail = rawStdoutWriteTail.then(() => writeRawStdoutChunk(text));
-	void rawStdoutWriteTail.catch(() => {
+	const tail = (writeTailSlot.get() ?? Promise.resolve()).then(() => writeRawStdoutChunk(text));
+	writeTailSlot.set(tail);
+	void tail.catch(() => {
 		process.exit(1);
 	});
 }
 
 export async function waitForRawStdoutBackpressure(): Promise<void> {
 	while (true) {
-		const tail = rawStdoutWriteTail;
+		const tail = writeTailSlot.get() ?? Promise.resolve();
 		await tail;
-		if (tail === rawStdoutWriteTail) {
+		if (tail === (writeTailSlot.get() ?? tail)) {
 			return;
 		}
 	}
