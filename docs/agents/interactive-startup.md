@@ -30,9 +30,9 @@ The expensive implementations load when needed:
 - MCP registers the proxy and cached direct-tool definitions without loading its
   connection engine, zod or the MCP SDK. Keep zod-backed values out of
   `pi-mcp-adapter/types.ts`: its registration importers would load zod (about
-  35 ms) in every print run. Configured eager servers, keep-alive, and metadata
+  15 ms) in every print run. Configured eager servers, keep-alive, and metadata
   discovery retain their background behavior. With only lazy servers, the TUI
-  imports the engine (about 250 ms) after the first answer ends.
+  imports the engine (about 100 ms) after the first answer ends.
 - Subagents keep restoration and watchers at startup, but load the executor on
   first use.
 - Third-party extensions load jiti when needed. On Node, lunR imports jiti's

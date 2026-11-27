@@ -348,7 +348,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     startSessionInit(generation, pi, ctx);
   });
 
-  // The engine (with zod and the MCP SDK) costs about 250 ms to import, which a lazy server's
+  // The engine (with zod and the MCP SDK) costs about 100 ms to import, which a lazy server's
   // first call would wait for. In the TUI, import it once the first answer is done.
   pi.on("agent_end", (_event, ctx) => {
     if (enginePreloadStarted || ctx.mode !== "tui" || !hasConfiguredServers) return;
