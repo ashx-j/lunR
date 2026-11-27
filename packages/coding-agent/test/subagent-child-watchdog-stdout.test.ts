@@ -15,7 +15,8 @@ afterEach(() => {
 
 // A lunR child in json mode runs with takeOverStdout(), and the parent reads watchdog events from stdout only.
 it("writes child watchdog status to raw stdout while stdout is taken over", async () => {
-	const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation((_chunk, callback) => {
+	const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation((...args: unknown[]) => {
+		const callback = args.at(-1);
 		if (typeof callback === "function") callback();
 		return true;
 	});

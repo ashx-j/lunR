@@ -191,7 +191,8 @@ export function resolveSubagentActionDisplayTitle(args: Pick<SubagentToolArgs, "
 export function renderSubagentCall(
 	rawArgs: SubagentToolArgs,
 	theme: Theme,
-	context: Pick<ToolRenderContext<unknown, SubagentToolArgs>, "result" | "isPartial" | "expanded" | "isError"> | undefined,
+	// Partial: every field is read with ?. and callers outside the tool framework pass {}.
+	context: Partial<Pick<ToolRenderContext<unknown, SubagentToolArgs>, "result" | "isPartial" | "expanded" | "isError">> | undefined,
 	options?: { resolveActionTitle?: (args: SubagentToolArgs) => string | undefined },
 ): Component {
 	const args = resolveSubagentRequestParams(rawArgs);

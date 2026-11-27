@@ -1240,9 +1240,9 @@ describe("subagent steering call headers", () => {
 		const live = stripAnsi(
 			renderSubagentCall(
 				{ action: "steer", id: "parallel-123", index: 0 },
-				stubTheme,
+				stubTheme as never,
 				{},
-				{ resolveActionTitle: (args: unknown) => resolveSubagentActionDisplayTitle(args, state) },
+				{ resolveActionTitle: (args) => resolveSubagentActionDisplayTitle(args, state) },
 			)
 				.render(120)
 				.join("\n"),
@@ -1251,7 +1251,7 @@ describe("subagent steering call headers", () => {
 		expect(live).not.toContain("parallel-123");
 
 		const history = stripAnsi(
-			renderSubagentCall({ action: "steer", id: "parallel-123", index: 0 }, stubTheme, {
+			renderSubagentCall({ action: "steer", id: "parallel-123", index: 0 }, stubTheme as never, {
 				result: { details: { displayTitle: "Inspect runtime and native tools" } },
 			})
 				.render(120)
@@ -1264,9 +1264,9 @@ describe("subagent steering call headers", () => {
 		const rendered = stripAnsi(
 			renderSubagentCall(
 				{ action: "steer", id: "missing-run" },
-				stubTheme,
+				stubTheme as never,
 				{},
-				{ resolveActionTitle: (args: unknown) => resolveSubagentActionDisplayTitle(args, state) },
+				{ resolveActionTitle: (args) => resolveSubagentActionDisplayTitle(args, state) },
 			)
 				.render(120)
 				.join("\n"),
@@ -1279,19 +1279,21 @@ describe("subagent call headers", () => {
 	it("labels async launches as subagent async, including chain and parallel", () => {
 		expect(
 			stripAnsi(
-				renderSubagentCall({ async: true, description: "Inspect auth" }, stubTheme, {}).render(80).join("\n"),
+				renderSubagentCall({ async: true, description: "Inspect auth" }, stubTheme as never, {})
+					.render(80)
+					.join("\n"),
 			),
 		).toContain("subagent async");
 		expect(
 			stripAnsi(
-				renderSubagentCall({ async: true, chain: [{}, {}] }, stubTheme, {})
+				renderSubagentCall({ async: true, chain: [{}, {}] as never }, stubTheme as never, {})
 					.render(80)
 					.join("\n"),
 			),
 		).toContain("subagent async chain (2)");
 		expect(
 			stripAnsi(
-				renderSubagentCall({ async: true, tasks: [{}, {}] }, stubTheme, {})
+				renderSubagentCall({ async: true, tasks: [{}, {}] as never }, stubTheme as never, {})
 					.render(80)
 					.join("\n"),
 			),
@@ -1300,11 +1302,17 @@ describe("subagent call headers", () => {
 
 	it("defaults omitted async to background and honors explicit foreground", () => {
 		expect(
-			stripAnsi(renderSubagentCall({ description: "Inspect auth" }, stubTheme, {}).render(80).join("\n")),
+			stripAnsi(
+				renderSubagentCall({ description: "Inspect auth" }, stubTheme as never, {})
+					.render(80)
+					.join("\n"),
+			),
 		).toContain("subagent async");
 		expect(
 			stripAnsi(
-				renderSubagentCall({ async: false, description: "Inspect auth" }, stubTheme, {}).render(80).join("\n"),
+				renderSubagentCall({ async: false, description: "Inspect auth" }, stubTheme as never, {})
+					.render(80)
+					.join("\n"),
 			),
 		).not.toContain("async");
 	});
@@ -1323,7 +1331,7 @@ describe("subagent notify renderer", () => {
 					sessionLabel: "Session",
 					sessionValue: "/tmp/session.jsonl",
 				},
-				stubTheme,
+				stubTheme as never,
 			)
 				.render(80)
 				.join("\n"),
@@ -1340,14 +1348,14 @@ describe("subagent notify renderer", () => {
 	it("uses fallback coloring for paused and unknown statuses", () => {
 		expect(
 			stripAnsi(
-				renderSubagentNotify({ agent: "Child", status: "paused", resultPreview: "x" }, stubTheme)
+				renderSubagentNotify({ agent: "Child", status: "paused", resultPreview: "x" }, stubTheme as never)
 					.render(80)
 					.join("\n"),
 			),
 		).toContain("paused");
 		expect(
 			stripAnsi(
-				renderSubagentNotify({ agent: "Child", status: "stopped", resultPreview: "x" } as never, stubTheme)
+				renderSubagentNotify({ agent: "Child", status: "stopped", resultPreview: "x" } as never, stubTheme as never)
 					.render(80)
 					.join("\n"),
 			),

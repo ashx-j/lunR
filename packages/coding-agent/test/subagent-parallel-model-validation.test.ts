@@ -78,7 +78,7 @@ describe("parallel explicit model launch validation", () => {
 			(description, index) => ({
 				description,
 				model,
-				thinking: "high",
+				thinking: "high" as const,
 				cwd: join(root, `project-${index}`),
 				task: "Implement the assigned change.",
 			}),
@@ -157,7 +157,7 @@ describe("parallel explicit model launch validation", () => {
 		[{ model: undefined, tier: "light" }, /thinking is only valid with an explicit model/],
 	])("rejects invalid child selection %j", async (override, error) => {
 		const tasks = children();
-		const result = await launch({ tasks: [tasks[0], { ...tasks[1], ...override }] });
+		const result = await launch({ tasks: [tasks[0], { ...tasks[1], ...override }] } as never);
 		expect(result.isError).toBe(true);
 		expect(result.content).toEqual([{ type: "text", text: expect.stringMatching(error) }]);
 		expect(result.details).not.toHaveProperty("runnerSteps");
