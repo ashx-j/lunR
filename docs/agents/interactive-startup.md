@@ -78,6 +78,21 @@ first request by about 60 ms, as it did in the 2026-09-08 Windows measurement.
 Node rejects entries whose source or Node version changed, so an old cache after
 an upgrade only costs a recompile. The unbundled launch path always enables it.
 
+typebox ships prebuilt in `dist/node-runtime/typebox/` (9 entries, 9 shared chunks and
+a manifest, `scripts/build-typebox-prebundle.mjs`). Installed, it is about 670 ESM files,
+and loading them cost about 170 ms per launch. `cli-runtime.ts` calls
+`installTypeboxPrebundle()` before anything imports typebox. Its `module.registerHooks`
+resolve hook sends every import that lands in the installed `typebox` package at the
+manifest's version to the prebuilt file. That covers the bundle, pi-ai, pi-agent-core and
+extensions: jiti's typebox aliases come from `import.meta.resolve`, which goes through the
+hook (`require.resolve` skips it on Node 22). So a process has one copy, prebuilt or
+installed. `build-node-runtime.mjs` fails when cli-runtime's static imports reach typebox,
+and `typebox-single-copy.test.ts` checks a print turn against the built CLI. Any resolve hook
+costs about 13 µs per resolve in the process (Node's hook machinery, measured with a no-op
+hook), about 27 ms for discord.js in the gateway. A design without the hook saves that.
+Schemas carry non-enumerable string markers (`~kind`, `~optional`), so a schema from another
+copy validates through lunR's; format registrations do not cross copies.
+
 `--version` is answered in `cli-runtime.ts` before `main.ts` is imported.
 `--help` still imports the runtime because it lists flags from every loaded
 extension, including user and project extensions.
