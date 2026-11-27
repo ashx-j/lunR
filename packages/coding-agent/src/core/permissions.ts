@@ -14,8 +14,8 @@
  * rules block in every mode; allow rules skip the ask-mode question and, in
  * AgentSession, the auto review. Neither overrides protected targets or read-only.
  *
- * The gate is wired into `agent-session.ts` `_installAgentToolHooks` before
- * the awaited `_toolCallGates` loop, which can also request host approval.
+ * The gate is wired into `installToolCallHooks` (`core/tool-call-hooks.ts`) before
+ * the awaited `host.toolCallGates` loop, which can also request host approval.
  *
  * "Autonomous" (no questions, AUTONOMOUS_ADDENDUM) is a separate per-session
  * flag for /goal, subagents and ACP Autonomous, not a mode.

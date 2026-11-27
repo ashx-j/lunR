@@ -8,7 +8,6 @@
 import { dirname, join } from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import { getAgentDir } from "../config.ts";
-import type { ToolCallGate } from "./agent-session.ts";
 import { needsAutoReview } from "./auto-review.ts";
 import type { ExtensionRunner } from "./extensions/index.ts";
 import type { CompiledPermissionRules } from "./permission-rules.ts";
@@ -19,9 +18,20 @@ import type { SettingsManager } from "./settings-manager.ts";
 import type { BashJobs } from "./tools/bash-jobs.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 
-/** What the tool-call hooks read from AgentSession, each at call time. AgentSession builds one in `createToolCallHooksHost`. */
+// lunr: core-owned tool-call gate. return { block: true, reason } to prevent
+// execution; the agent loop turns it into an error tool result shown to the model.
+export interface ToolCallGateResult {
+	block: boolean;
+	reason?: string;
+}
+export type ToolCallGate = (
+	toolName: string,
+	input: Record<string, unknown>,
+	toolCallId: string,
+) => ToolCallGateResult | undefined | Promise<ToolCallGateResult | undefined>;
+
+/** What the tool-call hooks read from AgentSession, each at call time (the Agent is a parameter, set once). AgentSession builds one in `createToolCallHooksHost`. */
 export interface ToolCallHooksHost {
-	readonly agent: Agent;
 	readonly settingsManager: SettingsManager;
 	readonly cwd: string;
 	readonly sessionId: string;
@@ -44,12 +54,12 @@ export interface ToolCallHooksHost {
  * registered tool execution to the extension context. Tool call and tool result interception now
  * happens here instead of in wrappers.
  */
-export function installToolCallHooks(host: ToolCallHooksHost): void {
+export function installToolCallHooks(agent: Agent, host: ToolCallHooksHost): void {
 	// lunr: calls read-only mode knows to change state (edit, write, mutating bash, ...) run in
 	// the order the model wrote them; other calls in the same message still run concurrently.
 	// Unknown extension tools stay concurrent; they can opt out with executionMode "sequential".
-	host.agent.toolCallMutates = (toolCall, args) => readOnlyModeBlockReason(toolCall.name, args) !== undefined;
-	host.agent.beforeToolCall = async ({ toolCall, args, assistantMessage }) => {
+	agent.toolCallMutates = (toolCall, args) => readOnlyModeBlockReason(toolCall.name, args) !== undefined;
+	agent.beforeToolCall = async ({ toolCall, args, assistantMessage }) => {
 		// lunr: the permission gate runs before host gates and may request approval.
 		const rules = host.permissionRules();
 		const permBlock = await gateToolCall(toolCall.name, args as Record<string, unknown>, host.cwd, host.sessionId, {
@@ -125,7 +135,7 @@ export function installToolCallHooks(host: ToolCallHooksHost): void {
 		}
 	};
 
-	host.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+	agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
 		// A job that exited during the run is announced in the next tool result, which the
 		// next request carries anyway. Steering would cost an extra request after a final answer.
 		const jobNotice = host.bashJobs.takeExitNotices();

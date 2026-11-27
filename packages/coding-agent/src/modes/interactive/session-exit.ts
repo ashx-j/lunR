@@ -19,14 +19,16 @@ import type { InteractiveThemeController } from "./theme/theme-controller.ts";
 
 /** What leaving and suspending need from InteractiveMode. InteractiveMode builds one in `createSessionExitHost`. */
 export interface SessionExitHost {
-	readonly session: AgentSession;
-	readonly runtimeHost: AgentSessionRuntime;
-	readonly ui: TUI;
-	readonly editor: EditorComponent;
-	readonly chatContainer: Container;
-	readonly themeController: InteractiveThemeController;
+	readonly session: Pick<AgentSession, "stopAdmission">;
+	readonly runtimeHost: Pick<AgentSessionRuntime, "dispose">;
+	readonly ui: Pick<TUI, "requestRender" | "start" | "stop"> & {
+		readonly terminal: Pick<TUI["terminal"], "drainInput">;
+	};
+	readonly editor: Pick<EditorComponent, "getText">;
+	readonly chatContainer: Pick<Container, "addChild" | "removeChild">;
+	readonly themeController: Pick<InteractiveThemeController, "disableAutoSync">;
 	/** The Ctrl+D window, shared with the startup view. */
-	readonly exitConfirmation: ExitConfirmation;
+	readonly exitConfirmation: Pick<ExitConfirmation, "press" | "hint" | "clearHintOnExpiry">;
 	/** Set by an extension's shutdown() during a run; checked once the run settles. */
 	readonly shutdownRequested: boolean;
 	readonly unregisterSessionTransfer: (() => void) | undefined;
@@ -176,7 +178,7 @@ export class SessionExit {
 	}
 
 	/** Exits at once, without terminal restore, when stdout or stderr reports a dead terminal. */
-	emergencyTerminalExit(): never {
+	private emergencyTerminalExit(): never {
 		this._isShuttingDown = true;
 		this.unregisterSignalHandlers();
 		killTrackedDetachedChildren();
@@ -201,7 +203,7 @@ export class SessionExit {
 	 * call ui.stop() to restore cooked mode, the cursor, and disable bracketed
 	 * paste / Kitty / modifyOtherKeys sequences.
 	 */
-	uncaughtCrash(error: Error): never {
+	private uncaughtCrash(error: Error): never {
 		if (this._isShuttingDown) {
 			process.exit(1);
 		}

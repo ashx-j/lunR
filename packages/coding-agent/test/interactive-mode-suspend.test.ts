@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { SessionExit, type SessionExitHost } from "../src/modes/interactive/session-exit.ts";
+import { SessionExit } from "../src/modes/interactive/session-exit.ts";
+import { createExitHost } from "./session-exit-host.ts";
 
 type FakeUi = {
 	start: () => void;
@@ -14,7 +15,7 @@ type HandleCtrlZThis = {
 type ProcessSignalHandler = () => void;
 
 function callHandleCtrlZ(context: HandleCtrlZThis): void {
-	new SessionExit(context as unknown as SessionExitHost).handleCtrlZ();
+	new SessionExit(createExitHost(context)).handleCtrlZ();
 }
 
 // Windows has no SIGTSTP or SIGCONT, so only the Windows branch test runs there.

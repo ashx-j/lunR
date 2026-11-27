@@ -144,7 +144,7 @@ import {
 } from "./subagent-wait-interruption.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { measureStartup } from "./timings.ts";
-import { installToolCallHooks, type ToolCallHooksHost } from "./tool-call-hooks.ts";
+import { installToolCallHooks, type ToolCallGate, type ToolCallHooksHost } from "./tool-call-hooks.ts";
 import { rebuildToolRegistry, type ToolDefinitionEntry, type ToolRegistryHost } from "./tool-registry.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { BashJobs } from "./tools/bash-jobs.ts";
@@ -152,8 +152,10 @@ import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { getUserMessagesForForking, runTreeNavigation, type TreeNavigationHost } from "./tree-navigation.ts";
 
-// NothingToCompactError moved with compaction; callers still import it from here.
 export { NothingToCompactError } from "./session-compaction.ts";
+// NothingToCompactError moved with compaction, and the tool-call gate types with the hooks;
+// callers still import them from here.
+export type { ToolCallGate, ToolCallGateResult } from "./tool-call-hooks.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -357,18 +359,6 @@ export interface SessionStats {
 	combinedUsage?: UsageTotals;
 }
 
-// lunr: core-owned tool-call gate. return { block: true, reason } to prevent
-// execution; the agent loop turns it into an error tool result shown to the model.
-export interface ToolCallGateResult {
-	block: boolean;
-	reason?: string;
-}
-export type ToolCallGate = (
-	toolName: string,
-	input: Record<string, unknown>,
-	toolCallId: string,
-) => ToolCallGateResult | undefined | Promise<ToolCallGateResult | undefined>;
-
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -530,7 +520,7 @@ export class AgentSession {
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
-		installToolCallHooks(this.createToolCallHooksHost());
+		installToolCallHooks(this.agent, this.createToolCallHooksHost());
 		this._installAgentNextTurnRefresh();
 
 		this._buildRuntime({
@@ -712,9 +702,6 @@ export class AgentSession {
 	private createToolCallHooksHost(): ToolCallHooksHost {
 		const session = this;
 		return {
-			get agent() {
-				return session.agent;
-			},
 			get settingsManager() {
 				return session.settingsManager;
 			},

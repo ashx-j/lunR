@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { SessionExit, type SessionExitHost } from "../../../src/modes/interactive/session-exit.ts";
+import { SessionExit } from "../../../src/modes/interactive/session-exit.ts";
+import { createExitHost } from "../../session-exit-host.ts";
 
 // Regression for https://github.com/earendil-works/pi/issues/5724
 //
@@ -78,7 +79,7 @@ describe("SessionExit SIGTERM shutdown with signal-exit (#5724)", () => {
 			}),
 		};
 
-		const exit = new SessionExit(context as unknown as SessionExitHost);
+		const exit = new SessionExit(createExitHost(context));
 		const unregister = vi.spyOn(exit, "unregisterSignalHandlers").mockImplementation(() => {
 			order.push("unregister");
 		});

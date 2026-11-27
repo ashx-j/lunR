@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { SessionManager } from "../../../src/core/session-manager.ts";
-import { SessionExit, type SessionExitHost } from "../../../src/modes/interactive/session-exit.ts";
+import { SessionExit } from "../../../src/modes/interactive/session-exit.ts";
+import { createExitHost } from "../../session-exit-host.ts";
 
 // Regression for https://github.com/earendil-works/pi/issues/5080
 //
@@ -110,7 +111,7 @@ describe("SessionExit.shutdown ordering (#5080)", () => {
 		const order: string[] = [];
 		const context = createContext(order);
 
-		const exit = new SessionExit(context as unknown as SessionExitHost);
+		const exit = new SessionExit(createExitHost(context));
 		await callShutdown(exit, { fromSignal: true });
 
 		expect(order).toEqual(["dispose", "drainInput", "stop"]);
@@ -124,7 +125,7 @@ describe("SessionExit.shutdown ordering (#5080)", () => {
 		const order: string[] = [];
 		const context = createContext(order);
 
-		await callShutdown(new SessionExit(context as unknown as SessionExitHost));
+		await callShutdown(new SessionExit(createExitHost(context)));
 
 		expect(order).toEqual(["drainInput", "stop", "dispose"]);
 	});
@@ -143,7 +144,7 @@ describe("SessionExit.shutdown ordering (#5080)", () => {
 			{ type: "message", message: { role: "user", content: "hello" } },
 		] as ReturnType<SessionManager["getEntries"]>);
 
-		await callShutdown(new SessionExit(context as unknown as SessionExitHost));
+		await callShutdown(new SessionExit(createExitHost(context)));
 
 		expect(order).toEqual(["drainInput", "stop", "dispose"]);
 		expect(stdoutWrite).not.toHaveBeenCalled();
@@ -160,7 +161,7 @@ describe("SessionExit.shutdown ordering (#5080)", () => {
 		const order: string[] = [];
 		const context = createContext(order, createSessionManager({ sessionFile: createTempFile() }));
 
-		await callShutdown(new SessionExit(context as unknown as SessionExitHost), { fromSignal: true });
+		await callShutdown(new SessionExit(createExitHost(context)), { fromSignal: true });
 
 		expect(stdoutWrite).not.toHaveBeenCalled();
 	});
@@ -171,7 +172,7 @@ describe("SessionExit.shutdown ordering (#5080)", () => {
 		}) as typeof process.exit);
 		const order: string[] = [];
 		const context = createContext(order);
-		const exit = new SessionExit(context as unknown as SessionExitHost);
+		const exit = new SessionExit(createExitHost(context));
 		await callShutdown(exit, { fromSignal: true });
 		order.length = 0;
 		vi.mocked(context.runtimeHost.dispose).mockClear();
