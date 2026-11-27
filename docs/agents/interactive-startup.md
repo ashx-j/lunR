@@ -73,6 +73,17 @@ first request by about 60 ms, as it did in the 2026-09-08 Windows measurement.
 Node rejects entries whose source or Node version changed, so an old cache after
 an upgrade only costs a recompile. The unbundled launch path always enables it.
 
+typebox ships prebuilt in `dist/node-runtime/typebox/` (19 files with a manifest,
+`scripts/build-typebox-prebundle.mjs`). Installed, it is about 670 ESM files, and
+loading them cost about 170 ms per launch. `cli-runtime.ts` calls
+`installTypeboxPrebundle()` before anything imports typebox. Its `module.registerHooks`
+resolve hook sends every import that lands in an installed typebox of the manifest's
+version to the prebuilt file. That covers the bundle, pi-ai, pi-agent-core and
+extensions, and jiti's typebox aliases point there too, so a process has one copy.
+Nothing in cli-runtime's static imports may import typebox. Schemas carry
+non-enumerable string markers (`~kind`, `~optional`), so a schema from another copy
+validates through lunR's; format registrations do not cross copies.
+
 `--version` is answered in `cli-runtime.ts` before `main.ts` is imported.
 `--help` still imports the runtime because it lists flags from every loaded
 extension, including user and project extensions.

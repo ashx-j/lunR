@@ -15,6 +15,7 @@ import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
 import { measureStartup } from "../timings.ts";
+import { getTypeboxPrebundleEntry } from "../typebox-prebundle.ts";
 import type {
 	EntryRenderer,
 	Extension,
@@ -58,9 +59,10 @@ function getAliases(): Record<string, string> {
 	const __dirname = path.dirname(fileURLToPath(import.meta.url));
 	const packageIndex = path.resolve(__dirname, "../..", isNodeBundle ? "node-runtime/index.js" : "index.js");
 
-	const typeboxEntry = require.resolve("typebox");
-	const typeboxCompileEntry = require.resolve("typebox/compile");
-	const typeboxValueEntry = require.resolve("typebox/value");
+	// The prebuilt copy when cli-runtime installed it, so extensions share the CLI's typebox.
+	const typeboxEntry = getTypeboxPrebundleEntry(".") ?? require.resolve("typebox");
+	const typeboxCompileEntry = getTypeboxPrebundleEntry("./compile") ?? require.resolve("typebox/compile");
+	const typeboxValueEntry = getTypeboxPrebundleEntry("./value") ?? require.resolve("typebox/value");
 
 	const packagesRoot = path.resolve(__dirname, "../../../../");
 	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {

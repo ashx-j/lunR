@@ -2,6 +2,7 @@ import { build } from "esbuild";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildTypeboxPrebundle } from "./build-typebox-prebundle.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "packages/coding-agent/dist");
@@ -64,6 +65,8 @@ const result = await build({
 });
 mkdirSync(artifactDir, { recursive: true });
 writeFileSync(join(artifactDir, "metafile.json"), `${JSON.stringify(result.metafile, null, 2)}\n`);
+
+await buildTypeboxPrebundle(join(outdir, "typebox"));
 
 // The MCP Apps host page imports AppBridge in the browser from /app-bridge.bundle.js, which
 // pi-mcp-adapter/ui-server.ts serves from beside its compiled module.
