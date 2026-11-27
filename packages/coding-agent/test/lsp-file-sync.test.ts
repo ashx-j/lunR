@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { FileSync } from "../src/builtin-extensions/pi-lsp-extension/src/file-sync.ts";
 import type { LspClient } from "../src/builtin-extensions/pi-lsp-extension/src/lsp-client.ts";
@@ -14,9 +15,9 @@ afterEach(() => {
 /** A client that records the notifications it got. */
 function fakeClient(name: string, log: string[]): LspClient {
 	const client: Pick<LspClient, "didOpen" | "didChange" | "didClose"> = {
-		didOpen: (uri, _languageId, version) => log.push(`${name} open ${uri.split("/").pop()} v${version}`),
-		didChange: (uri, version) => log.push(`${name} change ${uri.split("/").pop()} v${version}`),
-		didClose: (uri) => log.push(`${name} close ${uri.split("/").pop()}`),
+		didOpen: (uri, _languageId, version) => log.push(`${name} open ${basename(fileURLToPath(uri))} v${version}`),
+		didChange: (uri, version) => log.push(`${name} change ${basename(fileURLToPath(uri))} v${version}`),
+		didClose: (uri) => log.push(`${name} close ${basename(fileURLToPath(uri))}`),
 	};
 	return client as LspClient;
 }
@@ -29,7 +30,7 @@ function fakeManager(dir: string) {
 		"resolvePath" | "getFileUri" | "getLanguageId" | "getRunningClient" | "getClientForFile"
 	> = {
 		resolvePath: (path) => join(dir, path),
-		getFileUri: (abs) => `file://${abs}`,
+		getFileUri: (abs) => pathToFileURL(abs).toString(),
 		getLanguageId: (abs) => (abs.endsWith(".ts") ? "typescript" : null),
 		getRunningClient: () => state.client,
 		getClientForFile: async () => state.client,
