@@ -42,11 +42,18 @@ export async function readPipedStdin(
 			resolve(data.trim() || undefined);
 		};
 
+		let armed = 0;
 		const giveUpAfter = (ms: number, warning: string) => {
 			clearTimeout(timer);
+			const generation = ++armed;
 			timer = setTimeout(() => {
-				console.error(chalk.yellow(`Warning: ${warning}. Close stdin or pass "< /dev/null" to skip this wait.`));
-				finish();
+				// After an import blocks the event loop past `ms`, timers run before pending I/O.
+				// Giving up one turn later lets stdin that already arrived land first.
+				setImmediate(() => {
+					if (settled || generation !== armed) return;
+					console.error(chalk.yellow(`Warning: ${warning}. Close stdin or pass "< /dev/null" to skip this wait.`));
+					finish();
+				});
 			}, ms);
 		};
 
