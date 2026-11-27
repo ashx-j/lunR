@@ -28,7 +28,7 @@ import { generateDiffString } from "./edit-diff.ts";
 
 /**
  * Repositories with more tracked files are not tracked. At this size, on a 4-core machine at load
- * under 2, a mutating call costs about 23 ms more when it changes nothing and 36 ms when it changes
+ * under 2, a mutating call costs about 23 ms more when it changes nothing and 29 ms when it changes
  * a file (2 `git status`, and a `cat-file` for the diff).
  */
 const MAX_INDEX_ENTRIES = 5000;
