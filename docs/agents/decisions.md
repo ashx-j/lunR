@@ -4,6 +4,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-11-27: give a bare `vitest` run a disposable agent directory in `test/global-setup-tools.ts`, instead of requiring `test.sh` for every run, because agents run single test files directly and `config.ts` then pointed session tests at the real `~/.lunr/agent` (a review run created folders there).
 - 2026-11-26: auto mode's reviewer is not skipped by a grammar of "plain file work" (#366, not merged). 3 QA rounds each found commands that lost a file or left the project, and on 27 real benchmark sessions the final rule saved 1 of 78 reviewer requests for about 1,050 lines. Treating `cd <session directory> &&` as no change saves 15 of 78 in about 20 lines.
 - 2026-11-26: `/rollback` does not restore files a bash call changed; it lists them (#355). 3 review rounds found 5, 4, then 10 ways for a git-based restore to write wrong bytes or delete a file, because attributes, filters, ignore files and config can change under the call.
 - 2026-11-26: read the latest `fd` and `rg` version from the redirect of `github.com/<repo>/releases/latest`, with the REST API only as fallback (`utils/tools-manager.ts`), because the API allows 60 unauthenticated calls per hour per address and a shared address ran out (12 grep and find tests failed on a machine running several suites).
