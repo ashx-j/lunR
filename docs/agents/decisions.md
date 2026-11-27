@@ -4,6 +4,8 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-11-26: auto mode's reviewer is not skipped by a grammar of "plain file work" (#366, not merged). 3 QA rounds each found commands that lost a file or left the project, and on 27 real benchmark sessions the final rule saved 1 of 78 reviewer requests for about 1,050 lines. Treating `cd <session directory> &&` as no change saves 15 of 78 in about 20 lines.
+- 2026-11-26: `/rollback` does not restore files a bash call changed; it lists them (#355). 3 review rounds found 5, 4, then 10 ways for a git-based restore to write wrong bytes or delete a file, because attributes, filters, ignore files and config can change under the call.
 - 2026-11-26: read the latest `fd` and `rg` version from the redirect of `github.com/<repo>/releases/latest`, with the REST API only as fallback (`utils/tools-manager.ts`), because the API allows 60 unauthenticated calls per hour per address and a shared address ran out (12 grep and find tests failed on a machine running several suites).
 - 2026-11-26: run a subscription request after a tool call on a spare Claude Code process that gets its body through `apply_flag_settings`, instead of one live process per session (#299), because each request still runs on a fresh process with lunR's exact body, so nothing in Claude Code can drift, and it hides most of the 0.4 to 0.6 s startup (live median 1.05 s against 1.80 s).
 - 2026-11-26: name Claude Code process dirs by owner pid and remove a killed owner's in the interactive startup sweep (`core/temp-files.ts`), not in a second sweep inside the bridge, because dev already had one exit hook and one sweep and the pid rule only needed adding there.

@@ -538,9 +538,9 @@ function askUnansweredReason(toolName: string, why: string, rule: string | undef
  * True when ask mode asks before this call: whatever read-only mode would block, and a launch whose
  * read-only child saves `output`, a write lunR makes for it.
  */
-function askModeAsks(toolName: string, input: Record<string, unknown>): boolean {
+function askModeAsks(toolName: string, input: Record<string, unknown>, cwd: string): boolean {
 	if (REVIEW_FREE_TOOLS.has(toolName)) return false;
-	if (readOnlyModeBlock(toolName, input)) return true;
+	if (readOnlyModeBlock(toolName, input, cwd)) return true;
 	return toolName === "subagent" && getRequestedChildLaunches(input).some((child) => child.writesOutput);
 }
 
@@ -551,7 +551,7 @@ async function gateAskMode(
 	ctx: PermissionContext,
 	options?: GateOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
-	if (!askModeAsks(toolName, input)) return undefined;
+	if (!askModeAsks(toolName, input, cwd)) return undefined;
 	if (options?.rules?.allowed(toolName, input)) return undefined;
 	const key = askApprovalKey(toolName, input, cwd);
 	if (key && ctx.approvals.has(key)) return undefined;
@@ -634,12 +634,12 @@ export async function gateToolCall(
 	}
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
 
-	if (ctx.mode === "read-only") return readOnlyModeBlock(toolName, input);
+	if (ctx.mode === "read-only") return readOnlyModeBlock(toolName, input, cwd);
 	if (ctx.mode === "ask") {
 		const askBlock = await gateAskMode(toolName, input, cwd, ctx, options);
 		if (askBlock) return askBlock;
 		// The ask question already named the children, so a large launch asks only once.
-		if (toolName === "subagent" && askModeAsks(toolName, input)) return undefined;
+		if (toolName === "subagent" && askModeAsks(toolName, input, cwd)) return undefined;
 	}
 	if (toolName === "subagent") {
 		const launchResult = await gateLargeSubagentLaunch(input, ctx, options);
@@ -655,9 +655,10 @@ export async function gateToolCall(
 export function readOnlyModeBlock(
 	toolName: string,
 	input: Record<string, unknown>,
+	cwd?: string,
 ): { block: true; reason: string } | undefined {
 	if (READ_ONLY_TOOLS.has(toolName)) return undefined;
-	const reason = readOnlyModeBlockReason(toolName, input);
+	const reason = readOnlyModeBlockReason(toolName, input, cwd);
 	if (reason) return { block: true, reason };
 	if (toolName === "mcp") {
 		if (input.tool || input.connect || (input.action && input.action !== "ui-messages")) {
