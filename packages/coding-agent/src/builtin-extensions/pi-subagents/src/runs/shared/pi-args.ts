@@ -123,6 +123,9 @@ function supervisorChannelDir(runId: string, agent: string, childIndex: number):
 	return path.join(TEMP_ROOT_DIR, "supervisor-channels", `${sanitizeSupervisorChannelSegment(runId)}-${sanitizeSupervisorChannelSegment(agent)}-${childIndex}`);
 }
 
+// A defined model always comes back as a string.
+export function applyThinkingSuffix(model: string, thinking: string | false | undefined, replaceExisting?: boolean): string;
+export function applyThinkingSuffix(model: string | undefined, thinking: string | false | undefined, replaceExisting?: boolean): string | undefined;
 export function applyThinkingSuffix(model: string | undefined, thinking: string | false | undefined, replaceExisting = false): string | undefined {
 	if (!model || !thinking) return model;
 	const colonIdx = model.lastIndexOf(":");

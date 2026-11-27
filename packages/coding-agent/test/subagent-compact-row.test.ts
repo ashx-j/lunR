@@ -1,3 +1,4 @@
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -29,11 +30,12 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+// Only the 3 methods the renderers call; typed once so each call site stays checked.
 const stubTheme = {
 	fg: (_token: string, value: string) => value,
 	bold: (value: string) => value,
 	italic: (value: string) => value,
-};
+} as unknown as Theme;
 
 function stripAnsi(value: string): string {
 	return value.replace(/\x1b\[[0-9;]*m/g, "");
@@ -69,7 +71,7 @@ describe("compactRowLead", () => {
 describe("formatCompactSubagentRow", () => {
 	it("prints description, model badge, tokens, and time on one line", () => {
 		expect(
-			formatCompactSubagentRow(stubTheme as never, 80, {
+			formatCompactSubagentRow(stubTheme, 80, {
 				glyph: "⠋",
 				description: "Search auth flow for bugs",
 				modelBadge: "standard",
@@ -81,7 +83,7 @@ describe("formatCompactSubagentRow", () => {
 
 	it("omits the model badge when empty and still shows tokens and time", () => {
 		expect(
-			formatCompactSubagentRow(stubTheme as never, 80, {
+			formatCompactSubagentRow(stubTheme, 80, {
 				glyph: "✓",
 				description: "Check timer",
 				tokens: 0,
@@ -91,7 +93,7 @@ describe("formatCompactSubagentRow", () => {
 	});
 
 	it("truncates to terminal width without wrapping", () => {
-		const line = formatCompactSubagentRow(stubTheme as never, 20, {
+		const line = formatCompactSubagentRow(stubTheme, 20, {
 			glyph: "●",
 			description: "Search auth flow for bugs",
 			modelBadge: "standard",
@@ -117,17 +119,17 @@ describe("async widget, fleet, and status timing", () => {
 			updatedAt: 10_000,
 			toolCount: 1,
 		};
-		expect(buildWidgetLines([job] as never, stubTheme as never, 120).join("\n")).toContain("2s");
+		expect(buildWidgetLines([job] as never, stubTheme, 120).join("\n")).toContain("2s");
 		vi.advanceTimersByTime(1_000);
-		expect(buildWidgetLines([job] as never, stubTheme as never, 120).join("\n")).toContain("3s");
+		expect(buildWidgetLines([job] as never, stubTheme, 120).join("\n")).toContain("3s");
 
 		job.status = "complete";
 		job.updatedAt = 12_000;
-		const terminal = buildWidgetLines([job] as never, stubTheme as never, 120).join("\n");
+		const terminal = buildWidgetLines([job] as never, stubTheme, 120).join("\n");
 		vi.advanceTimersByTime(5_000);
 		expect(terminal).toContain("2s");
 		expect(terminal).not.toContain("3s");
-		expect(buildWidgetLines([job] as never, stubTheme as never, 120).join("\n")).toBe(terminal);
+		expect(buildWidgetLines([job] as never, stubTheme, 120).join("\n")).toBe(terminal);
 	});
 
 	it("matches compact foreground rows for a single async child", () => {
@@ -155,7 +157,7 @@ describe("async widget, fleet, and status timing", () => {
 				},
 			],
 		};
-		const rendered = buildWidgetLines([job] as never, stubTheme as never, 120).join("\n");
+		const rendered = buildWidgetLines([job] as never, stubTheme, 120).join("\n");
 		expect(rendered).toContain("Review startup lifecycle risks");
 		expect(rendered).toContain("standard");
 		expect(rendered).toContain("78k token");
@@ -194,7 +196,7 @@ describe("async widget, fleet, and status timing", () => {
 				},
 			],
 		};
-		const [first, second] = buildWidgetLines([job] as never, stubTheme as never, 120, false, 12_000);
+		const [first, second] = buildWidgetLines([job] as never, stubTheme, 120, false, 12_000);
 		expect(first).toContain("First child · 81k token · 2s");
 		expect(second).toContain("Second child · standard · waiting");
 		expect(second).not.toMatch(/token|\d+(?:ms|s|m)/);
@@ -214,7 +216,7 @@ describe("async widget, fleet, and status timing", () => {
 				{ agent: "Unknown child", status: "running" },
 			],
 		};
-		const [known, unknown] = buildWidgetLines([job] as never, stubTheme as never, 120, false, 12_000);
+		const [known, unknown] = buildWidgetLines([job] as never, stubTheme, 120, false, 12_000);
 		expect(known).toContain("81k token · 1s");
 		expect(unknown).toContain("Unknown child · 0 token · 0ms");
 	});
@@ -229,7 +231,7 @@ describe("async widget, fleet, and status timing", () => {
 			startedAt: 10_000,
 			totalTokens: { total: 81_000 },
 		};
-		expect(buildWidgetLines([job] as never, stubTheme as never, 120, false, 12_000)[0]).toContain(
+		expect(buildWidgetLines([job] as never, stubTheme, 120, false, 12_000)[0]).toContain(
 			"Only child · 81k token · 2s",
 		);
 	});
@@ -274,7 +276,7 @@ describe("async widget, fleet, and status timing", () => {
 				updatedAt: 2000,
 			},
 		];
-		const rendered = buildWidgetLines(jobs as never, stubTheme as never, 120).join("\n");
+		const rendered = buildWidgetLines(jobs as never, stubTheme, 120).join("\n");
 		const lines = rendered.split("\n");
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toContain("First child");
@@ -340,7 +342,7 @@ describe("async widget, fleet, and status timing", () => {
 				updatedAt: 0,
 			},
 		];
-		const rendered = buildWidgetLines(jobs as never, stubTheme as never, 160).join("\n");
+		const rendered = buildWidgetLines(jobs as never, stubTheme, 160).join("\n");
 		expect(rendered).toContain("Finished chain step");
 		expect(rendered).toContain("Running chain step");
 		expect(rendered).toContain("Parallel sibling A");
@@ -368,7 +370,7 @@ describe("async widget, fleet, and status timing", () => {
 				],
 			},
 		];
-		const collapsed = buildWidgetLines(jobs as never, stubTheme as never, 48, false, 0);
+		const collapsed = buildWidgetLines(jobs as never, stubTheme, 48, false, 0);
 		expect(collapsed).toHaveLength(3);
 		expect(collapsed[1]).toContain("Failed child");
 		expect(collapsed[1]).toContain("failed");
@@ -378,7 +380,7 @@ describe("async widget, fleet, and status timing", () => {
 		expect(collapsed.join("\n")).not.toContain("child crashed");
 		for (const line of collapsed) expect(visibleWidth(line)).toBeLessThanOrEqual(48);
 
-		const expanded = buildWidgetLines(jobs as never, stubTheme as never, 80, true, 0).join("\n");
+		const expanded = buildWidgetLines(jobs as never, stubTheme, 80, true, 0).join("\n");
 		expect(expanded).toContain("run mixed-run:1 · failed");
 		expect(expanded).toContain("child crashed");
 		expect(expanded.match(/Failed child/g)).toHaveLength(1);
@@ -420,7 +422,7 @@ describe("async widget, fleet, and status timing", () => {
 		};
 		const component = new SubagentFleetComponent(
 			{ terminal: { rows: 32 }, requestRender() {} } as never,
-			stubTheme as never,
+			stubTheme,
 			state as never,
 			() => {},
 			{ refreshMs: 1_000 },
@@ -457,7 +459,7 @@ describe("widget component timer", () => {
 			],
 		};
 		let paints = 0;
-		const widget = createSubagentWidgetComponent([job] as never, stubTheme as never, {
+		const widget = createSubagentWidgetComponent([job] as never, stubTheme, {
 			requestRender: () => {
 				paints += 1;
 			},
@@ -510,9 +512,8 @@ describe("widget component timer", () => {
 						mounted = undefined;
 						return;
 					}
-					mounted = factory(null, stubTheme);
+					mounted = factory({ requestRender() {} }, stubTheme);
 				},
-				requestRender() {},
 				getToolsExpanded() {
 					return false;
 				},
@@ -529,20 +530,58 @@ describe("widget component timer", () => {
 			renderWidget(ctx as never, []);
 		}
 	});
+
+	it("repaints through the TUI from the widget factory when a job changes", () => {
+		const job = (status: string) => ({
+			asyncId: "repaint",
+			asyncDir: "Z:/missing/repaint",
+			status,
+			mode: "single",
+			agents: ["R"],
+			startedAt: 0,
+			updatedAt: 0,
+			steps: [{ agent: "R", description: "R", status, startedAt: 0 }],
+		});
+		const tui = { requestRender: vi.fn() };
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setWidget(_key: string, factory: ((tui: unknown, theme: unknown) => unknown) | undefined) {
+					factory?.(tui, stubTheme);
+				},
+				getToolsExpanded() {
+					return false;
+				},
+			},
+		};
+		try {
+			renderWidget(ctx as never, [job("queued")] as never);
+			expect(tui.requestRender).not.toHaveBeenCalled();
+			renderWidget(ctx as never, [job("complete")] as never);
+			expect(tui.requestRender).toHaveBeenCalledOnce();
+		} finally {
+			renderWidget(ctx as never, []);
+		}
+	});
 });
 
 describe("async widget ownership", () => {
 	it("keeps the other owner's animation when one UI closes or a headless session resets", async () => {
 		vi.useFakeTimers();
 		const job = { asyncId: "widget-owner", status: "running", startedAt: Date.now(), updatedAt: Date.now() };
-		const makeContext = () => ({
-			hasUI: true,
-			ui: {
-				setWidget: vi.fn(),
-				requestRender: vi.fn(),
-				getToolsExpanded: () => false,
-			},
-		});
+		const makeContext = () => {
+			const tui = { requestRender: vi.fn() };
+			return {
+				tui,
+				hasUI: true,
+				ui: {
+					setWidget: vi.fn((_key: string, factory?: (tui: unknown, theme: unknown) => unknown) =>
+						factory?.(tui, stubTheme),
+					),
+					getToolsExpanded: () => false,
+				},
+			};
+		};
 		const a = makeContext();
 		const b = makeContext();
 		renderWidget(a as never, [job] as never);
@@ -551,9 +590,9 @@ describe("async widget ownership", () => {
 		expect(b.ui.setWidget).toHaveBeenCalledOnce();
 		renderWidget({ hasUI: false, ui: {} } as never, []);
 		renderWidget(a as never, []);
-		b.ui.requestRender.mockClear();
+		b.tui.requestRender.mockClear();
 		await vi.advanceTimersByTimeAsync(160);
-		expect(b.ui.requestRender).toHaveBeenCalled();
+		expect(b.tui.requestRender).toHaveBeenCalled();
 	});
 });
 
@@ -1205,7 +1244,7 @@ describe("subagent steering call headers", () => {
 				{ action: "steer", id: "parallel-123", index: 0 },
 				stubTheme,
 				{},
-				{ resolveActionTitle: (args: unknown) => resolveSubagentActionDisplayTitle(args, state) },
+				{ resolveActionTitle: (args) => resolveSubagentActionDisplayTitle(args, state) },
 			)
 				.render(120)
 				.join("\n"),
@@ -1229,7 +1268,7 @@ describe("subagent steering call headers", () => {
 				{ action: "steer", id: "missing-run" },
 				stubTheme,
 				{},
-				{ resolveActionTitle: (args: unknown) => resolveSubagentActionDisplayTitle(args, state) },
+				{ resolveActionTitle: (args) => resolveSubagentActionDisplayTitle(args, state) },
 			)
 				.render(120)
 				.join("\n"),
@@ -1247,14 +1286,34 @@ describe("subagent call headers", () => {
 		).toContain("subagent async");
 		expect(
 			stripAnsi(
-				renderSubagentCall({ async: true, chain: [{}, {}] }, stubTheme, {})
+				renderSubagentCall(
+					{
+						async: true,
+						chain: [
+							{ task: "a", description: "A" },
+							{ task: "b", description: "B" },
+						],
+					},
+					stubTheme,
+					{},
+				)
 					.render(80)
 					.join("\n"),
 			),
 		).toContain("subagent async chain (2)");
 		expect(
 			stripAnsi(
-				renderSubagentCall({ async: true, tasks: [{}, {}] }, stubTheme, {})
+				renderSubagentCall(
+					{
+						async: true,
+						tasks: [
+							{ task: "a", description: "A" },
+							{ task: "b", description: "B" },
+						],
+					},
+					stubTheme,
+					{},
+				)
 					.render(80)
 					.join("\n"),
 			),

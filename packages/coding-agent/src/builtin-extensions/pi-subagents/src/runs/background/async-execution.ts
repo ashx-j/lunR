@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Async execution logic for subagent tool
  */
@@ -18,8 +17,8 @@ import { snapshotParentAutoReview } from "../../../../../core/auto-review.ts";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { subagentCommunicationEnabled } from "../../../../../core/settings-manager.ts";
 import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, outputTargetError, readOnlyOutputError, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
-import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
-import type { RunnerStep } from "../shared/parallel-utils.ts";
+import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type MaterializedChainStep, type MaterializedSequentialStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
+import type { BuiltRunnerStep, BuiltRunnerSubagentStep } from "../shared/parallel-utils.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, resolveChildCwd } from "../../shared/utils.ts";
@@ -121,7 +120,7 @@ interface AsyncExecutionContext {
 
 interface AsyncChainParams {
 	communicationEnabled?: boolean;
-	chain: ChainStep[];
+	chain: MaterializedChainStep[];
 	task?: string;
 	/** Raw caller-facing goal used only by the started event. */
 	goal?: string;
@@ -205,7 +204,7 @@ interface AsyncExecutionResult {
 }
 
 export interface AsyncRunnerStepBuildParams {
-	chain: ChainStep[];
+	chain: MaterializedChainStep[];
 	task?: string;
 	attachRoot?: ImportedAsyncRoot & { agent: string; outputName?: string; label?: string };
 	resultMode?: SubagentRunMode;
@@ -231,7 +230,7 @@ export interface AsyncRunnerStepBuildParams {
 
 export type AsyncRunnerStepBuildResult =
 	| {
-		steps: RunnerStep[];
+		steps: BuiltRunnerStep[];
 		runnerCwd: string;
 		workflowGraph: ReturnType<typeof buildWorkflowGraphSnapshot>;
 		eventChain: ChainStep[];
@@ -554,13 +553,13 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			...(s.model !== undefined ? { model: s.model } : {}),
 		};
 	};
-	const buildSeqStep = (s: SequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior, flatIndex?: number, parallelOutputNamespace?: { stepIndex: number; taskIndex?: number }) => {
+	const buildSeqStep = (s: MaterializedSequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior, flatIndex?: number, parallelOutputNamespace?: { stepIndex: number; taskIndex?: number }): BuiltRunnerSubagentStep => {
 		const childIndex = flatIndex ?? parallelOutputNamespace?.stepIndex ?? 0;
 		const spec = normalizeChildSpec(s, {
 			parentMode: snapshotParentPermissionMode(ctx.parentSessionId ?? ctx.currentSessionId),
 			runId: params.childIdRunId ?? id,
 			index: childIndex,
-			childId: s.childId ?? (s.agent?.trim() ? s.agent : undefined),
+			childId: s.agent?.trim() ? s.agent : undefined,
 			defaultTask: "{previous}",
 			fanoutAuthorized: false,
 		});
@@ -571,7 +570,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const instructionCwd = behaviorCwd ?? stepCwd;
 		let behavior = suppressProgressForReadOnlyTask(resolvedBehavior ?? resolveStepBehavior(buildStepOverrides(s), chainSkills), s.task, originalTask);
 		const inheritedRelativeParallelOutput = parallelOutputNamespace && s.output === undefined && typeof behavior.output === "string" && !path.isAbsolute(behavior.output);
-		if (inheritedRelativeParallelOutput && parallelOutputNamespace.taskIndex !== undefined) {
+		if (inheritedRelativeParallelOutput && typeof behavior.output === "string" && parallelOutputNamespace.taskIndex !== undefined) {
 			behavior = {
 				...behavior,
 				output: path.join(`parallel-${parallelOutputNamespace.stepIndex}`, String(parallelOutputNamespace.taskIndex), behavior.output),
@@ -685,7 +684,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 	};
 
 	try {
-		const builtSteps = chain.map((s, stepIndex) => {
+		const builtSteps = chain.map((s, stepIndex): BuiltRunnerStep => {
 			if (isParallelStep(s)) {
 				const parallelBehaviors = s.parallel.map((task) => {
 					return suppressProgressForReadOnlyTask(resolveStepBehavior(buildStepOverrides(task), chainSkills), task.task, originalTask);
@@ -722,7 +721,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				}
 				const maxItems = s.expand.maxItems ?? params.dynamicFanoutMaxItems ?? 0;
 				const dynamicFlatSteps = Array.from({ length: maxItems }, () => nextFlatStep());
-				const parallel = buildSeqStep(s.parallel as SequentialStep, undefined, undefined, progressPrecreated, behavior, undefined, { stepIndex });
+				const parallel = buildSeqStep(s.parallel as MaterializedSequentialStep, undefined, undefined, progressPrecreated, behavior, undefined, { stepIndex });
 				return {
 					expand: s.expand,
 					parallel,
@@ -747,7 +746,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				};
 			}
 			const staticStep = nextFlatStep();
-			return buildSeqStep(s as SequentialStep, staticStep.sessionFile, undefined, false, undefined, staticStep.index);
+			return buildSeqStep(s as MaterializedSequentialStep, staticStep.sessionFile, undefined, false, undefined, staticStep.index);
 		});
 		const steps = params.attachRoot
 			? [{

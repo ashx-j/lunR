@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -59,7 +58,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	const steeringNoticeSeen = new Map<string, number>();
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
 		renderWidget(ctx, options.widgetEnabled === false ? [] : jobs);
-		ctx.ui.requestRender?.();
 	};
 	const refreshWidget = (ctx: ExtensionContext) => rerenderWidget(ctx);
 	const restoredControlEventCursor = (asyncDir: string) => {

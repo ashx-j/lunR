@@ -1,14 +1,13 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { snapshotParentPermissionMode } from "../../../../../core/subagent-permission-inherit.ts";
 import { subagentCommunicationEnabled } from "../../../../../core/settings-manager.ts";
 import { removeOnExit } from "../../../../../core/temp-files.ts";
 import { getAgentDir } from "../../shared/utils.ts";
-import { allocateChildId, normalizeChildSpec } from "../../shared/child-spec.ts";
+import { allocateChildId, normalizeChildSpec, type DelegatedTaskInput } from "../../shared/child-spec.ts";
 import { ensureArtifactsDir, getArtifactsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
 import { resolveSubagentRequestParams } from "./request-params.ts";
@@ -33,6 +32,9 @@ import {
 	suppressProgressForReadOnlyTask,
 	taskDisallowsFileUpdates,
 	type ChainStep,
+	type Materialized,
+	type MaterializedChainStep,
+	type MaterializedSequentialStep,
 	type ResolvedStepBehavior,
 	type SequentialStep,
 	type StepOverrides,
@@ -127,6 +129,7 @@ const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "ejec
 interface TaskParam {
 	agent?: string;
 	task: string;
+	thinking?: ThinkingLevel;
 	description?: string;
 	permissions?: "full" | "read-only";
 	cwd?: string;
@@ -187,6 +190,12 @@ export interface SubagentParamsLike {
 	scheduleName?: string;
 }
 
+/** SubagentParamsLike after internalizePromptDrivenChildren gave every child its agent (the child id). */
+type MaterializedParams = Omit<SubagentParamsLike, "tasks" | "chain"> & {
+	tasks?: Materialized<TaskParam>[];
+	chain?: MaterializedChainStep[];
+};
+
 interface ExecutorDeps {
 	pi: ExtensionAPI;
 	state: SubagentState;
@@ -205,10 +214,10 @@ type ForkSessionFileForTask = (agentName: string, idx?: number, modelOverride?: 
 type ForkThinkingOverrideForTask = (agentName: string, idx?: number, modelOverride?: string) => ChildRuntimeConfig["thinking"] | undefined;
 
 interface ExecutionContextData {
-	params: SubagentParamsLike;
+	params: MaterializedParams;
 	effectiveCwd: string;
 	ctx: ExtensionContext;
-	signal: AbortSignal;
+	signal: AbortSignal | undefined;
 	onUpdate?: (r: AgentToolResult<Details>) => void;
 	agents: ChildRuntimeConfig[];
 	runId: string;
@@ -463,7 +472,17 @@ function resolveForegroundResumeTarget(params: SubagentParamsLike, state: Subage
 }
 
 type AsyncResumeSourceTarget = ReturnType<typeof resolveAsyncResumeTarget> & { source: "async" };
-type ForegroundResumeSourceTarget = NonNullable<ReturnType<typeof resolveForegroundResumeTarget>> & { kind: "revive"; source: "foreground" };
+// Foreground and nested run records keep none of these; the revive code reads them with fallbacks
+// (the description falls back to the agent, permissions to "read-only", the model to the tier).
+type NoRecordedChildConfig = {
+	childId?: undefined;
+	description?: undefined;
+	permissions?: undefined;
+	model?: undefined;
+	thinking?: undefined;
+	modelSelection?: undefined;
+};
+type ForegroundResumeSourceTarget = NonNullable<ReturnType<typeof resolveForegroundResumeTarget>> & { kind: "revive"; source: "foreground" } & NoRecordedChildConfig;
 type NestedResumeSourceTarget = {
 	kind: "revive";
 	source: "nested";
@@ -474,7 +493,7 @@ type NestedResumeSourceTarget = {
 	intercomTarget: string;
 	cwd?: string;
 	sessionFile: string;
-};
+} & NoRecordedChildConfig;
 type ResumeSourceTarget = AsyncResumeSourceTarget | ForegroundResumeSourceTarget | NestedResumeSourceTarget;
 
 function isAsyncRunNotFound(error: unknown): boolean {
@@ -713,6 +732,14 @@ function appendStepToAsyncChain(input: {
 			details: { mode: "management", results: [] },
 		};
 	}
+	// internalizePromptDrivenChildren would take the tasks branch and leave the chain step without its agent.
+	if ((input.params.tasks?.length ?? 0) > 0) {
+		return {
+			content: [{ type: "text", text: "action='append-step' takes chain only, not tasks." }],
+			isError: true,
+			details: { mode: "management", results: [] },
+		};
+	}
 	const acceptanceErrors = validateExecutionAcceptance(input.params);
 	if (acceptanceErrors.length > 0) {
 		return {
@@ -795,7 +822,7 @@ function appendStepToAsyncChain(input: {
 		};
 	}
 
-	let appendParams: SubagentParamsLike;
+	let appendParams: MaterializedParams;
 	const appendChildRunId = `${resolved.id}-append-${randomUUID().slice(0, 8)}`;
 	try {
 		appendParams = internalizePromptDrivenChildren(input.params, {
@@ -1056,7 +1083,7 @@ async function resumeAsyncRun(input: {
 	absoluteDeadlineAt?: number;
 }): Promise<AgentToolResult<Details>> {
 	const followUp = (input.params.message ?? input.params.task ?? "").trim();
-	const attachChain = (input.params.chain?.length ?? 0) > 0 ? input.params.chain as ChainStep[] : undefined;
+	const attachChain = (input.params.chain?.length ?? 0) > 0 ? input.params.chain as MaterializedChainStep[] : undefined;
 	if (!followUp && !attachChain) {
 		return {
 			content: [{ type: "text", text: "action='resume' requires message." }],
@@ -1254,6 +1281,12 @@ async function resumeAsyncRun(input: {
 			return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true, details: { mode: "management", results: [] } };
 		}
 	}
+	// Resolve passed budgets like a fresh launch does, so the child gets its grace turn. executeAsyncSingle
+	// validates toolBudget itself; resolving it here gives it the resolved type it declares.
+	const resumeTurnBudget = resolveTurnBudgetConfig(input.params.turnBudget);
+	if (resumeTurnBudget.error) return { content: [{ type: "text", text: resumeTurnBudget.error }], isError: true, details: { mode: "management", results: [] } };
+	const resumeToolBudget = resolveToolBudget(input.params.toolBudget, "toolBudget");
+	if (resumeToolBudget.error) return { content: [{ type: "text", text: resumeToolBudget.error }], isError: true, details: { mode: "management", results: [] } };
 	let recoverySpec: ChildSpec;
 	try {
 		const recoverySelection = recoveryDescriptor?.modelSelection ?? target.modelSelection;
@@ -1307,7 +1340,8 @@ async function resumeAsyncRun(input: {
 		...(recoveryDescriptor?.sessionDir ? { sessionDir: recoveryDescriptor.sessionDir } : {}),
 		sessionFile: target.sessionFile,
 		revivalLease: {
-			sessionFile: target.sessionFile,
+			// Non-null: without attachChain, resolveResumeTarget required a session file.
+			sessionFile: target.sessionFile!,
 			runId,
 			sourceRunId: target.runId,
 			...(input.deps.state.currentSessionId ? { parentSessionId: input.deps.state.currentSessionId } : {}),
@@ -1331,8 +1365,8 @@ async function resumeAsyncRun(input: {
 		...(restoredAcceptance ? { restoredAcceptance } : {}),
 		...(input.params.timeoutMs !== undefined ? { timeoutMs: input.params.timeoutMs } : {}),
 		...(input.absoluteDeadlineAt !== undefined ? { absoluteDeadlineAt: input.absoluteDeadlineAt } : {}),
-		...(input.params.turnBudget !== undefined ? { turnBudget: input.params.turnBudget } : {}),
-		...(input.params.toolBudget !== undefined ? { toolBudget: input.params.toolBudget } : {}),
+		...(resumeTurnBudget.turnBudget ? { turnBudget: resumeTurnBudget.turnBudget } : {}),
+		...(resumeToolBudget.toolBudget ? { toolBudget: resumeToolBudget.toolBudget } : {}),
 	});
 	if (result.isError) return result;
 
@@ -1587,18 +1621,18 @@ function getRequestedModeLabel(params: SubagentParamsLike): Details["mode"] {
 	return "single";
 }
 
-interface AgentDefaultContextPolicy {
-	params: SubagentParamsLike;
+interface AgentDefaultContextPolicy<P extends SubagentParamsLike = SubagentParamsLike> {
+	params: P;
 	contextForAgent(agentName: string): "fresh" | "fork";
 	usesFork: boolean;
 }
 
-function resolveAgentDefaultContextPolicy(params: SubagentParamsLike): AgentDefaultContextPolicy {
+function resolveAgentDefaultContextPolicy<P extends SubagentParamsLike>(params: P): AgentDefaultContextPolicy<P> {
 	// lunr: hide fork from the model; force every child to fresh. Fork internals stay.
 	return lunrContextPolicy(params);
 }
 
-function resolveExplicitContextPolicy(params: SubagentParamsLike): AgentDefaultContextPolicy {
+function resolveExplicitContextPolicy<P extends SubagentParamsLike>(params: P): AgentDefaultContextPolicy<P> {
 	// lunr: `context: "fork"` from the model is coerced to fresh.
 	return lunrContextPolicy(params);
 }
@@ -1635,13 +1669,16 @@ function runtimeConfigFromChildSpec(spec: ChildSpec): ChildRuntimeConfig {
 	};
 }
 
+// The 3 casts to MaterializedParams below: a call sets only one of tasks, chain or task.
+// The lists this function leaves alone are empty, or validateExecutionInput (execute) or the
+// append-step guard rejects the call before anything runs.
 function internalizePromptDrivenChildren(
 	params: SubagentParamsLike,
 	options: { runId: string; parentMode?: string; dynamicFanoutMaxItems?: number },
-): { params: SubagentParamsLike; agents: ChildRuntimeConfig[] } {
+): { params: MaterializedParams; agents: ChildRuntimeConfig[] } {
 	const agents: ChildRuntimeConfig[] = [];
 	let flatIndex = 0;
-	const normalize = (input: TaskParam | SequentialStep, defaultTask?: string): { input: typeof input; spec: ChildSpec } => {
+	const normalize = <T extends DelegatedTaskInput>(input: T, defaultTask?: string): { input: Materialized<T>; spec: ChildSpec } => {
 		const spec = normalizeChildSpec(input, {
 			parentMode: options.parentMode,
 			runId: options.runId,
@@ -1656,9 +1693,9 @@ function internalizePromptDrivenChildren(
 		const tasks = params.tasks!.map((task) => {
 			const normalized = normalize(task);
 			flatIndex++;
-			return normalized.input as TaskParam;
+			return normalized.input;
 		});
-		return { params: { ...params, tasks }, agents };
+		return { params: { ...params, tasks } as MaterializedParams, agents };
 	}
 
 	if ((params.chain?.length ?? 0) > 0) {
@@ -1681,7 +1718,7 @@ function internalizePromptDrivenChildren(
 			flatIndex++;
 			return normalized.input;
 		});
-		return { params: { ...params, chain }, agents };
+		return { params: { ...params, chain } as MaterializedParams, agents };
 	}
 
 	const normalized = normalize({
@@ -1700,7 +1737,7 @@ function internalizePromptDrivenChildren(
 		toolBudget: params.toolBudget,
 	});
 	return {
-		params: { ...params, agent: normalized.spec.childId },
+		params: { ...params, agent: normalized.spec.childId } as MaterializedParams,
 		agents,
 	};
 }
@@ -1832,7 +1869,7 @@ function toExecutionErrorResult(params: SubagentParamsLike, error: unknown): Age
 }
 
 function collectChainSessionFiles(
-	chain: ChainStep[],
+	chain: MaterializedChainStep[],
 	sessionFileForTask: ForkSessionFileForTask,
 	dynamicFanoutMaxItems?: number,
 ): (string | undefined)[] {
@@ -1854,7 +1891,7 @@ function collectChainSessionFiles(
 			}
 			continue;
 		}
-		const sequential = step as SequentialStep;
+		const sequential = step as MaterializedSequentialStep;
 		sessionFiles.push(sessionFileForTask(sequential.agent, flatIndex, sequential.model));
 		flatIndex++;
 	}
@@ -1862,7 +1899,7 @@ function collectChainSessionFiles(
 }
 
 function collectChainThinkingOverrides(
-	chain: ChainStep[],
+	chain: MaterializedChainStep[],
 	thinkingOverrideForTask: ForkThinkingOverrideForTask,
 	dynamicFanoutMaxItems?: number,
 ): (ChildRuntimeConfig["thinking"] | undefined)[] {
@@ -1884,30 +1921,30 @@ function collectChainThinkingOverrides(
 			}
 			continue;
 		}
-		const sequential = step as SequentialStep;
+		const sequential = step as MaterializedSequentialStep;
 		thinkingOverrides.push(thinkingOverrideForTask(sequential.agent, flatIndex, sequential.model));
 		flatIndex++;
 	}
 	return thinkingOverrides;
 }
 
-function firstChainAgent(chain: ChainStep[]): string | undefined {
+function firstChainAgent(chain: MaterializedChainStep[]): string | undefined {
 	const first = chain[0];
 	if (!first) return undefined;
 	if (isParallelStep(first)) return first.parallel[0]?.agent;
 	if (isDynamicParallelStep(first)) return first.parallel.agent;
-	return (first as SequentialStep).agent;
+	return (first as MaterializedSequentialStep).agent;
 }
 
-function firstRawChainTask(chain: ChainStep[]): string | undefined {
+function firstRawChainTask(chain: MaterializedChainStep[]): string | undefined {
 	const first = chain[0];
 	if (!first) return undefined;
 	if (isParallelStep(first)) return first.parallel[0]?.task;
 	if (isDynamicParallelStep(first)) return first.parallel.task;
-	return (first as SequentialStep).task;
+	return (first as MaterializedSequentialStep).task;
 }
 
-function resolveAsyncEventGoal(workflowTask: string | undefined, rawChain: ChainStep[], unwrapForkFallback = false): string {
+function resolveAsyncEventGoal(workflowTask: string | undefined, rawChain: MaterializedChainStep[], unwrapForkFallback = false): string {
 	if (workflowTask?.trim()) return workflowTask;
 	const fallback = firstRawChainTask(rawChain) || "";
 	if (!unwrapForkFallback) return fallback;
@@ -1915,7 +1952,7 @@ function resolveAsyncEventGoal(workflowTask: string | undefined, rawChain: Chain
 	return fallback.startsWith(forkPrefix) ? fallback.slice(forkPrefix.length) : fallback;
 }
 
-function wrapChainTasksForFork(chain: ChainStep[], contextPolicy: AgentDefaultContextPolicy): ChainStep[] {
+function wrapChainTasksForFork(chain: MaterializedChainStep[], contextPolicy: AgentDefaultContextPolicy): MaterializedChainStep[] {
 	return chain.map((step, stepIndex) => {
 		if (isParallelStep(step)) {
 			return {
@@ -1939,7 +1976,7 @@ function wrapChainTasksForFork(chain: ChainStep[], contextPolicy: AgentDefaultCo
 				},
 			};
 		}
-		const sequential = step as SequentialStep;
+		const sequential = step as MaterializedSequentialStep;
 		return {
 			...sequential,
 			task: shouldForkAgent(contextPolicy, sequential.agent)
@@ -1950,7 +1987,7 @@ function wrapChainTasksForFork(chain: ChainStep[], contextPolicy: AgentDefaultCo
 }
 
 function preflightForkSessionsForStaticTasks(
-	params: SubagentParamsLike,
+	params: MaterializedParams,
 	contextPolicy: AgentDefaultContextPolicy,
 	sessionFileForTask: ForkSessionFileForTask,
 	dynamicFanoutMaxItems?: number,
@@ -1984,7 +2021,7 @@ function preflightForkSessionsForStaticTasks(
 			flatIndex += maxItems;
 			continue;
 		}
-		const sequential = step as SequentialStep;
+		const sequential = step as MaterializedSequentialStep;
 		if (shouldForkAgent(contextPolicy, sequential.agent)) sessionFileForTask(sequential.agent, flatIndex, sequential.model);
 		flatIndex++;
 	}
@@ -2014,7 +2051,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	if (!effectiveAsync) return null;
 
 	if (hasChain && params.chain) {
-		const chainWorktreeTaskCwdError = buildChainWorktreeTaskCwdError(params.chain as ChainStep[], effectiveCwd);
+		const chainWorktreeTaskCwdError = buildChainWorktreeTaskCwdError(params.chain as MaterializedChainStep[], effectiveCwd);
 		if (chainWorktreeTaskCwdError) {
 			return {
 				content: [{ type: "text", text: chainWorktreeTaskCwdError }],
@@ -2116,7 +2153,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	if (hasChain && params.chain) {
 		const normalized = normalizeSkillInput(params.skill);
 		const chainSkills = normalized === false ? [] : (normalized ?? []);
-		const rawChain = params.chain as ChainStep[];
+		const rawChain = params.chain as MaterializedChainStep[];
 		const chain = wrapChainTasksForFork(rawChain, contextPolicy);
 		return executeAsyncChain(id, {
 			chain,
@@ -2257,7 +2294,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 	const foregroundControl = deps.state.foregroundControls.get(runId);
 	const normalized = normalizeSkillInput(params.skill);
 	const chainSkills = normalized === false ? [] : (normalized ?? []);
-	const chain = wrapChainTasksForFork(params.chain as ChainStep[], contextPolicy);
+	const chain = wrapChainTasksForFork(params.chain as MaterializedChainStep[], contextPolicy);
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
 	// The chain writes its files under chainDir, so read-only chains keep lunR's own run directory.
 	if (params.chainDir && snapshotParentPermissionMode(ctx.sessionManager.getSessionId() ?? undefined) === "read-only") {
@@ -2394,14 +2431,14 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 }
 
 interface ForegroundParallelRunInput {
-	tasks: TaskParam[];
+	tasks: Materialized<TaskParam>[];
 	taskTexts: string[];
 	agents: ChildRuntimeConfig[];
 	ctx: ExtensionContext;
 	state: SubagentState;
 	intercomEvents: IntercomEventBus;
 	parentSessionId: string | null;
-	signal: AbortSignal;
+	signal: AbortSignal | undefined;
 	runId: string;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex: (idx?: number) => string | undefined;
@@ -2451,7 +2488,7 @@ function createParallelWorktreeSetup(
 	enabled: boolean | undefined,
 	cwd: string,
 	runId: string,
-	tasks: TaskParam[],
+	tasks: Materialized<TaskParam>[],
 	setupHook: ExtensionConfig["worktreeSetupHook"],
 	setupHookTimeoutMs: ExtensionConfig["worktreeSetupHookTimeoutMs"],
 	baseDir: ExtensionConfig["worktreeBaseDir"],
@@ -2494,7 +2531,7 @@ function resolveSingleRunOutputBaseDir(deps: ExecutorDeps, artifactsDir: string,
 		: path.join(artifactsDir, "outputs", runId);
 }
 
-function buildChainWorktreeTaskCwdError(chain: ChainStep[], sharedCwd: string): string | undefined {
+function buildChainWorktreeTaskCwdError(chain: MaterializedChainStep[], sharedCwd: string): string | undefined {
 	for (let stepIndex = 0; stepIndex < chain.length; stepIndex++) {
 		const step = chain[stepIndex]!;
 		if (!isParallelStep(step) || !step.worktree) continue;
@@ -2508,7 +2545,7 @@ function buildChainWorktreeTaskCwdError(chain: ChainStep[], sharedCwd: string): 
 }
 
 function resolveParallelTaskCwd(
-	task: TaskParam,
+	task: Materialized<TaskParam>,
 	paramsCwd: string,
 	worktreeSetup: WorktreeSetup | undefined,
 	index: number,
@@ -2520,7 +2557,7 @@ function resolveParallelTaskCwd(
 function buildParallelWorktreeSuffix(
 	worktreeSetup: WorktreeSetup | undefined,
 	artifactsDir: string,
-	tasks: TaskParam[],
+	tasks: Materialized<TaskParam>[],
 ): string {
 	if (!worktreeSetup) return "";
 	const diffsDir = path.join(artifactsDir, "worktree-diffs");
@@ -2529,7 +2566,7 @@ function buildParallelWorktreeSuffix(
 }
 
 function findDuplicateParallelOutputPath(input: {
-	tasks: TaskParam[];
+	tasks: Materialized<TaskParam>[];
 	behaviors: ResolvedStepBehavior[];
 	paramsCwd: string;
 	ctxCwd: string;
@@ -3109,7 +3146,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget(runId, spec.childId, 0) : undefined;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
-	const agentConfig = {
+	const agentConfig: ChildRuntimeConfig = {
 		name: spec.childId,
 		description: spec.description,
 		model: spec.model,
@@ -3432,7 +3469,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
 		params: SubagentParamsLike,
-		signal: AbortSignal,
+		signal: AbortSignal | undefined,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	) => Promise<AgentToolResult<Details>>;
@@ -3440,7 +3477,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	const execute = async (
 		_id: string,
 		params: SubagentParamsLike,
-		signal: AbortSignal,
+		signal: AbortSignal | undefined,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
@@ -3590,7 +3627,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				if (paramsWithResolvedCwd.dir) {
 					try {
 						const location = resolveAsyncRunLocation(paramsWithResolvedCwd, ASYNC_DIR, RESULTS_DIR);
-						return stopAsyncRun(deps.state, location.resolvedId ?? targetRunId ?? path.basename(location.asyncDir ?? paramsWithResolvedCwd.dir), deps.kill, location);
+						// Non-null: with dir set the location has an asyncDir, so getAsyncInterruptTarget finds a target.
+						return stopAsyncRun(deps.state, location.resolvedId ?? targetRunId ?? path.basename(location.asyncDir ?? paramsWithResolvedCwd.dir), deps.kill, location)!;
 					} catch (error) {
 						const text = error instanceof Error ? error.message : String(error);
 						return { content: [{ type: "text", text }], isError: true, details: { mode: "management", results: [] } };
@@ -3725,7 +3763,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (foregroundTimeout.error) return buildRequestedModeError(effectiveParams, foregroundTimeout.error);
 		const turnBudget = resolveTurnBudgetConfig(effectiveParams.turnBudget ?? deps.config.turnBudget);
 		if (turnBudget.error) return buildRequestedModeError(effectiveParams, turnBudget.error);
-		const contextPolicy = resolveAgentDefaultContextPolicy(effectiveParams);
+		const contextPolicy = resolveAgentDefaultContextPolicy(internalized.params);
 		effectiveParams = contextPolicy.params;
 		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
 		const intercomBridge = resolveIntercomBridge({
@@ -3853,7 +3891,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			path.join(sessionDirForIndex(idx), "session.jsonl");
 		try {
 			if (!(effectiveParams.clarify === true && ctx.hasUI)) {
-				preflightForkSessionsForStaticTasks(effectiveParams, contextPolicy, forkSessionFileForTask, deps.config.chain?.dynamicFanout?.maxItems);
+				preflightForkSessionsForStaticTasks(contextPolicy.params, contextPolicy, forkSessionFileForTask, deps.config.chain?.dynamicFanout?.maxItems);
 			}
 		} catch (error) {
 			return toExecutionErrorResult(effectiveParams, error);
@@ -3876,7 +3914,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (spawnLimitError) return spawnLimitError;
 
 		const execData: ExecutionContextData = {
-			params: effectiveParams,
+			params: contextPolicy.params,
 			effectiveCwd,
 			ctx,
 			signal,
@@ -4037,7 +4075,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	const executeWithSingleDispatchGuard = async (
 		id: string,
 		params: SubagentParamsLike,
-		signal: AbortSignal,
+		signal: AbortSignal | undefined,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
