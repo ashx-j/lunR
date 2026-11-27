@@ -1,4 +1,5 @@
 import { lstatSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "../config.ts";
@@ -126,28 +127,58 @@ export function credentialArgsReason(input: Record<string, unknown>, cwd: string
 	return scanArgs(input, cwd, 0);
 }
 
+const CREDENTIAL_NAMES = ["auth.json", "subscriptions.json", "mcp-oauth"];
+// The 3 names with quotes, backslashes or a line continuation allowed between characters: what is
+// left of the name once bash removes them (`"auth".json`, `a''uth.json`, `auth\.json`).
+const LOOSE_CREDENTIAL_NAME = new RegExp(
+	CREDENTIAL_NAMES.map((name) => [...name].map((ch) => ch.replace(/[.-]/, "\\$&")).join(`['"\\\\\\n]*`)).join("|"),
+	CASE_INSENSITIVE ? "i" : "",
+);
+const GLOB_CHAR = /[*?[]/;
+// One scan that lets ordinary commands skip both tests below: no name, quote, backslash or glob.
+const BASH_PREFILTER = CASE_INSENSITIVE
+	? /[*?['"\\]|auth\.json|subscriptions\.json|mcp-oauth/i
+	: /[*?['"\\]|auth\.json|subscriptions\.json|mcp-oauth/;
+
 /**
- * The refusal when a bash command names a credential location as a literal word or `--opt=` value
- * (`cat ~/.lunr/agent/auth.json`, `jq . <auth.json`), also relative to a literal `cd <dir>` before
- * it (`cd ~/.lunr/agent && cat auth.json`). Commands without one of the names return after one
- * regex test.
+ * The refusal when a bash command names a credential location, as bash reads it:
+ * - a literal word or `--opt=` value (`cat ~/.lunr/agent/auth.json`, `jq . <"auth".json`), with
+ *   `$HOME`, `${HOME}` and on Windows `$USERPROFILE` taken from lunR's own environment;
+ * - relative to a literal `cd <dir>`, `cd -- <dir>` or `pushd <dir>` before it;
+ * - a glob whose directory part is a credential directory and whose pattern matches a credential
+ *   name (`cat ~/.lunr/agent/*.json`, `au[t]h.json` there).
+ * Command substitution, other variables and assignments are not followed. A command with none of the
+ * names, quotes, backslashes or glob characters returns after 1 regex test (about 20 ns more than
+ * the name test alone).
  */
 export function credentialBashReason(command: string, cwd: string): string | undefined {
-	if (!CREDENTIAL_NAME.test(command)) return undefined;
+	if (!BASH_PREFILTER.test(command)) return undefined;
+	if (!LOOSE_CREDENTIAL_NAME.test(command) && !GLOB_CHAR.test(command)) return undefined;
 	let base = cwd;
 	for (const words of literalSegments(command).map((segment) => segment.map(fromMsysPath))) {
-		if (words[0] === "cd" && words.length === 2) {
-			base = resolveToCwd(words[1], base);
+		const dir = changedDirectory(words);
+		if (dir !== undefined) {
+			base = resolveToCwd(dir, base);
 			continue;
 		}
 		for (const word of words) {
 			const value = fromMsysPath(word.slice(word.lastIndexOf("=") + 1));
-			if (credentialPathReason(word, base) || (value !== word && value && credentialPathReason(value, base))) {
-				return CREDENTIAL_BLOCK_REASON;
+			for (const candidate of value !== word && value ? [word, value] : [word]) {
+				// After a cd, a word can name a file inside the mcp-oauth tree without any of the names.
+				const named = base !== cwd || CREDENTIAL_NAME.test(candidate);
+				if (named && credentialPathReason(candidate, base)) return CREDENTIAL_BLOCK_REASON;
+				if (GLOB_CHAR.test(candidate) && globNamesCredential(candidate, base)) return CREDENTIAL_BLOCK_REASON;
 			}
 		}
 	}
 	return undefined;
+}
+
+/** The target of `cd <dir>`, `cd -- <dir>` or `pushd <dir>`, or undefined for any other command. */
+function changedDirectory(words: string[]): string | undefined {
+	if (words[0] !== "cd" && words[0] !== "pushd") return undefined;
+	const args = words[1] === "--" ? words.slice(2) : words.slice(1);
+	return args.length === 1 ? args[0] : undefined;
 }
 
 /**
@@ -159,11 +190,84 @@ function fromMsysPath(word: string): string {
 	return process.platform === "win32" ? word.replace(/^(?:\/cygdrive|\/mnt)?\/([a-z])(?=\/|$)/i, "$1:/") : word;
 }
 
+/** Bash on Windows also accepts `\` as a separator in a path it passes to a Windows program. */
+const PATH_SEPARATORS = process.platform === "win32" ? /[\\/]/ : /\//;
+
+/**
+ * Whether glob `word` (relative to `base`) can match a credential file, or the `mcp-oauth` tree or
+ * something in it. Only the directory part before the first glob character is resolved: lexically,
+ * and through symlinks when a pattern component can match one of the names. A symlink into the
+ * `mcp-oauth` tree under a glob matching none of them (`link/*`) is not followed.
+ */
+function globNamesCredential(word: string, base: string): boolean {
+	const first = word.search(GLOB_CHAR);
+	const head = word.slice(0, first);
+	const cut = Math.max(head.lastIndexOf("/"), process.platform === "win32" ? head.lastIndexOf("\\") : -1);
+	const pattern = word
+		.slice(cut + 1)
+		.split(PATH_SEPARATORS)
+		.filter(Boolean)
+		.map(globComponent);
+	try {
+		const dir = resolveToCwd(cut === -1 ? "." : word.slice(0, cut + 1), base);
+		if (globMatches(pattern, fold(dir), activeCredentialPaths())) return true;
+		// Resolving symlinks costs about 150 µs, so only a pattern that can match a name pays for it.
+		const mayMatch = pattern.some((part) => CREDENTIAL_NAMES.some((name) => part.test(name)));
+		return mayMatch && globMatches(pattern, fold(canonicalizeTargetPath(dir)), canonicalCredentialPaths());
+	} catch {
+		return false;
+	}
+}
+
+function globMatches(pattern: RegExp[], dir: string, paths: CredentialPaths): boolean {
+	if (isWithin(dir, paths.mcp)) return true;
+	const covers = (location: string, tree: boolean) => {
+		if (!isWithin(location, dir)) return false;
+		const parts = relative(dir, location).split(sep);
+		if (tree ? pattern.length < parts.length : pattern.length !== parts.length) return false;
+		return parts.every((part, index) => pattern[index].test(part));
+	};
+	return covers(paths.auth, false) || covers(paths.subscriptions, false) || covers(paths.mcp, true);
+}
+
+/** One path component of a bash glob as a regex: `*`, `?` and `[...]` (with `!` or `^` negation). */
+function globComponent(component: string): RegExp {
+	let source = "";
+	for (let i = 0; i < component.length; i++) {
+		const ch = component[i];
+		const close = ch === "[" ? component.indexOf("]", i + 2) : -1;
+		if (ch === "*") source += ".*";
+		else if (ch === "?") source += ".";
+		else if (close !== -1) {
+			const body = component
+				.slice(i + 1, close)
+				.replace(/^[!^]/, "^")
+				.replace(/\\/g, "\\\\");
+			source += `[${body}]`;
+			i = close;
+		} else source += ch.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+	}
+	return new RegExp(`^${source}$`, CASE_INSENSITIVE ? "i" : "");
+}
+
 // Inside double quotes bash keeps a backslash unless it escapes one of these, so a quoted Windows
 // path such as "C:\Users\me\auth.json" keeps its separators.
 const DOUBLE_QUOTE_ESCAPES = new Set(["$", "`", '"', "\\", "\n"]);
+// `$HOME` and `${HOME}` (and on Windows `$USERPROFILE`), which lunR passes to bash unchanged.
+const HOME_VARIABLE =
+	process.platform === "win32"
+		? /\$(?:\{(HOME|USERPROFILE)\}|(HOME|USERPROFILE)(?![\w]))/y
+		: /\$(?:\{(HOME)\}|(HOME)(?![\w]))/y;
 
-/** Bash words with quotes and escapes removed, grouped by `;`, `|`, `&` and newline. */
+/** The value bash gives a home variable: lunR's environment, or the home directory for an unset HOME. */
+function homeVariable(name: string): string | undefined {
+	return process.env[name] ?? (name === "HOME" ? homedir() : undefined);
+}
+
+/**
+ * Bash words with quotes, escapes and line continuations removed and home variables expanded,
+ * grouped by `;`, `|`, `&` and newline.
+ */
 function literalSegments(command: string): string[][] {
 	const segments: string[][] = [[]];
 	let word = "";
@@ -175,8 +279,17 @@ function literalSegments(command: string): string[][] {
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
 		if (ch === "\\" && quote !== "'" && i + 1 < command.length) {
-			if (quote === '"' && !DOUBLE_QUOTE_ESCAPES.has(command[i + 1])) word += ch;
+			if (command[i + 1] === "\n") i++;
+			else if (quote === '"' && !DOUBLE_QUOTE_ESCAPES.has(command[i + 1])) word += ch;
 			else word += command[++i];
+		} else if (ch === "$" && quote !== "'") {
+			HOME_VARIABLE.lastIndex = i;
+			const match = HOME_VARIABLE.exec(command);
+			const value = match && homeVariable(match[1] ?? match[2]);
+			if (match && value !== undefined) {
+				word += value;
+				i += match[0].length - 1;
+			} else word += ch;
 		} else if (quote) {
 			if (ch === quote) quote = undefined;
 			else word += ch;

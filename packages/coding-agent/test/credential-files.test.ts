@@ -174,6 +174,55 @@ describe("lunR's saved logins", () => {
 		expect(await gate(toolName, withProfile(input, toolName))).toBeUndefined();
 	});
 
+	// Spellings bash reads as a saved login, each next to one that names another file.
+	it.each<[refused: string, allowed: string]>([
+		['cat <profile>/"auth".json', 'cat <profile>/"auth".json.bak'],
+		["cat <profile>/a''uth.json", "cat <profile>/a''uth.md"],
+		["cat <profile>/auth\\.json", 'cat "<profile>/auth\\.json"'],
+		["cat <profile>/auth\\\n.json", "cat <profile>/auth\\\n.md"],
+		["cat <profile>/auth.js*", "cat <profile>/settings*.json"],
+		["cat <profile>/au[t]h.json", "cat <profile>/au[x]h.json"],
+		["cd <profile> && cat *.json", "cat *.json"],
+		["cat profile/mcp-*/*/tokens.json", "ls profile/settings.*"],
+		["cd -- <profile> && cat auth.json", "cd -- sub && cat auth.json"],
+		["pushd <profile> && cat auth.json", "pushd sub && cat auth.json"],
+	])("refuses bash %j and allows %j", async (refused, allowed) => {
+		const reason = { block: true, reason: CREDENTIAL_BLOCK_REASON };
+		expect(await gate("bash", withProfile({ command: refused }, "bash"))).toEqual(reason);
+		expect(await gate("bash", withProfile({ command: allowed }, "bash"))).toBeUndefined();
+	});
+
+	// The scratch root stands in for the home directory, so `$HOME/agent` is the profile.
+	it.each<[refused: string, allowed: string]>([
+		["cat $HOME/agent/auth.json", "cat $HOME/project/auth.json"],
+		['cat "$HOME"/agent/subscriptions.json', "cat '$HOME'/agent/subscriptions.json"],
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: bash parameter syntax, not a template.
+		["cat ${HOME}/agent/mcp-oauth/sha256-ab/tokens.json", "cat ${HOMEDIR}/agent/auth.json"],
+	])("expands HOME in bash %j and allows %j", async (refused, allowed) => {
+		const previousHome = process.env.HOME;
+		process.env.HOME = root;
+		try {
+			expect(await gate("bash", { command: refused })).toEqual({ block: true, reason: CREDENTIAL_BLOCK_REASON });
+			expect(await gate("bash", { command: allowed })).toBeUndefined();
+		} finally {
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+		}
+	});
+
+	// Git Bash passes USERPROFILE through unchanged; elsewhere bash has no such variable by default.
+	it("expands USERPROFILE in bash on Windows only", async () => {
+		const previous = process.env.USERPROFILE;
+		process.env.USERPROFILE = root;
+		try {
+			const result = await gate("bash", { command: "cat $USERPROFILE/agent/auth.json" });
+			expect(result).toEqual(windows ? { block: true, reason: CREDENTIAL_BLOCK_REASON } : undefined);
+		} finally {
+			if (previous === undefined) delete process.env.USERPROFILE;
+			else process.env.USERPROFILE = previous;
+		}
+	});
+
 	// Inside double quotes bash keeps `\/`: a separator on Windows, part of a file name elsewhere.
 	it("reads a quoted backslash before a slash as bash does", async () => {
 		const reason = await gate("bash", withProfile({ command: 'cat "<profile>\\/auth.json"' }, "bash"));
