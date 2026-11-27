@@ -10,6 +10,8 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import type { LspClient } from "./lsp-client.js";
 import { LspManager } from "./lsp-manager.js";
 import type { TreeSitterManager } from "./tree-sitter/parser-manager.js";
 import type { WorkspaceIndex } from "./tree-sitter/workspace-index.js";
@@ -24,6 +26,8 @@ interface TrackedDocument {
   uri: string;
   languageId: string;
   version: number;
+  /** The client that got didOpen. A restarted server is a new client that has not seen the document. */
+  client: LspClient;
 }
 
 export class FileSync {
@@ -70,10 +74,9 @@ export class FileSync {
       const [evictUri, evictDoc] = oldest.value;
       this.tracked.delete(evictUri);
 
-      // Send didClose to the appropriate LSP server
-      const client = this.manager.getRunningClient(evictDoc.languageId);
-      if (client) {
-        client.didClose(evictUri);
+      // Send didClose to the server that has it open, unless that server has since been replaced
+      if (this.manager.getRunningClient(evictDoc.languageId) === evictDoc.client) {
+        evictDoc.client.didClose(evictUri);
       }
     }
   }
@@ -86,24 +89,22 @@ export class FileSync {
     const absPath = this.manager.resolvePath(filePath);
     const uri = this.manager.getFileUri(absPath);
 
-    // Already tracked? Just touch it for LRU freshness.
-    if (this.tracked.has(uri)) {
-      this.touchAndEvict(uri);
-      return;
-    }
-
     const languageId = this.manager.getLanguageId(absPath);
     if (!languageId) return;
 
     // Only sync if we have a client already running for this language (don't start one just for a read)
     const client = this.manager.getRunningClient(languageId);
+    const existing = this.tracked.get(uri);
+    // Already open on this server? Just touch it for LRU freshness.
+    if (existing && (!client || existing.client === client)) {
+      this.touchAndEvict(uri);
+      return;
+    }
     if (!client) return;
 
     try {
       const content = await readFile(absPath, "utf-8");
-      const doc: TrackedDocument = { uri, languageId, version: 1 };
-      this.tracked.set(uri, doc);
-      client.didOpen(uri, languageId, doc.version, content);
+      this.open(uri, languageId, client, content, existing);
       this.touchAndEvict(uri);
     } catch {
       // File might not exist or be unreadable — ignore
@@ -153,20 +154,45 @@ export class FileSync {
       const content = await readFile(absPath, "utf-8");
       const existing = this.tracked.get(uri);
 
-      if (existing) {
+      if (existing && existing.client === client) {
         // Already open — send didChange with incremented version
         existing.version++;
         client.didChange(uri, existing.version, content);
       } else {
-        // First time — send didOpen
-        const doc: TrackedDocument = { uri, languageId, version: 1 };
-        this.tracked.set(uri, doc);
-        client.didOpen(uri, languageId, doc.version, content);
+        // First time, or the server restarted since its didOpen — send didOpen
+        this.open(uri, languageId, client, content, existing);
       }
       this.touchAndEvict(uri);
     } catch {
       // File might not exist or be unreadable — ignore
     }
+  }
+
+  /**
+   * Opens every tracked document on the running server of its language when that server is not
+   * the one that got its didOpen (a restart). Called when a server becomes ready.
+   */
+  async reopen(): Promise<void> {
+    for (const doc of [...this.tracked.values()]) {
+      const client = this.manager.getRunningClient(doc.languageId);
+      if (!client || client === doc.client) continue;
+      try {
+        const content = await readFile(fileURLToPath(doc.uri), "utf-8");
+        if (this.tracked.get(doc.uri) === doc) this.open(doc.uri, doc.languageId, client, content, doc);
+      } catch {
+        // Deleted since it was opened: the next write opens it again
+      }
+    }
+  }
+
+  /**
+   * Sends didOpen and tracks the document. A document known from a replaced server keeps
+   * counting its version, so callers holding the old version see it move forward.
+   */
+  private open(uri: string, languageId: string, client: LspClient, content: string, known?: TrackedDocument): void {
+    const doc: TrackedDocument = { uri, languageId, client, version: known ? known.version + 1 : 1 };
+    this.tracked.set(uri, doc);
+    client.didOpen(uri, languageId, doc.version, content);
   }
 
   /**
