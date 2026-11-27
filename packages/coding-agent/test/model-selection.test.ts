@@ -37,12 +37,41 @@ describe("cycleModel with scoped models", () => {
 		const result = await cycleModel(host as unknown as ModelSelectionHost);
 		expect(result).toEqual({ model: c, thinkingLevel: "high", isScoped: true });
 		expect(host.sessionManager.appendModelChange).toHaveBeenCalledWith("p", "c");
+		expect(host.dropModelResources).toHaveBeenCalledWith(a);
 		expect(host.extensionRunner.emit).toHaveBeenCalledWith({
 			type: "model_select",
 			model: c,
 			previousModel: a,
 			source: "cycle",
 		});
+	});
+
+	it("without scoped models, cycles the available models and drops the previous model's resources", async () => {
+		const a = { provider: "p", id: "a" };
+		const b = { provider: "p", id: "b" };
+		const state = { model: a, thinkingLevel: "off" };
+		const host = {
+			agent: { state },
+			get model() {
+				return state.model;
+			},
+			get thinkingLevel() {
+				return state.thinkingLevel;
+			},
+			scopedModels: [],
+			modelRuntime: { getAvailable: async () => [a, b] },
+			sessionManager: { appendModelChange: vi.fn() },
+			settingsManager: { setDefaultModelAndProvider: vi.fn(), getDefaultThinkingLevel: () => undefined },
+			extensionRunner: { emit: vi.fn(async () => {}) },
+			syncOpenAIServiceTier: vi.fn(),
+			dropModelResources: vi.fn(),
+			refreshSystemPromptForCurrentModel: vi.fn(),
+			setThinkingLevel: vi.fn(),
+			supportsThinking: () => false,
+		};
+		const result = await cycleModel(host as unknown as ModelSelectionHost);
+		expect(result).toEqual({ model: b, thinkingLevel: "off", isScoped: false });
+		expect(host.dropModelResources).toHaveBeenCalledWith(a);
 	});
 });
 

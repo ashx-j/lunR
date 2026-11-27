@@ -155,6 +155,32 @@ describe("AgentSession compaction characterization", () => {
 		expect(getStreamCallCount()).toBe(1);
 	});
 
+	it("saves the built-in summary as not from an extension when a handler returns { compaction: null }", async () => {
+		const compactEvents: Array<{ fromExtension: boolean }> = [];
+		const harness = await createHarness({
+			withConfiguredAuth: false,
+			extensionFactories: [
+				(pi) => {
+					// A JavaScript extension can return null where the types expect a compaction or nothing.
+					pi.on("session_before_compact", async () => ({ compaction: null }) as never);
+					pi.on("session_compact", async (event) => {
+						compactEvents.push({ fromExtension: event.fromExtension });
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		useSummaryStreamFn(harness, "built-in summary");
+
+		await harness.session.compact();
+		const entries = harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction");
+
+		expect(entries).toHaveLength(1);
+		expect(entries[0]?.type === "compaction" && entries[0].fromHook).toBe(false);
+		expect(compactEvents).toEqual([{ fromExtension: false }]);
+	});
+
 	it("auto-compacts with a custom streamFn when registry auth is absent", async () => {
 		const harness = await createHarness({ withConfiguredAuth: false });
 		harnesses.push(harness);
