@@ -120,7 +120,9 @@ function subscriptionStream(
 		const specifier = import.meta.url.endsWith(".js")
 			? "../api/anthropic-claude-code-bridge.js"
 			: "../api/anthropic-claude-code-bridge.ts";
-		const { streamClaudeCode } = (await import(specifier)) as typeof import("../api/anthropic-claude-code-bridge.ts");
+		const { streamClaudeCode } = (await import(
+			new URL(specifier, import.meta.url).href
+		)) as typeof import("../api/anthropic-claude-code-bridge.ts");
 		return streamClaudeCode(model, context, options, simple);
 	});
 }

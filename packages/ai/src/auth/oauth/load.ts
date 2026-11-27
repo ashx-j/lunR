@@ -8,7 +8,8 @@ import type { OAuthAuth } from "../types.ts";
  */
 const importOAuthModule = (specifier: string): Promise<unknown> => {
 	const runtimeSpecifier = import.meta.url.endsWith(".js") ? specifier.replace(/\.ts$/, ".js") : specifier;
-	return import(runtimeSpecifier);
+	// Against import.meta.url, which a bundle rewrites to this file's mirrored entry path.
+	return import(new URL(runtimeSpecifier, import.meta.url).href);
 };
 
 type OAuthFlowLoaders = {

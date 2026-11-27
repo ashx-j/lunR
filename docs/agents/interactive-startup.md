@@ -73,6 +73,18 @@ first request by about 60 ms, as it did in the 2026-09-08 Windows measurement.
 Node rejects entries whose source or Node version changed, so an old cache after
 an upgrade only costs a recompile. The unbundled launch path always enables it.
 
+pi-ai, pi-agent-core and pi-tui ship a single-file build in `dist/bundle/`
+(`scripts/build-package-bundle.mjs`, which coding-agent's build runs first). Their `exports`
+(pi-tui's `main`) point `import` there, so the CLI, extensions and SDK users resolve the same
+files and get one copy, and a print turn loads 36 pi-ai files instead of 141. Only the
+subpaths callers import at startup are esbuild entries: every entry is a chunk boundary, and
+making all 142 wildcard files entries loaded 128 files. Every other `providers/*` and `api/*`
+file is a shim that reads its module from one `wildcards.js` barrel of the same build. Files
+pi-ai imports through a computed specifier (OAuth flows, the Claude Code bridge, Bedrock) are
+entries too, and resolve against `import.meta.url`, which the build rewrites to the module's
+mirrored path in the bundle. After a `tsgo --watch` of one of these packages, rerun the bundle
+script: the runtime reads `dist/bundle/`, not the files tsgo writes.
+
 `--version` is answered in `cli-runtime.ts` before `main.ts` is imported.
 `--help` still imports the runtime because it lists flags from every loaded
 extension, including user and project extensions.

@@ -62,30 +62,20 @@ function getAliases(): Record<string, string> {
 	const typeboxCompileEntry = require.resolve("typebox/compile");
 	const typeboxValueEntry = require.resolve("typebox/value");
 
-	const packagesRoot = path.resolve(__dirname, "../../../../");
-	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {
-		const workspacePath = path.join(packagesRoot, workspaceRelativePath);
-		if (fs.existsSync(workspacePath)) {
-			return workspacePath;
-		}
-		return fileURLToPath(import.meta.resolve(specifier));
-	};
+	// The same resolution as the CLI's own imports: each package's exports point at its single-file
+	// build (scripts/build-package-bundle.mjs), so extensions share the CLI's one copy.
+	const resolveImport = (specifier: string): string => fileURLToPath(import.meta.resolve(specifier));
 
 	const piCodingAgentEntry = packageIndex;
-	const piAgentCoreEntry = resolveWorkspaceOrImport("agent/dist/index.js", "@earendil-works/pi-agent-core");
-	const piTuiEntry = resolveWorkspaceOrImport("tui/dist/index.js", "@earendil-works/pi-tui");
+	const piAgentCoreEntry = resolveImport("@earendil-works/pi-agent-core");
+	const piTuiEntry = resolveImport("@earendil-works/pi-tui");
 	// Extensions resolve the pi-ai root to the compat entrypoint (a strict
 	// superset of the core entrypoint): existing extensions using the old
 	// global API keep working at runtime until compat is removed.
-	const piAiCompatEntry = resolveWorkspaceOrImport("ai/dist/compat.js", "@earendil-works/pi-ai/compat");
-	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@earendil-works/pi-ai/oauth");
-	const piAiCatalogDirectory = path.dirname(
-		resolveWorkspaceOrImport("ai/dist/catalog/codex.js", "@earendil-works/pi-ai/catalog/codex"),
-	);
-	const piAiProvidersEntry = resolveWorkspaceOrImport(
-		"ai/dist/providers/all.js",
-		"@earendil-works/pi-ai/providers/all",
-	);
+	const piAiCompatEntry = resolveImport("@earendil-works/pi-ai/compat");
+	const piAiOauthEntry = resolveImport("@earendil-works/pi-ai/oauth");
+	const piAiCatalogDirectory = path.dirname(resolveImport("@earendil-works/pi-ai/catalog/codex"));
+	const piAiProvidersEntry = resolveImport("@earendil-works/pi-ai/providers/all");
 
 	_aliases = {
 		"@earendil-works/pi-coding-agent": piCodingAgentEntry,

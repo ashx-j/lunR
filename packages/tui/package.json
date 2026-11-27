@@ -3,7 +3,7 @@
 	"version": "0.2.40",
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
 	"type": "module",
-	"main": "dist/index.js",
+	"main": "./dist/bundle/index.js",
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"build": "tsgo -p tsconfig.build.json",

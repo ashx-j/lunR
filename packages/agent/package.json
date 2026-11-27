@@ -8,11 +8,11 @@
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js"
+			"import": "./dist/bundle/index.js"
 		},
 		"./node": {
 			"types": "./dist/node.d.ts",
-			"import": "./dist/node.js"
+			"import": "./dist/bundle/node.js"
 		},
 		"./package.json": "./package.json"
 	},

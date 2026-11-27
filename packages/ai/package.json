@@ -13,35 +13,35 @@
 	"exports": {
 		"./catalog/*": {
 			"types": "./dist/catalog/*.d.ts",
-			"import": "./dist/catalog/*.js"
+			"import": "./dist/bundle/catalog/*.js"
 		},
 		".": {
 			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js"
+			"import": "./dist/bundle/index.js"
 		},
 		"./compat": {
 			"types": "./dist/compat.d.ts",
-			"import": "./dist/compat.js"
+			"import": "./dist/bundle/compat.js"
 		},
 		"./providers/*": {
 			"types": "./dist/providers/*.d.ts",
-			"import": "./dist/providers/*.js"
+			"import": "./dist/bundle/providers/*.js"
 		},
 		"./api/*": {
 			"types": "./dist/api/*.d.ts",
-			"import": "./dist/api/*.js"
+			"import": "./dist/bundle/api/*.js"
 		},
 		"./oauth": {
 			"types": "./dist/oauth.d.ts",
-			"import": "./dist/oauth.js"
+			"import": "./dist/bundle/oauth.js"
 		},
 		"./bedrock-provider": {
 			"types": "./dist/bedrock-provider.d.ts",
-			"import": "./dist/bedrock-provider.js"
+			"import": "./dist/bundle/bedrock-provider.js"
 		},
 		"./bun-oauth": {
 			"types": "./dist/bun-oauth.d.ts",
-			"import": "./dist/bun-oauth.js"
+			"import": "./dist/bundle/bun-oauth.js"
 		}
 	},
 	"bin": {
