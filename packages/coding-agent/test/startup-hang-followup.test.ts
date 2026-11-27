@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { stat } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readPipedStdin } from "../src/cli/piped-stdin.ts";
 import { getExtensionAliasesForTest } from "../src/core/extensions/loader.ts";
@@ -43,6 +44,25 @@ describe("startup hang follow-ups", () => {
 		setTimeout(() => stream.emit("data", "input"), 250);
 		setTimeout(() => stream.emit("end"), 450);
 		await expect(read).resolves.toBe("late input");
+	});
+
+	it("readPipedStdin keeps stdin that arrived while startup blocked the event loop past the wait", async () => {
+		const stream = new FakeStdin();
+		const read = readPipedStdin(stream as unknown as NodeJS.ReadStream, { firstByteMs: 20, silenceMs: 1000 });
+		// Block from a check-phase callback, so the next loop turn runs the expired timer before the
+		// poll phase delivers the stdin that arrived meanwhile (stat stands in for that read).
+		await new Promise<void>((resolve) => {
+			setImmediate(() => {
+				stat(import.meta.dirname, () => {
+					stream.emit("data", "piped prompt");
+					stream.emit("end");
+				});
+				const until = Date.now() + 200;
+				while (Date.now() < until) {}
+				resolve();
+			});
+		});
+		await expect(read).resolves.toBe("piped prompt");
 	});
 
 	it("showDeprecationWarnings does not wait for a key when stdin is not a TTY", async () => {
