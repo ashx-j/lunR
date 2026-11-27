@@ -65,7 +65,7 @@ function createMode() {
 		setThinkingAnimation: vi.fn(),
 		clearExtensionTerminalInputListeners: vi.fn(),
 		disposeChatToolComponents: vi.fn(),
-		unregisterSignalHandlers: vi.fn(),
+		exit: { unregisterSignalHandlers: vi.fn() },
 	};
 	Object.setPrototypeOf(mode, InteractiveMode.prototype);
 	return { mode, setShowTerminalProgress };

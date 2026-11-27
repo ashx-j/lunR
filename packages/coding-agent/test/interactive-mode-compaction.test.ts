@@ -38,7 +38,7 @@ function createFakeMode(isIdle: boolean) {
 		showStatus: vi.fn(),
 		clearStatusIndicator: vi.fn(),
 		flushCompactionQueue: vi.fn().mockResolvedValue(undefined),
-		checkShutdownRequested: vi.fn().mockResolvedValue(undefined),
+		exit: { checkShutdownRequested: vi.fn().mockResolvedValue(undefined) },
 		settingsManager: { getShowTerminalProgress: () => false, getAttentionNotification: () => "off" },
 		ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
 	};
@@ -114,7 +114,7 @@ describe("InteractiveMode compaction events", () => {
 			}),
 		);
 		expect(fakeThis.pendingCompactionRender).toBeUndefined();
-		expect(fakeThis.checkShutdownRequested).toHaveBeenCalledTimes(1);
+		expect(fakeThis.exit.checkShutdownRequested).toHaveBeenCalledTimes(1);
 	});
 });
 

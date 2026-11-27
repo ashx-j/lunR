@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { SessionExit, type SessionExitHost } from "../src/modes/interactive/session-exit.ts";
 
 type FakeUi = {
 	start: () => void;
@@ -13,20 +13,14 @@ type HandleCtrlZThis = {
 
 type ProcessSignalHandler = () => void;
 
-type InteractiveModePrototypeWithHandleCtrlZ = {
-	handleCtrlZ(this: HandleCtrlZThis): void;
-};
-
 function callHandleCtrlZ(context: HandleCtrlZThis): void {
-	(interactiveModePrototype as InteractiveModePrototypeWithHandleCtrlZ).handleCtrlZ.call(context);
+	new SessionExit(context as unknown as SessionExitHost).handleCtrlZ();
 }
-
-const interactiveModePrototype = InteractiveMode.prototype as unknown;
 
 // Windows has no SIGTSTP or SIGCONT, so only the Windows branch test runs there.
 const posixOnly = test.skipIf(process.platform === "win32");
 
-describe("InteractiveMode.handleCtrlZ", () => {
+describe("SessionExit.handleCtrlZ", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});

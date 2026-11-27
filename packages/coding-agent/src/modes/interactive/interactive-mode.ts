@@ -37,7 +37,7 @@ import {
 import { spawn } from "child_process";
 import { APP_NAME, APP_TITLE, CONFIG_DIR_NAME, getAgentDir, getDebugLogPath, VERSION } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, NothingToCompactError } from "../../core/agent-session.ts";
-import { type AgentSessionRuntime, SIGNAL_DISPOSE_LIMIT_MS } from "../../core/agent-session-runtime.ts";
+import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import { startCatalogRefreshPolling } from "../../core/catalog-refresh-polling.ts";
 import type {
@@ -88,7 +88,6 @@ import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { processImage } from "../../utils/image-process.ts";
-import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool, getToolPath } from "../../utils/tools-manager.ts";
 import { type ApprovalDialogHost, showPlanApprovalDialog, showToolApprovalDialog } from "./approval-dialogs.ts";
 import {
@@ -154,6 +153,7 @@ import {
 import { getModelSearchText } from "./model-search.ts";
 import { type PermissionControllerHost, PermissionModeController } from "./permission-controller.ts";
 import { handleRollbackCommand, type RollbackCommandHost } from "./rollback-command.ts";
+import { SessionExit, type SessionExitHost } from "./session-exit.ts";
 import { handleExportCommand, handleImportCommand, type SessionFileCommandHost } from "./session-files.ts";
 import {
 	handleNameCommand,
@@ -234,16 +234,6 @@ type QueuedUserInput = {
 	text: string;
 	images?: ImageContent[];
 };
-
-const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
-
-function isDeadTerminalError(error: unknown): boolean {
-	if (!error || typeof error !== "object" || !("code" in error)) {
-		return false;
-	}
-	const code = (error as NodeJS.ErrnoException).code;
-	return code !== undefined && DEAD_TERMINAL_ERROR_CODES.has(code);
-}
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
 	"Claude Code handles Anthropic subscription authentication. lunR retains tool execution and conversation state. Check your Claude account for usage and any extra charges.";
@@ -397,7 +387,6 @@ export class InteractiveMode {
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
-	private lastSigintTime = 0;
 	private readonly exitConfirmation: ExitConfirmation;
 	private lastEscapeTime = 0;
 	private readonly subagentEscape = new SubagentEscapeSequence();
@@ -444,7 +433,6 @@ export class InteractiveMode {
 
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
-	private signalCleanupHandlers: Array<() => void> = [];
 
 	// True after this launch showed onboarding, until the permission mode step has run.
 	private onboardingShown = false;
@@ -504,6 +492,8 @@ export class InteractiveMode {
 	private deferredBuiltinAttachPromise: Promise<void> | undefined;
 	// The hosts below are built in field initializers, before the constructor assigns `ui`,
 	// `chatContainer` and the editor, so every member that reads a field must be a getter.
+	// Quit, suspend and signal handling; see session-exit.ts.
+	private readonly exit = new SessionExit(this.createSessionExitHost());
 	// Owns the dialog shown in place of the editor; see extension-dialogs.ts.
 	private readonly dialogs = new ExtensionDialogs(this.createExtensionDialogsHost());
 	// Passed to chat-history.ts, which draws the session's messages into the chat.
@@ -784,7 +774,7 @@ export class InteractiveMode {
 	async init(): Promise<void> {
 		if (this.isInitialized) return;
 
-		this.registerSignalHandlers();
+		this.exit.registerSignalHandlers();
 
 		this.fdPath = getToolPath("fd") ?? undefined;
 		void startInteractiveToolInstalls(this.fdPath, (fdPath) => {
@@ -1006,7 +996,7 @@ export class InteractiveMode {
 	 * (session_shutdown, UI reset) runs after the TUI stops, and a write then would outlive lunR.
 	 */
 	private updateTerminalTitle(): void {
-		if (this.isShuttingDown) return;
+		if (this.exit.isShuttingDown) return;
 		const cwdBasename = path.basename(this.sessionManager.getCwd());
 		const sessionName = this.sessionManager.getSessionName();
 		if (sessionName) {
@@ -1365,7 +1355,7 @@ export class InteractiveMode {
 			shutdownHandler: () => {
 				this.shutdownRequested = true;
 				if (this.session.isIdle) {
-					void this.shutdown();
+					void this.exit.shutdown();
 				}
 			},
 			onError: (error) => {
@@ -1783,7 +1773,7 @@ export class InteractiveMode {
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => {
-				if (!this.isShuttingDown) this.ui.terminal.setTitle(title);
+				if (!this.exit.isShuttingDown) this.ui.terminal.setTitle(title);
 			},
 			custom: (factory, options) => this.dialogs.custom(factory, options),
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
@@ -1987,9 +1977,9 @@ export class InteractiveMode {
 		};
 
 		// Register app action handlers
-		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
-		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
-		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
+		this.defaultEditor.onAction("app.clear", () => this.exit.handleCtrlC());
+		this.defaultEditor.onCtrlD = () => this.exit.handleCtrlD();
+		this.defaultEditor.onAction("app.suspend", () => this.exit.handleCtrlZ());
 		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
 		this.defaultEditor.onAction("app.mode.cycle", () => this.permissions.cyclePermissionMode());
 		this.defaultEditor.onAction("app.model.cycleForward", () => this.cycleModel("forward"));
@@ -2714,7 +2704,7 @@ export class InteractiveMode {
 					this.pendingCompactionRender = undefined;
 					this.renderCompactionResult(result);
 				}
-				await this.checkShutdownRequested();
+				await this.exit.checkShutdownRequested();
 				break;
 
 			case "compaction_start": {
@@ -2873,258 +2863,6 @@ export class InteractiveMode {
 	// =========================================================================
 	// Key handlers
 	// =========================================================================
-
-	private handleCtrlC(): void {
-		const now = Date.now();
-		if (now - this.lastSigintTime < 500) {
-			void this.shutdown();
-			return;
-		}
-		// A press on an empty editor has nothing to clear, so say what the next one does.
-		const wasEmpty = this.editor.getText().length === 0;
-		this.clearEditor();
-		this.lastSigintTime = now;
-		if (wasEmpty) setTimeout(this.addExitHint(`Press ${keyDisplayText("app.clear")} again to exit`), 500).unref?.();
-	}
-
-	private handleCtrlD(): void {
-		// Only called when editor is empty (enforced by CustomEditor). The first press only warns.
-		if (this.exitConfirmation.press()) {
-			void this.shutdown();
-			return;
-		}
-		this.exitConfirmation.clearHintOnExpiry(this.addExitHint(this.exitConfirmation.hint));
-	}
-
-	// Adds a dim exit hint to the chat and returns the function that removes it once its window closes.
-	private addExitHint(message: string): () => void {
-		const spacer = new Spacer(1);
-		const text = new Text(theme.fg("dim", message), 1, 0);
-		this.chatContainer.addChild(spacer);
-		this.chatContainer.addChild(text);
-		this.ui.requestRender();
-		return () => {
-			this.chatContainer.removeChild(spacer);
-			this.chatContainer.removeChild(text);
-			this.ui.requestRender();
-		};
-	}
-
-	/**
-	 * Gracefully shutdown the agent.
-	 * Stops the TUI before emitting shutdown events so extension UI cleanup cannot
-	 * repaint the final frame while the process is exiting.
-	 */
-	private isShuttingDown = false;
-
-	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
-		if (this.isShuttingDown) return;
-		this.isShuttingDown = true;
-		this.session.stopAdmission();
-		this.unregisterSessionTransfer?.();
-		this.stopSmoothStreaming();
-		this.stopPlanUsagePolling();
-		// Keep signal handlers registered until terminal cleanup has completed.
-		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
-		// dispatch and re-sends the signal if only its own listeners remain.
-
-		if (options?.fromSignal) {
-			// Signal-triggered shutdown (SIGTERM/SIGHUP). Emit extension cleanup
-			// (session_shutdown) BEFORE touching the terminal. Extension teardown
-			// such as removing sockets does not write to the tty, so it must not be
-			// skipped if a later terminal-restore write fails on a dead or stalled
-			// terminal. If the terminal is gone, the restore writes below emit EIO,
-			// which the stdout/stderr error handler turns into emergencyTerminalExit;
-			// the render loop is already idle, so this cannot hot-spin (see #4144).
-			const disposeLimit = setTimeout(() => {
-				try {
-					processRegistry.killAll();
-				} catch {
-					// Exit goes on even if a tracked process cannot be signalled.
-				}
-				this.stop();
-				process.exit(0);
-			}, SIGNAL_DISPOSE_LIMIT_MS);
-			await this.runtimeHost.dispose();
-			clearTimeout(disposeLimit);
-			this.themeController.disableAutoSync();
-			await this.ui.terminal.drainInput(1000);
-			try {
-				processRegistry.killAll();
-			} catch {
-				// Shutdown continues even if a tracked process cannot be signalled.
-			}
-			this.stop();
-			process.exit(0);
-		}
-
-		// Interactive quit (Ctrl+D, Ctrl+C, /quit, extension shutdown()). Stop the
-		// TUI before emitting shutdown events so extension UI cleanup cannot repaint
-		// the final frame while the process is exiting.
-		// Drain any in-flight Kitty key release events before stopping.
-		// This prevents escape sequences from leaking to the parent shell over slow SSH.
-		this.themeController.disableAutoSync();
-		await this.ui.terminal.drainInput(1000);
-
-		// lunr: quit prompt — ask about killing tracked processes before stopping the TUI.
-		const tracked = processRegistry.list().filter((p) => p.status !== "exited");
-		if (tracked.length > 0) {
-			const shouldKill = await this.confirmDisclaimerWithLabels(
-				"Session processes still running",
-				`${tracked.length} process(es) started during this session are still alive.\nKill them before exit?`,
-			);
-			if (shouldKill) {
-				processRegistry.killAll();
-			}
-		}
-
-		this.stop();
-		await this.runtimeHost.dispose();
-
-		process.exit(0);
-	}
-
-	private emergencyTerminalExit(): never {
-		this.isShuttingDown = true;
-		this.unregisterSignalHandlers();
-		killTrackedDetachedChildren();
-		try {
-			processRegistry.killAll();
-		} catch {
-			// The terminal is gone; nothing can report this, and exit must go on.
-		}
-		// The terminal is gone. Do not run normal shutdown because TUI and
-		// extension cleanup can write restore sequences and re-trigger EIO.
-		process.exit(129);
-	}
-
-	/**
-	 * Last-resort handler for uncaught exceptions. The TUI puts stdin into raw
-	 * mode and hides the cursor; without this handler, an uncaught throw from
-	 * anywhere (e.g. an extension's async `ChildProcess.on("exit")` callback)
-	 * tears down the process while leaving the terminal in raw mode with no
-	 * cursor, requiring `stty sane && reset` to recover.
-	 *
-	 * Unlike emergencyTerminalExit, the terminal is still alive here, so we
-	 * call ui.stop() to restore cooked mode, the cursor, and disable bracketed
-	 * paste / Kitty / modifyOtherKeys sequences.
-	 */
-	private uncaughtCrash(error: Error): never {
-		if (this.isShuttingDown) {
-			process.exit(1);
-		}
-		this.isShuttingDown = true;
-		try {
-			this.unregisterSignalHandlers();
-		} catch {
-			// Crash path: keep going so the original error is printed.
-		}
-		try {
-			killTrackedDetachedChildren();
-		} catch {
-			// Crash path: keep going so the original error is printed.
-		}
-		try {
-			this.ui.stop();
-		} catch {
-			// Crash path: keep going so the original error is printed.
-		}
-		console.error(`${APP_NAME} exiting due to uncaughtException:`);
-		console.error(error);
-		process.exit(1);
-	}
-
-	/**
-	 * Check if shutdown was requested and perform shutdown if so.
-	 */
-	private async checkShutdownRequested(): Promise<void> {
-		if (!this.shutdownRequested) return;
-		await this.shutdown();
-	}
-
-	private registerSignalHandlers(): void {
-		this.unregisterSignalHandlers();
-
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
-		if (process.platform !== "win32") {
-			signals.push("SIGHUP");
-		}
-
-		for (const signal of signals) {
-			const handler = () => {
-				// SIGHUP no longer hard-exits: graceful shutdown emits session_shutdown
-				// first, then attempts terminal restore. A genuinely dead terminal
-				// surfaces as an EIO on the restore writes, which the stdout/stderr
-				// error handler converts into emergencyTerminalExit (see #4144, #5080).
-				killTrackedDetachedChildren();
-				void this.shutdown({ fromSignal: true });
-			};
-			process.prependListener(signal, handler);
-			this.signalCleanupHandlers.push(() => process.off(signal, handler));
-		}
-
-		const terminalErrorHandler = (error: Error) => {
-			if (isDeadTerminalError(error)) {
-				this.emergencyTerminalExit();
-			}
-			throw error;
-		};
-		process.stdout.on("error", terminalErrorHandler);
-		process.stderr.on("error", terminalErrorHandler);
-		this.signalCleanupHandlers.push(() => process.stdout.off("error", terminalErrorHandler));
-		this.signalCleanupHandlers.push(() => process.stderr.off("error", terminalErrorHandler));
-
-		// Restore the terminal before the process dies on any uncaught throw.
-		// Without this, an unhandled exception from extension code (or anywhere
-		// in pi) leaves the terminal in raw mode with no cursor.
-		const uncaughtExceptionHandler = (error: Error) => this.uncaughtCrash(error);
-		process.prependListener("uncaughtException", uncaughtExceptionHandler);
-		this.signalCleanupHandlers.push(() => process.off("uncaughtException", uncaughtExceptionHandler));
-	}
-
-	private unregisterSignalHandlers(): void {
-		for (const cleanup of this.signalCleanupHandlers) {
-			cleanup();
-		}
-		this.signalCleanupHandlers = [];
-	}
-
-	private handleCtrlZ(): void {
-		if (process.platform === "win32") {
-			this.showStatus("Suspend to background is not supported on Windows");
-			return;
-		}
-
-		// Keep the event loop alive while suspended. Without this, stopping the TUI
-		// can leave Node with no ref'ed handles, causing the process to exit on fg
-		// before the SIGCONT handler gets a chance to restore the terminal.
-		const suspendKeepAlive = setInterval(() => {}, 2 ** 30);
-
-		// Ignore SIGINT while suspended so Ctrl+C in the terminal does not
-		// kill the backgrounded process. The handler is removed on resume.
-		const ignoreSigint = () => {};
-		process.on("SIGINT", ignoreSigint);
-
-		// Set up handler to restore TUI when resumed
-		process.once("SIGCONT", () => {
-			clearInterval(suspendKeepAlive);
-			process.removeListener("SIGINT", ignoreSigint);
-			this.ui.start();
-			this.ui.requestRender(true);
-		});
-
-		try {
-			// Stop the TUI (restore terminal to normal mode)
-			this.ui.stop();
-
-			// Send SIGTSTP to process group (pid=0 means all processes in group)
-			process.kill(0, "SIGTSTP");
-		} catch (error) {
-			clearInterval(suspendKeepAlive);
-			process.removeListener("SIGINT", ignoreSigint);
-			throw error;
-		}
-	}
 
 	private async handleFollowUp(): Promise<void> {
 		if (this.runtimeHost.isDetached || this.transferInProgress) {
@@ -3907,7 +3645,7 @@ export class InteractiveMode {
 			createProjectTrustContext: (cwd) => this.createProjectTrustContext(cwd),
 			promptForMissingSessionCwd: (error) => this.dialogs.promptForMissingSessionCwd(error),
 			handleFatalRuntimeError: (prefix, error) => this.handleFatalRuntimeError(prefix, error),
-			shutdown: () => this.shutdown(),
+			shutdown: () => this.exit.shutdown(),
 		};
 	}
 
@@ -3942,7 +3680,7 @@ export class InteractiveMode {
 			promptForMissingSessionCwd: (error) => this.dialogs.promptForMissingSessionCwd(error),
 			handleFatalRuntimeError: (prefix, error) => this.handleFatalRuntimeError(prefix, error),
 			get isShuttingDown() {
-				return mode.isShuttingDown;
+				return mode.exit.isShuttingDown;
 			},
 			resolveModelReference: (reference) => this.resolveModelReference(reference),
 		};
@@ -4165,6 +3903,46 @@ export class InteractiveMode {
 		};
 	}
 
+	// Builds the SessionExitHost. Every field member is a getter (see the note above the host fields).
+	private createSessionExitHost(): SessionExitHost {
+		const mode = this;
+		return {
+			get session() {
+				return mode.session;
+			},
+			get runtimeHost() {
+				return mode.runtimeHost;
+			},
+			get ui() {
+				return mode.ui;
+			},
+			get editor() {
+				return mode.editor;
+			},
+			get chatContainer() {
+				return mode.chatContainer;
+			},
+			get themeController() {
+				return mode.themeController;
+			},
+			get exitConfirmation() {
+				return mode.exitConfirmation;
+			},
+			get shutdownRequested() {
+				return mode.shutdownRequested;
+			},
+			get unregisterSessionTransfer() {
+				return mode.unregisterSessionTransfer;
+			},
+			clearEditor: () => this.clearEditor(),
+			stopSmoothStreaming: () => this.stopSmoothStreaming(),
+			stopPlanUsagePolling: () => this.stopPlanUsagePolling(),
+			stop: () => this.stop(),
+			confirmDisclaimerWithLabels: (title, message) => this.confirmDisclaimerWithLabels(title, message),
+			showStatus: (message) => this.showStatus(message),
+		};
+	}
+
 	// Builds the PermissionControllerHost. `session` stays a getter because /new, /resume and /fork replace it.
 	private createPermissionControllerHost(): PermissionControllerHost {
 		const mode = this;
@@ -4229,7 +4007,7 @@ export class InteractiveMode {
 			handleInitCommand: () => this.handleInitCommand(),
 			handleDebugCommand: () => this.handleDebugCommand(),
 			showSessionSelector: () => showSessionSelector(this.sessionNavigationHost),
-			shutdown: () => this.shutdown(),
+			shutdown: () => this.exit.shutdown(),
 		};
 	}
 
@@ -4684,6 +4462,6 @@ export class InteractiveMode {
 			this.ui.stop();
 			this.isInitialized = false;
 		}
-		this.unregisterSignalHandlers();
+		this.exit.unregisterSignalHandlers();
 	}
 }

@@ -4,6 +4,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-11-27: reach the line targets of the class split by moving the tool-call hooks and the tool registry out of `AgentSession` and quit/suspend/signal handling out of `InteractiveMode`, not `handleEvent`, because `handleEvent` runs on every streamed token and many tests call it on partial fakes, while the moved groups each have one subject and a host of 11 to 16 members.
 - 2026-11-27: give a bare `vitest` run a disposable agent directory in `test/global-setup-tools.ts`, instead of requiring `test.sh` for every run, because agents run single test files directly and `config.ts` then pointed session tests at the real `~/.lunr/agent` (a review run created folders there).
 - 2026-11-26: auto mode's reviewer is not skipped by a grammar of "plain file work" (#366, not merged). 3 QA rounds each found commands that lost a file or left the project, and on 27 real benchmark sessions the final rule saved 1 of 78 reviewer requests for about 1,050 lines. Treating `cd <session directory> &&` as no change saves 15 of 78 in about 20 lines.
 - 2026-11-26: `/rollback` does not restore files a bash call changed; it lists them (#355). 3 review rounds found 5, 4, then 10 ways for a git-based restore to write wrong bytes or delete a file, because attributes, filters, ignore files and config can change under the call.

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
+import { SessionExit, type SessionExitHost } from "../../../src/modes/interactive/session-exit.ts";
 
 // Regression for https://github.com/earendil-works/pi/issues/5724
 //
@@ -9,22 +9,14 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 // registered until async terminal cleanup has completed.
 
 type ShutdownThis = {
-	isShuttingDown: boolean;
 	stopPlanUsagePolling: () => void;
 	stopSmoothStreaming: () => void;
-	unregisterSignalHandlers: () => void;
 	session: { stopAdmission: () => void };
 	runtimeHost: { dispose: () => Promise<void> };
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
 	themeController: { disableAutoSync: () => void };
 	stop: () => void;
 };
-
-type InteractiveModePrototypeWithShutdown = {
-	shutdown(this: ShutdownThis, options?: { fromSignal?: boolean }): Promise<void>;
-};
-
-const interactiveModePrototype = InteractiveMode.prototype as unknown;
 
 class ProcessExitError extends Error {}
 
@@ -39,15 +31,15 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 	};
 }
 
-async function callShutdown(context: ShutdownThis, options?: { fromSignal?: boolean }): Promise<void> {
+async function callShutdown(exit: SessionExit, options?: { fromSignal?: boolean }): Promise<void> {
 	try {
-		await (interactiveModePrototype as InteractiveModePrototypeWithShutdown).shutdown.call(context, options);
+		await exit.shutdown(options);
 	} catch (error) {
 		if (!(error instanceof ProcessExitError)) throw error;
 	}
 }
 
-describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
+describe("SessionExit SIGTERM shutdown with signal-exit (#5724)", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -61,13 +53,9 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 		const dispose = deferred();
 		const disposeStarted = deferred();
 		const context: ShutdownThis = {
-			isShuttingDown: false,
 			stopPlanUsagePolling: vi.fn(),
 			stopSmoothStreaming: vi.fn(() => {
 				order.push("stopSmoothStreaming");
-			}),
-			unregisterSignalHandlers: vi.fn(() => {
-				order.push("unregister");
 			}),
 			session: { stopAdmission: vi.fn(() => order.push("stopAdmission")) },
 			runtimeHost: {
@@ -90,16 +78,20 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 			}),
 		};
 
-		const shutdownPromise = callShutdown(context, { fromSignal: true });
+		const exit = new SessionExit(context as unknown as SessionExitHost);
+		const unregister = vi.spyOn(exit, "unregisterSignalHandlers").mockImplementation(() => {
+			order.push("unregister");
+		});
+		const shutdownPromise = callShutdown(exit, { fromSignal: true });
 		await disposeStarted.promise;
 
 		expect(order).toEqual(["stopAdmission", "stopSmoothStreaming", "dispose"]);
-		expect(context.unregisterSignalHandlers).not.toHaveBeenCalled();
+		expect(unregister).not.toHaveBeenCalled();
 
 		dispose.resolve();
 		await shutdownPromise;
 
 		expect(order).toEqual(["stopAdmission", "stopSmoothStreaming", "dispose", "drainInput", "stop"]);
-		expect(context.unregisterSignalHandlers).not.toHaveBeenCalled();
+		expect(unregister).not.toHaveBeenCalled();
 	});
 });
