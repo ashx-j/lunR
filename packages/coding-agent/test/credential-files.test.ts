@@ -17,6 +17,7 @@ let root: string;
 let agentDir: string;
 let project: string;
 let previousAgentDir: string | undefined;
+const windows = process.platform === "win32";
 
 beforeEach(async () => {
 	resetAllPermissionContexts();
@@ -47,21 +48,24 @@ const gate = (toolName: string, input: Record<string, unknown>) => gateToolCall(
 /**
  * Tables name the scratch profile `<profile>` so test titles stay readable. Bash gets it with `/`
  * separators, since an unquoted `\` is an escape there. `<native>` keeps the platform's separators,
- * `<url>` is the file URL and `<msys>` is the Git Bash spelling (`/d/a/agent` for `D:\a\agent`).
- * On POSIX all but `<url>` are the same path.
+ * `<url>` is the file URL and `<msys>` is the Git Bash spelling (`/d/a/agent` for `D:\a\agent`),
+ * `<cygwin>` and `<wsl>` the Cygwin and WSL ones. `<drive>` and `<below-drive>` split `<msys>` into
+ * its drive root (`/d`) and the rest. On POSIX all but `<url>` name the same path.
  */
 function withProfile(input: Record<string, unknown>, toolName: string): Record<string, unknown> {
 	const slashed = agentDir.replaceAll(sep, "/");
+	const msys = slashed.replace(/^([a-z]):/i, (_, drive: string) => `/${drive.toLowerCase()}`);
 	const swap = (value: unknown): unknown => {
 		if (typeof value === "string") {
 			return value
 				.replaceAll("<profile>", toolName === "bash" ? slashed : agentDir)
 				.replaceAll("<native>", agentDir)
 				.replaceAll("<url>", pathToFileURL(agentDir).href)
-				.replaceAll(
-					"<msys>",
-					slashed.replace(/^([a-z]):/i, (_, drive: string) => `/${drive.toLowerCase()}`),
-				);
+				.replaceAll("<msys>", msys)
+				.replaceAll("<cygwin>", windows ? `/cygdrive${msys}` : agentDir)
+				.replaceAll("<wsl>", windows ? `/mnt${msys}` : agentDir)
+				.replaceAll("<drive>", windows ? msys.slice(0, 2) : "/")
+				.replaceAll("<below-drive>", msys.slice(windows ? 3 : 1));
 		}
 		if (Array.isArray(value)) return value.map(swap);
 		if (value && typeof value === "object")
@@ -149,6 +153,9 @@ describe("lunR's saved logins", () => {
 		["bash", { command: "ls -la <profile>/mcp-oauth" }],
 		["bash", { command: `cat "${join("<native>", "auth.json")}"` }],
 		["bash", { command: "cat <msys>/subscriptions.json" }],
+		["bash", { command: "cat <cygwin>/auth.json" }],
+		["bash", { command: "cat <wsl>/auth.json" }],
+		["bash", { command: "cd <drive> && cat <below-drive>/auth.json" }],
 	])("refuses %s %j", async (toolName, input) => {
 		expect(await gate(toolName, withProfile(input, toolName))).toEqual({
 			block: true,
@@ -165,6 +172,12 @@ describe("lunR's saved logins", () => {
 		["bash", { command: "ls <profile>" }],
 	])("allows %s %j, which reads no saved login", async (toolName, input) => {
 		expect(await gate(toolName, withProfile(input, toolName))).toBeUndefined();
+	});
+
+	// Inside double quotes bash keeps `\/`: a separator on Windows, part of a file name elsewhere.
+	it("reads a quoted backslash before a slash as bash does", async () => {
+		const reason = await gate("bash", withProfile({ command: 'cat "<profile>\\/auth.json"' }, "bash"));
+		expect(reason).toEqual(windows ? { block: true, reason: CREDENTIAL_BLOCK_REASON } : undefined);
 	});
 
 	it("refuses a read through a symlink under another name", async () => {

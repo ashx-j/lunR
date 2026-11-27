@@ -150,9 +150,13 @@ export function credentialBashReason(command: string, cwd: string): string | und
 	return undefined;
 }
 
-/** Git Bash on Windows names drive `C:` as `/c`, so `/c/Users/me` is `C:/Users/me` there. */
+/**
+ * Bash on Windows names drive `C:` as `/c` (Git Bash, MSYS2), `/cygdrive/c` (Cygwin) or `/mnt/c`
+ * (WSL), so `/c/Users/me` is `C:/Users/me` there. `/c` alone is the drive's root, not `C:`, which
+ * Node reads as the current directory on that drive.
+ */
 function fromMsysPath(word: string): string {
-	return process.platform === "win32" ? word.replace(/^\/([a-z])(?=\/|$)/i, "$1:") : word;
+	return process.platform === "win32" ? word.replace(/^(?:\/cygdrive|\/mnt)?\/([a-z])(?=\/|$)/i, "$1:/") : word;
 }
 
 // Inside double quotes bash keeps a backslash unless it escapes one of these, so a quoted Windows

@@ -294,7 +294,9 @@ export async function spawnBrokerIfNeeded(brokerCommand: string, brokerArgs: str
           // On Windows the launcher waits on its broker, so its process tree still holds a broker
           // that never listened. cleanup() kills only the launcher, so end the tree first.
           if (launch.kind === "windows-launcher" && child.pid && child.exitCode === null && child.signalCode === null) {
-            spawnSync("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true });
+            // A full path, so a taskkill.exe in the project directory cannot run instead.
+            const taskkill = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe");
+            spawnSync(taskkill, ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true, timeout: 5_000 });
           }
           cleanup();
           // A broker that never listened can be stuck in Node's own startup, for example when a

@@ -51,12 +51,11 @@ describe("subagent artifacts dir", () => {
 		for (const name of readdirSync(dir)) expect(mode(join(dir, name)), name).toBe(0o600);
 	});
 
-	it("tightens a tree an older lunR left loose", () => {
+	it.skipIf(!posixModes)("tightens a tree an older lunR left loose", () => {
 		const dir = join(root, "loose", "subagent-artifacts");
 		mkdirSync(join(dir, "outputs", "run"), { recursive: true, mode: 0o775 });
 		writeFileSync(join(dir, "outputs", "run", "r.md"), "x", { mode: 0o664 });
 		ensureArtifactsDir(dir);
-		if (!posixModes) return;
 		expect([mode(dir), mode(join(dir, "outputs")), mode(join(dir, "outputs", "run"))]).toEqual([0o700, 0o700, 0o700]);
 		expect(mode(join(dir, "outputs", "run", "r.md"))).toBe(0o600);
 	});
