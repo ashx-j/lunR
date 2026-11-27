@@ -69,7 +69,8 @@ async function registryFixture(
 	const packed = join(state.root, "packed");
 	await mkdir(join(packed, "package"), { recursive: true });
 	await writeFile(join(packed, "package", name), bytes);
-	execFileSync("tar", ["-czf", join(packed, "payload.tgz"), "-C", packed, "package"]);
+	// Relative paths: the GNU tar on a Windows runner's PATH reads `D:` in an absolute path as a remote host.
+	execFileSync("tar", ["-czf", "payload.tgz", "package"], { cwd: packed });
 	const tarball = await readFile(join(packed, "payload.tgz"));
 	await writeFile(join(state.root, "package.json"), JSON.stringify({ version: "0.9.0" }));
 	const requests: Array<{ url: string; range?: string }> = [];

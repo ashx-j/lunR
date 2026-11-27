@@ -601,7 +601,8 @@ describe("Coding Agent Tools", () => {
 			);
 			expect(jobs.running()).toEqual([]);
 			await vi.waitFor(() => expect(job.exit).toBeDefined(), { timeout: 10_000 });
-			expect(() => process.kill(-job.pid!, 0)).toThrow();
+			// Windows has no process groups; stop ends the shell's process tree there.
+			expect(() => process.kill(windows ? job.pid! : -job.pid!, 0)).toThrow();
 
 			await tools.bash.execute("bg-exit", { command: "exit 3", run_in_background: true });
 			await vi.waitFor(() => expect(jobs.get("j2")?.exit).toBeDefined(), { timeout: 10_000 });
@@ -611,27 +612,31 @@ describe("Coding Agent Tools", () => {
 			jobs.stopAll();
 		});
 
-		it("keeps a background job running while processes its shell started with & live, and stops them", async () => {
-			const jobs = new BashJobs();
-			const tools = createAllTools(testDir, { bash: { jobs } });
-			try {
-				await tools.bash.execute("bg-amp", { command: "sleep 60 & echo started", run_in_background: true });
-				const job = jobs.get("j1");
-				if (!job?.pid) throw new Error("job did not start");
-				await vi.waitFor(() => expect(job.exit).toBeDefined(), { timeout: 10_000 });
+		// Windows has no process groups, so a job ends with its shell there and `&` children are not tracked.
+		it.skipIf(windows)(
+			"keeps a background job running while processes its shell started with & live, and stops them",
+			async () => {
+				const jobs = new BashJobs();
+				const tools = createAllTools(testDir, { bash: { jobs } });
+				try {
+					await tools.bash.execute("bg-amp", { command: "sleep 60 & echo started", run_in_background: true });
+					const job = jobs.get("j1");
+					if (!job?.pid) throw new Error("job did not start");
+					await vi.waitFor(() => expect(job.exit).toBeDefined(), { timeout: 10_000 });
 
-				expect(jobs.running()).toEqual([job]);
-				expect(jobs.takeExitNotices()).toContain(
-					"shell exited with code 0, but processes it started are still running",
-				);
-				expect(getTextOutput(await tools.bash_job.execute("bg-amp-stop", { id: "j1", action: "stop" }))).toBe(
-					"Stopped job j1.",
-				);
-				await vi.waitFor(() => expect(() => process.kill(-job.pid!, 0)).toThrow(), { timeout: 10_000 });
-			} finally {
-				jobs.stopAll();
-			}
-		});
+					expect(jobs.running()).toEqual([job]);
+					expect(jobs.takeExitNotices()).toContain(
+						"shell exited with code 0, but processes it started are still running",
+					);
+					expect(getTextOutput(await tools.bash_job.execute("bg-amp-stop", { id: "j1", action: "stop" }))).toBe(
+						"Stopped job j1.",
+					);
+					await vi.waitFor(() => expect(() => process.kill(-job.pid!, 0)).toThrow(), { timeout: 10_000 });
+				} finally {
+					jobs.stopAll();
+				}
+			},
+		);
 
 		it.skipIf(process.platform === "win32")(
 			"sends no signal at exit to a job whose shell and & processes have all ended",
