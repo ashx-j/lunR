@@ -66,7 +66,7 @@ import {
 } from "../../intercom/result-intercom.ts";
 import { buildRevivedAsyncTask, interruptLiveAsyncResumeTarget, resolveAsyncResumeTarget, resolveAsyncRunLocation } from "../background/async-resume.ts";
 import { deliverInterruptRequest, deliverStopRequest, requestAsyncSteer } from "../background/control-channel.ts";
-import { waitForSteeringAction } from "../background/steering.ts";
+import { remainingSteeringRecoveryLimits, waitForSteeringAction } from "../background/steering.ts";
 import { steerAsyncRun } from "./async-steering-action.ts";
 import { reconcileAsyncRun } from "../background/stale-run-reconciler.ts";
 import { resolveAsyncRootResultPath } from "../background/chain-root-attachment.ts";
@@ -1287,6 +1287,21 @@ async function resumeAsyncRun(input: {
 	if (resumeTurnBudget.error) return { content: [{ type: "text", text: resumeTurnBudget.error }], isError: true, details: { mode: "management", results: [] } };
 	const resumeToolBudget = resolveToolBudget(input.params.toolBudget, "toolBudget");
 	if (resumeToolBudget.error) return { content: [{ type: "text", text: resumeToolBudget.error }], isError: true, details: { mode: "management", results: [] } };
+	// A revive without budgets keeps what the run has left of its recorded ones, as steer recovery
+	// does. The deadline is not carried over: an old run's deadline has passed and must not block it.
+	let recordedLimits: ReturnType<typeof remainingSteeringRecoveryLimits> = {};
+	if (recoveryDescriptor && (!resumeTurnBudget.turnBudget || !resumeToolBudget.toolBudget)) {
+		try {
+			recordedLimits = remainingSteeringRecoveryLimits(
+				{ initialTurnBudget: recoveryDescriptor.initialTurnBudget, initialToolBudget: recoveryDescriptor.initialToolBudget },
+				(target.source === "async" && target.asyncDir ? readStatus(target.asyncDir) : null) ?? {},
+			);
+		} catch (error) {
+			return { content: [{ type: "text", text: `Cannot revive ${target.runId}: ${error instanceof Error ? error.message : String(error)}` }], isError: true, details: { mode: "management", results: [] } };
+		}
+	}
+	const reviveTurnBudget = resumeTurnBudget.turnBudget ?? recordedLimits.turnBudget;
+	const reviveToolBudget = resumeToolBudget.toolBudget ?? recordedLimits.toolBudget;
 	let recoverySpec: ChildSpec;
 	try {
 		const recoverySelection = recoveryDescriptor?.modelSelection ?? target.modelSelection;
@@ -1365,8 +1380,8 @@ async function resumeAsyncRun(input: {
 		...(restoredAcceptance ? { restoredAcceptance } : {}),
 		...(input.params.timeoutMs !== undefined ? { timeoutMs: input.params.timeoutMs } : {}),
 		...(input.absoluteDeadlineAt !== undefined ? { absoluteDeadlineAt: input.absoluteDeadlineAt } : {}),
-		...(resumeTurnBudget.turnBudget ? { turnBudget: resumeTurnBudget.turnBudget } : {}),
-		...(resumeToolBudget.toolBudget ? { toolBudget: resumeToolBudget.toolBudget } : {}),
+		...(reviveTurnBudget ? { turnBudget: reviveTurnBudget } : {}),
+		...(reviveToolBudget ? { toolBudget: reviveToolBudget } : {}),
 	});
 	if (result.isError) return result;
 
