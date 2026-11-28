@@ -76,12 +76,16 @@ export class LspManager {
   private shutdownPromise: Promise<void> | null = null;
   private _restartAttempts: Map<string, number> = new Map();
   private _restartBackoff: Map<string, number> = new Map();
+  /** When each running server became ready, to tell a crash at start from one after real use. */
+  private readonly readyAt = new Map<string, number>();
   /** Server commands that were not found on PATH. Edits skip them for the rest of the session. */
   private readonly missingCommands = new Set<string>();
 
   private static readonly MAX_RESTART_ATTEMPTS = 3;
   private static readonly INITIAL_BACKOFF_MS = 1000;
   private static readonly MAX_BACKOFF_MS = 30000;
+  /** A server that stayed up this long gets a fresh set of restart attempts when it next dies. */
+  private static readonly STABLE_UPTIME_MS = 30000;
 
   constructor(rootDir: string, customConfigs?: Record<string, ServerConfig>, callbacks?: LspManagerCallbacks, sessionId?: string, workspace?: WorkspaceProvider) {
     this.rootDir = resolve(rootDir);
@@ -441,9 +445,11 @@ export class LspManager {
         this.stop.signal.throwIfAborted();
         if (!client.initialized || client.disposed) throw new Error("LSP client closed during startup");
         this.clients.set(languageId, client);
+        // Restart attempts are forgiven in handleUnexpectedExit, once the server has stayed up.
+        // Clearing them here let a server that dies on a document re-opened after its restart
+        // come back every second for the rest of the session.
+        this.readyAt.set(languageId, Date.now());
         this._callbacks.onServerReady?.(languageId);
-        this._restartAttempts.delete(languageId);
-        this._restartBackoff.delete(languageId);
         this.triggerPostInit(languageId, client);
         return client;
       } catch (error) {
@@ -629,6 +635,13 @@ export class LspManager {
 
     // Clean up the dead client
     this.clients.delete(languageId);
+
+    const readyAt = this.readyAt.get(languageId);
+    this.readyAt.delete(languageId);
+    if (readyAt !== undefined && Date.now() - readyAt >= LspManager.STABLE_UPTIME_MS) {
+      this._restartAttempts.delete(languageId);
+      this._restartBackoff.delete(languageId);
+    }
 
     const attempts = this._restartAttempts.get(languageId) ?? 0;
     if (attempts >= LspManager.MAX_RESTART_ATTEMPTS) {

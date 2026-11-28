@@ -233,6 +233,9 @@ export default function lspExtension(pi: ExtensionAPI) {
     },
     onServerReady: (languageId: string) => {
       setLspStatus("accent", `LSP: ${languageId} ready`);
+      // A restarted server has none of the open documents; open them now, so its project loads
+      // before the next edit instead of during it.
+      host.getServicesIfReady()?.fileSync.reopen().catch(() => {});
     },
     onServerError: (languageId: string, _error: string) => {
       setLspStatus("error", `LSP: ${languageId} failed`);
