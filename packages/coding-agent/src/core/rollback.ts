@@ -39,7 +39,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, normalize, resolve } from "node:path";
+import { basename, dirname, join, normalize, relative, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { mkdirParentsSync } from "../utils/mkdir.ts";
 import { writeSessionJson } from "./session-ownership.ts";
@@ -64,6 +64,12 @@ interface TurnSnapshots {
 	cwd?: string;
 	files: Map<string, Snapshot>;
 	recovery?: RecoveryProgress;
+	/** Files bash calls changed in the turn. Rollback lists them and never writes them. */
+	bashChanged?: string[];
+	/** Git state bash calls changed (staged files, HEAD, a stash), reported with the result. */
+	notes?: string[];
+	/** A tracked bash call ran in the turn, so "complete" only covers what git tracks. */
+	bashRan?: boolean;
 }
 
 interface ManifestEntry {
@@ -75,6 +81,9 @@ interface ManifestEntry {
 interface TurnManifest {
 	cwd?: string;
 	recovery?: RecoveryProgress;
+	bashChanged?: string[];
+	notes?: string[];
+	bashRan?: boolean;
 	files: Record<string, ManifestEntry>;
 }
 
@@ -376,6 +385,9 @@ function persistSnapshot(ctx: RollbackContext, turn: TurnSnapshots, absPath: str
 		}
 		manifest.files[absPath] = entry;
 		if (turn.cwd) manifest.cwd = turn.cwd;
+		if (turn.bashChanged) manifest.bashChanged = turn.bashChanged;
+		if (turn.bashRan) manifest.bashRan = true;
+		if (turn.notes) manifest.notes = turn.notes;
 		writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 	} catch (error) {
 		// The in-memory snapshot still serves /rollback in this process, so the tool call goes on.
@@ -401,6 +413,9 @@ function readManifest(path: string): TurnManifest {
 			return {
 				cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined,
 				recovery: parseRecoveryProgress(parsed.recovery),
+				bashChanged: stringList(parsed.bashChanged),
+				bashRan: parsed.bashRan === true || undefined,
+				notes: stringList(parsed.notes),
 				files:
 					files && typeof files === "object" && !Array.isArray(files)
 						? (files as Record<string, ManifestEntry>)
@@ -437,7 +452,14 @@ function parseRecoveryProgress(value: unknown): RecoveryProgress | undefined {
 function persistRecoveryProgress(ctx: RollbackContext, turn: TurnSnapshots): void {
 	const turnDir = getTurnDir(ctx, turn.turnIndex);
 	mkdirSync(turnDir, { recursive: true });
-	const manifest: TurnManifest = { cwd: turn.cwd, recovery: turn.recovery, files: {} };
+	const manifest: TurnManifest = {
+		cwd: turn.cwd,
+		recovery: turn.recovery,
+		bashChanged: turn.bashChanged,
+		notes: turn.notes,
+		bashRan: turn.bashRan,
+		files: {},
+	};
 	for (const [path, snap] of turn.files) {
 		manifest.files[path] = {
 			existed: snap.existed,
@@ -472,7 +494,15 @@ function loadPersistedTurns(ctx: RollbackContext): void {
 				}
 				files.set(absPath, { existed: meta.existed, content, createdByTool: meta.createdByTool });
 			}
-			loaded.push({ turnIndex, cwd: manifest.cwd, files, recovery: manifest.recovery });
+			loaded.push({
+				turnIndex,
+				cwd: manifest.cwd,
+				files,
+				recovery: manifest.recovery,
+				bashChanged: manifest.bashChanged,
+				bashRan: manifest.bashRan,
+				notes: manifest.notes,
+			});
 		}
 		loaded.sort((a, b) => a.turnIndex - b.turnIndex);
 		ctx.turns = loaded;
@@ -504,6 +534,14 @@ export interface RollbackResult {
 	turnIndex?: number;
 	/** Committed turns, including skipped empty turns. Zero while recovery remains pending. */
 	turnsConsumed: number;
+	/** Files bash calls changed in the turn and no snapshot restored. */
+	notRestored: string[];
+	/** Git state bash calls changed in the turn. */
+	notes: string[];
+	/** A tracked bash call ran in the turn: "complete" then covers only what git tracks. */
+	bashRan?: boolean;
+	/** The turn's working directory, for paths in the summary. */
+	cwd?: string;
 }
 
 function isPathUnderRoot(absPath: string, root: string): boolean {
@@ -541,7 +579,12 @@ function warnExternalModification(ctx: RollbackContext, message: string): void {
 }
 
 function recoveryTurn(ctx: RollbackContext): TurnSnapshots | undefined {
-	return ctx.turns.find((turn) => turn.recovery) ?? [...ctx.turns].reverse().find((turn) => turn.files.size > 0);
+	return ctx.turns.find((turn) => turn.recovery) ?? [...ctx.turns].reverse().find((turn) => !isEmptyTurn(turn));
+}
+
+/** A turn with no snapshot, no bash call, no bash-changed file and no note: rollback skips it. */
+function isEmptyTurn(turn: TurnSnapshots): boolean {
+	return turn.files.size === 0 && !turn.bashChanged?.length && !turn.notes?.length && !turn.bashRan;
 }
 
 /** Keep the conversation target stable across partial restoration and fork retries. */
@@ -583,7 +626,7 @@ export function commitRollbackTurn(sessionId: string, turnIndex: number): void {
 		throw new Error("Rollback still has unrestored files.");
 	}
 	let count = 1;
-	while (index + count < ctx.turns.length && ctx.turns[index + count].files.size === 0) count++;
+	while (index + count < ctx.turns.length && isEmptyTurn(ctx.turns[index + count])) count++;
 	for (const removed of ctx.turns.splice(index, count)) cleanupTurnFiles(ctx, removed);
 }
 
@@ -593,7 +636,15 @@ export function rollbackLastTurn(
 	options: { deferCommit?: boolean; targetUserId?: string } = {},
 ): RollbackResult {
 	const ctx = getContext(sessionId);
-	const result: RollbackResult = { restored: [], deleted: [], failed: [], complete: true, turnsConsumed: 0 };
+	const result: RollbackResult = {
+		restored: [],
+		deleted: [],
+		notRestored: [],
+		notes: [],
+		failed: [],
+		complete: true,
+		turnsConsumed: 0,
+	};
 	if (!isRollbackEnabled(ctx.sessionId)) return result;
 	const blocked = getRollbackRecoveryBlockReason(ctx.sessionId);
 	if (blocked) throw new Error(blocked);
@@ -603,6 +654,11 @@ export function rollbackLastTurn(
 		return result;
 	}
 	result.turnIndex = turn.turnIndex;
+	result.notes = turn.notes ?? [];
+	result.bashRan = turn.bashRan;
+	result.cwd = turn.cwd;
+	// Created files a snapshot leaves on disk (tree scope with "copies"): still bash's, still listed.
+	const leftBehind = new Set<string>();
 	turn.recovery ??= {
 		turnsToConsume: peekRollbackTurnsConsumed(ctx.sessionId),
 		completed: [],
@@ -665,7 +721,7 @@ export function rollbackLastTurn(
 				if (shouldDelete && existsSync(absPath)) {
 					unlinkSync(absPath);
 					result.deleted.push(absPath);
-				}
+				} else if (existsSync(absPath)) leftBehind.add(absPath);
 			}
 			turn.recovery.completed.push(absPath);
 			turn.recovery.pending = undefined;
@@ -684,12 +740,103 @@ export function rollbackLastTurn(
 			result.failed.push({ path: absPath, error: error instanceof Error ? error.message : String(error) });
 		}
 	}
+	// A path a snapshot restored or deleted is back as before the turn, whatever bash did to it: an
+	// edit or write snapshot, or tree scope's (which restores bash changes it captured).
+	result.notRestored = (turn.bashChanged ?? []).filter((path) => !turn.files.has(path) || leftBehind.has(path));
 	result.complete = result.failed.length === 0;
 	if (result.complete && !options.deferCommit) {
 		result.turnsConsumed = turn.recovery.turnsToConsume;
 		commitRollbackTurn(ctx.sessionId, turn.turnIndex);
 	}
 	return result;
+}
+
+/**
+ * Records the files one bash call changed and the git state it changed, under the current turn.
+ * /rollback lists these files and never restores them: git cannot tell lunR the exact bytes that
+ * were on disk before the call.
+ */
+export function rollbackRecordBashChanges(paths: string[], notes: string[], sessionId?: string): void {
+	const ctx = getContext(sessionId);
+	if (!isRollbackEnabled(ctx.sessionId)) return;
+	if (ctx.currentTurnIndex < 0 || ctx.turns.length === 0) beginTurn(ctx.lastCwd, ctx.sessionId);
+	const turn = ctx.turns[ctx.turns.length - 1];
+	if (!turn) return;
+	if (paths.length === 0 && notes.length === 0 && turn.bashRan) return;
+	turn.bashRan = true;
+	turn.bashChanged = [...new Set([...(turn.bashChanged ?? []), ...paths])];
+	turn.notes = [...new Set([...(turn.notes ?? []), ...notes])];
+	persistTurnLists(ctx, turn);
+}
+
+function persistTurnLists(ctx: RollbackContext, turn: TurnSnapshots): void {
+	try {
+		const turnDir = getTurnDir(ctx, turn.turnIndex);
+		mkdirSync(turnDir, { recursive: true });
+		const manifestPath = join(turnDir, "manifest.json");
+		const manifest = readManifest(manifestPath);
+		if (turn.cwd) manifest.cwd = turn.cwd;
+		manifest.bashChanged = turn.bashChanged;
+		manifest.notes = turn.notes;
+		manifest.bashRan = turn.bashRan;
+		writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+	} catch {
+		// The in-memory lists still serve /rollback in this process.
+	}
+}
+
+function stringList(value: unknown): string[] | undefined {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
+}
+
+/** dev/tui's format for restored and deleted files. */
+function fileNames(paths: string[]): string {
+	const base = paths
+		.slice(0, 3)
+		.map((path) => basename(path))
+		.join(", ");
+	return paths.length > 3 ? `${base}, …` : base;
+}
+
+/** Paths relative to the turn's cwd, so `src/a.ts` and `test/a.ts` stay apart. */
+function bashNames(paths: string[], cwd: string | undefined): string {
+	const names = paths.slice(0, 5).map((path) => (cwd ? relative(cwd, path).split(sep).join("/") : basename(path)));
+	return paths.length > 5 ? `${names.join(", ")} and ${paths.length - 5} more` : names.join(", ");
+}
+
+/** The status line for a rollback whose files are done. "complete" only when bash left nothing behind. */
+export function rollbackSummary(result: RollbackResult): string {
+	const parts: string[] = [];
+	if (result.restored.length > 0)
+		parts.push(`${result.restored.length} file(s) restored (${fileNames(result.restored)})`);
+	if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted (${fileNames(result.deleted)})`);
+	const left: string[] = [];
+	if (result.notRestored.length > 0) {
+		left.push(`Not restored, changed by bash commands: ${bashNames(result.notRestored, result.cwd)}`);
+	}
+	left.push(...result.notes);
+	if (left.length === 0) {
+		if (parts.length === 0) {
+			parts.push(result.turnIndex === undefined ? "no file changes to restore" : "file recovery complete");
+		}
+		// Bash changes to ignored files and to permissions are not seen, so "complete" says what it covers.
+		if (result.bashRan) {
+			return `Rollback complete for the files git tracks — ${parts.join("; ")}. Bash changes to files git ignores and to permissions are not covered.`;
+		}
+		return `Rollback complete — ${parts.join("; ")}.`;
+	}
+	const done = parts.length > 0 ? ` — ${parts.join("; ")}` : "";
+	return `Rollback finished${done}. ${left.join(". ")}.`;
+}
+
+/** Shows a one-time notice through the same sink as rollback's warnings, or stderr without one. */
+export function showRollbackNotice(message: string): void {
+	try {
+		if (warningHandler) warningHandler(message);
+		else process.stderr.write(`Warning: ${message}\n`);
+	} catch {
+		// notice delivery is best-effort
+	}
 }
 
 export function getRollbackStatus(sessionId?: string): { enabled: boolean; turns: number; files: number } {

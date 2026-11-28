@@ -48,6 +48,8 @@ function result(overrides: Partial<RollbackResult> = {}): RollbackResult {
 	return {
 		restored: ["/scratch/file.txt"],
 		deleted: [],
+		notRestored: [],
+		notes: [],
 		failed: [],
 		complete: true,
 		turnsConsumed: 0,

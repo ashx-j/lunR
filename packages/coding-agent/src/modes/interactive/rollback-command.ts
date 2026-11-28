@@ -17,6 +17,7 @@ import {
 	peekRollbackTurnsConsumed,
 	type RollbackResult,
 	rollbackLastTurn,
+	rollbackSummary,
 } from "../../core/rollback.ts";
 import type { SessionManager } from "../../core/session-manager.ts";
 
@@ -128,17 +129,6 @@ export async function handleRollbackCommand(host: RollbackCommandHost): Promise<
 		return;
 	}
 
-	const names = (paths: string[]): string => {
-		const base = paths
-			.slice(0, 3)
-			.map((p) => path.basename(p))
-			.join(", ");
-		return paths.length > 3 ? `${base}, …` : base;
-	};
-	const parts: string[] = [];
-	if (result.restored.length > 0) parts.push(`${result.restored.length} file(s) restored (${names(result.restored)})`);
-	if (result.deleted.length > 0) parts.push(`${result.deleted.length} file(s) deleted (${names(result.deleted)})`);
-	if (parts.length === 0)
-		parts.push(result.turnIndex === undefined ? "no file changes to restore" : "file recovery complete");
-	host.showStatus(`Rollback complete — ${parts.join("; ")}.`);
+	// Lists the files bash changed and git state it left; "complete" only when there are none.
+	host.showStatus(rollbackSummary(result));
 }

@@ -1,6 +1,12 @@
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ToolRenderResultOptions } from "../../../core/extensions/types.ts";
 import type { BashToolDetails, createBashToolDefinition } from "../../../core/tools/bash.ts";
+import {
+	type BashFileChange,
+	type BashFileChanges,
+	formatChangesForModel,
+} from "../../../core/tools/bash-file-changes.ts";
+import { renderDiff } from "../components/diff.ts";
 import { truncateToVisualLines } from "../components/visual-truncate.ts";
 import { theme } from "../theme/theme.ts";
 import {
@@ -14,6 +20,8 @@ import {
 } from "./render-utils.ts";
 
 const BASH_PREVIEW_LINES = 5;
+/** The expanded card shows this many changed files, the ones the tracker diffed. */
+const MAX_CARD_FILES = 20;
 
 type BashRenderState = {
 	startedAt: number | undefined;
@@ -66,6 +74,47 @@ function formatBashCall(
 	return commandDisplay + timeoutSuffix + backgroundSuffix;
 }
 
+/** "changed 2 files, +14 −3", the header suffix for a call that changed files. */
+function formatChangeSummary(changes: BashFileChanges): string {
+	const count = changes.files.length + changes.more;
+	let added = 0;
+	let removed = 0;
+	// Line counts exist for the files that got a diff; the sum is shown only when every file has one.
+	let counted = changes.more === 0;
+	for (const file of changes.files) {
+		if (file.added === undefined || file.removed === undefined) counted = false;
+		added += file.added ?? 0;
+		removed += file.removed ?? 0;
+	}
+	const counts =
+		counted && added + removed > 0
+			? `, ${theme.fg("toolDiffAdded", `+${added}`)} ${theme.fg("toolDiffRemoved", `−${removed}`)}`
+			: "";
+	return theme.fg("muted", `changed ${count} file${count === 1 ? "" : "s"}`) + counts;
+}
+
+/** One file's heading and diff, like the edit card's body. */
+function formatFileChange(file: BashFileChange): string {
+	const notes = [
+		file.kind === "deleted" ? "deleted" : file.kind === "created" ? "new" : undefined,
+		file.binary ? "binary" : undefined,
+		// The earlier text is git's HEAD version, not a copy of the file from before the call.
+		file.againstHead && file.diff ? "compared with HEAD" : undefined,
+	].filter(Boolean);
+	const heading =
+		theme.fg("toolTitle", file.path) + (notes.length > 0 ? theme.fg("muted", ` (${notes.join(", ")})`) : "");
+	return file.diff ? `${heading}\n${renderDiff(file.diff)}` : heading;
+}
+
+function isFileChanges(value: unknown): value is BashFileChanges {
+	return typeof value === "object" && value !== null && "files" in value && Array.isArray(value.files);
+}
+
+function readFileChanges(details: unknown): BashFileChanges | undefined {
+	if (!details || typeof details !== "object" || !("fileChanges" in details)) return undefined;
+	return isFileChanges(details.fileChanges) ? details.fileChanges : undefined;
+}
+
 function rebuildBashResultRenderComponent(
 	component: BashResultRenderComponent,
 	result: {
@@ -83,7 +132,11 @@ function rebuildBashResultRenderComponent(
 	const state = component.state;
 	component.clear();
 
-	let output = getTextOutput(result as any, showImages).trim();
+	const allChanges = readFileChanges(result.details);
+	// The model's "Files changed" line repeats what the header and the diffs show.
+	const modelLine = allChanges ? formatChangesForModel(allChanges) : undefined;
+	const shown = modelLine ? { ...result, content: result.content.filter((part) => part.text !== modelLine) } : result;
+	let output = getTextOutput(shown, showImages).trim();
 	const truncation = result.details?.truncation;
 	const fullOutputPath = result.details?.fullOutputPath;
 	if (!options.isPartial && truncation?.truncated && fullOutputPath && output.endsWith("]")) {
@@ -125,6 +178,16 @@ function rebuildBashResultRenderComponent(
 		}
 	}
 
+	const changes = options.expanded ? allChanges : undefined;
+	if (changes) {
+		const shown = changes.files.slice(0, MAX_CARD_FILES);
+		for (const file of shown) component.addChild(new Text(`\n${formatFileChange(file)}`, 0, 0));
+		const rest = changes.files.length - shown.length + changes.more;
+		if (rest > 0) {
+			component.addChild(new Text(`\n${theme.fg("muted", `and ${rest} more file${rest === 1 ? "" : "s"}`)}`, 0, 0));
+		}
+	}
+
 	// lunr: the truncation/full-output notice is intentionally NOT rendered in
 	// the TUI — the model still gets it in the result text (formatOutput), and
 	// the temp-log path is noise on screen.
@@ -155,6 +218,8 @@ export const bashToolRenderer: ToolRendererFor<ReturnType<typeof createBashToolD
 		if (compact && state.startedAt !== undefined && state.endedAt !== undefined) {
 			detail += theme.fg("muted", ` — Took ${formatDuration(state.endedAt - state.startedAt)}`);
 		}
+		const changes = context.isPartial ? undefined : readFileChanges(context.result?.details);
+		if (changes) detail += `${theme.fg("muted", " — ")}${formatChangeSummary(changes)}`;
 		const text = (context.lastComponent as GroupedCallText | undefined) ?? new GroupedCallText("", 0, 0);
 		text.setCall({
 			role: context.groupRole ?? "singleton",

@@ -395,12 +395,20 @@ function groupAlive(pid: number): boolean {
 	}
 }
 
+let noted = 0;
+
+/** How many calls have left processes running so far; the file-change tracker compares it around a call. */
+export function leftoversNoted(): number {
+	return noted;
+}
+
 /**
  * Called after a foreground call's shell exits. Processes it started with `&` keep its process
  * group alive and outlive lunR on purpose (dev servers); this only remembers them for the exit list.
  */
 export function noteLeftoverProcesses(pid: number, command: string): void {
 	if (process.platform === "win32" || !groupAlive(pid)) return;
+	noted++;
 	if (leftovers.size >= MAX_LEFTOVERS) {
 		const oldest = leftovers.keys().next().value;
 		if (oldest !== undefined) leftovers.delete(oldest);
