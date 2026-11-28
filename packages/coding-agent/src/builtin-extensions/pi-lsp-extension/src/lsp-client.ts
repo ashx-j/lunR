@@ -360,7 +360,10 @@ export class LspClient {
         settle(new Error("LSP daemon socket closed during startup"));
         if (!this._disposed) {
           this._initialized = false;
-          if (connected) this.options.onUnexpectedExit?.(null);
+          if (connected) {
+            this._disposed = true;
+            this.options.onUnexpectedExit?.(null);
+          }
         }
       });
       timeout = setTimeout(() => {
@@ -401,6 +404,9 @@ export class LspClient {
       if (!this._disposed) {
         this._initialized = false;
         this.disposeConnection();
+        // A dead server answers nothing: `getRunningClient` must not hand it out, or edit and bash
+        // each wait the full diagnostics cap on it.
+        this._disposed = true;
         // A failed handshake is handled by the pending start, not auto-restart.
         if (wasInitialized) this.options.onUnexpectedExit?.(code);
       }

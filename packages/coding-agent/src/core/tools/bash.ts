@@ -14,6 +14,7 @@ import {
 } from "../../utils/shell.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import { markExited as markProcessExited, register as registerProcess } from "../process-registry.ts";
+import type { BashFileChanges, BashFileChangeTracker } from "./bash-file-changes.ts";
 import { BashJobs, noteLeftoverProcesses } from "./bash-jobs.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -50,6 +51,8 @@ export type BashToolInput = Static<typeof bashSchema>;
 export interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	/** Files the call changed in the working tree; the session adds it after the call. */
+	fileChanges?: BashFileChanges;
 }
 
 /**
@@ -195,6 +198,8 @@ export interface BashToolOptions {
 	defaultTimeout?: number;
 	/** Where `run_in_background` jobs live, shared with the bash_job tool. The session passes its own and stops them when it ends. */
 	jobs?: BashJobs;
+	/** Finds the files a foreground call changed. Not used with custom `operations`, which may run elsewhere. */
+	fileChanges?: Pick<BashFileChangeTracker, "begin" | "noteBackground">;
 }
 
 const BASH_UPDATE_THROTTLE_MS = 100;
@@ -220,7 +225,7 @@ export function createBashToolDefinition(
 		promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
 		parameters: bashSchema,
 		async execute(
-			_toolCallId,
+			toolCallId,
 			{ command, timeout, run_in_background }: { command: string; timeout?: number; run_in_background?: boolean },
 			signal?: AbortSignal,
 			onUpdate?,
@@ -231,6 +236,7 @@ export function createBashToolDefinition(
 			if (run_in_background) {
 				if (options?.operations) throw new Error("run_in_background needs the local shell.");
 				const job = jobs.start(spawnContext.command, spawnContext.cwd, spawnContext.env, options?.shellPath);
+				options?.fileChanges?.noteBackground(command);
 				return { content: [{ type: "text", text: `Started job ${job.id}.` }], details: undefined };
 			}
 			const output = new OutputAccumulator({ tempFilePrefix: "lunr-bash" }); // lunr: renamed from pi-bash
@@ -316,6 +322,9 @@ export function createBashToolDefinition(
 			};
 
 			const appendStatus = (text: string, status: string) => `${text ? `${text}\n\n` : ""}${status}`;
+			const finishTracking = options?.operations
+				? undefined
+				: await options?.fileChanges?.begin(toolCallId, command, spawnContext.cwd);
 
 			try {
 				let exitCode: number | null;
@@ -363,6 +372,7 @@ export function createBashToolDefinition(
 				return { content: [{ type: "text", text: outputText }], details };
 			} finally {
 				clearUpdateTimer();
+				await finishTracking?.();
 			}
 		},
 	};

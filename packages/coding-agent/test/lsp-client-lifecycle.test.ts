@@ -221,6 +221,18 @@ describe("LSP owned client lifecycle", () => {
 		expect(mocks.connection.sendNotification).not.toHaveBeenCalled();
 		expect(vi.getTimerCount()).toBe(0);
 	});
+	it("disposes a client whose server process exited, so it is not handed out as running", async () => {
+		const { client, child, unexpected } = setup();
+		await startDirect(client, child);
+		expect(client.initialized && !client.disposed).toBe(true);
+
+		child.exit(null, "SIGKILL");
+
+		expect(unexpected).toHaveBeenCalledOnce();
+		expect(client.disposed).toBe(true);
+		await client.shutdown();
+	});
+
 	it("reports an established daemon connection's unexpected close after a transport error", async () => {
 		const { client, socket, connected, unexpected } = setup("/fake.sock");
 		const starting = client.start();

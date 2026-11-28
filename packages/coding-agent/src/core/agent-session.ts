@@ -121,6 +121,7 @@ import { READ_ONLY_MODE_ADDENDUM } from "./plan-mode.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import { withoutDeletedHeaders } from "./provider-headers.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import { rollbackRecordBashChanges, showRollbackNotice } from "./rollback.ts";
 import { SessionCompaction, type SessionCompactionHost } from "./session-compaction.ts";
 import type { SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
@@ -147,6 +148,7 @@ import { measureStartup } from "./timings.ts";
 import { installToolCallHooks, type ToolCallGate, type ToolCallHooksHost } from "./tool-call-hooks.ts";
 import { rebuildToolRegistry, type ToolDefinitionEntry, type ToolRegistryHost } from "./tool-registry.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
+import { BashFileChangeTracker } from "./tools/bash-file-changes.ts";
 import { BashJobs } from "./tools/bash-jobs.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -390,6 +392,11 @@ export class AgentSession {
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 	/** `run_in_background` jobs. They survive tool rebuilds and stop when the session is disposed. */
 	readonly bashJobs = new BashJobs();
+	/** Lists the files bash calls change: a diff on the card, a type check, and the list /rollback prints. */
+	readonly bashFileChanges = new BashFileChangeTracker({
+		record: (paths, notes) => rollbackRecordBashChanges(paths, notes, this.sessionId),
+		notify: showRollbackNotice,
+	});
 
 	// The hosts below are built in field initializers, before the constructor assigns `agent`,
 	// `sessionManager` and the model runtime, so every member that reads a field must be a getter.
@@ -725,6 +732,9 @@ export class AgentSession {
 			},
 			get bashJobs() {
 				return session.bashJobs;
+			},
+			get bashFileChanges() {
+				return session.bashFileChanges;
 			},
 			permissionRules: () => this._permissionRules(),
 			reviewAutoAction: (toolName, args, toolCallId) => this._reviewAutoAction(toolName, args, toolCallId),
@@ -1248,6 +1258,7 @@ export class AgentSession {
 		this._disconnectFromAgent();
 		this._eventListeners = [];
 		this.bashJobs.stopAll();
+		this.bashFileChanges.dispose();
 		cleanupSessionResources(this.sessionId);
 		deletePermissionContext(this.sessionId);
 		this.sessionManager.dispose();
@@ -2938,7 +2949,13 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath, defaultTimeout, jobs: this.bashJobs },
+					bash: {
+						commandPrefix: shellCommandPrefix,
+						shellPath,
+						defaultTimeout,
+						jobs: this.bashJobs,
+						fileChanges: this.bashFileChanges,
+					},
 				});
 
 		this._baseToolDefinitions = new Map(
