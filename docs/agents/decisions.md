@@ -4,6 +4,7 @@ Read before reversing a past choice or picking up postponed work. Append new dec
 
 ## Decisions
 
+- 2026-11-28: expand `$HOME` and `${HOME}` in the existing saved-login bash matcher (`core/credential-files.ts`) instead of rewriting the matcher for more spellings (#387, closed), because the rewrite allowed 19 commands the old code refused and its glob matching stalled lunR; one spelling per change, compared against the old function on real commands.
 - 2026-11-27: re-open the tracked documents on a restarted language server as soon as it is ready, not on the next edit, because tsserver loads the project on the first didOpen (2.5 s for a one-file project here) and each edit during that load waited the 0.5 s diagnostics cap.
 - 2026-11-27: reach the line targets of the class split by moving the tool-call hooks and the tool registry out of `AgentSession` and quit/suspend/signal handling out of `InteractiveMode`, not `handleEvent`, because `handleEvent` runs on every streamed token and many tests call it on partial fakes, while the moved groups each have one subject and a host of 11 to 16 members.
 - 2026-11-27: give a bare `vitest` run a disposable agent directory in `test/global-setup-tools.ts`, instead of requiring `test.sh` for every run, because agents run single test files directly and `config.ts` then pointed session tests at the real `~/.lunr/agent` (a review run created folders there).
