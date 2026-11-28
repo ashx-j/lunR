@@ -242,3 +242,35 @@ describe("LSP manager startup ownership", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 });
+
+describe("LSP manager auto-restart", () => {
+	async function crashAfter(uptimeMs: number): Promise<void> {
+		await vi.advanceTimersByTimeAsync(uptimeMs);
+		clients.created.at(-1)?.options.onUnexpectedExit?.(1);
+		// The longest backoff is 30 s; this runs the pending restart, if one was scheduled.
+		await vi.advanceTimersByTimeAsync(30_000);
+	}
+
+	it("stops restarting a server that keeps dying right after it starts", async () => {
+		vi.useFakeTimers();
+		const { manager, error } = setup();
+		await manager.getClientForLanguage("typescript");
+		for (let crash = 0; crash < 4; crash++) await crashAfter(100);
+		// 1 first start plus 3 restarts. The 4th crash gives up.
+		expect(clients.created).toHaveLength(4);
+		expect(error).toHaveBeenCalledWith("typescript", expect.stringContaining("giving up auto-restart"));
+		await manager.shutdownAll();
+	});
+
+	it("gives a server that stayed up a fresh set of restart attempts", async () => {
+		vi.useFakeTimers();
+		const { manager, error } = setup();
+		await manager.getClientForLanguage("typescript");
+		for (let crash = 0; crash < 3; crash++) await crashAfter(100);
+		expect(clients.created).toHaveLength(4);
+		for (let crash = 0; crash < 3; crash++) await crashAfter(60_000);
+		expect(clients.created).toHaveLength(7);
+		expect(error).not.toHaveBeenCalled();
+		await manager.shutdownAll();
+	});
+});
