@@ -15,6 +15,7 @@ import { gateToolCall, type PermissionMode } from "./permissions.ts";
 import { readOnlyModeBlockReason } from "./plan-mode.ts";
 import { rollbackSnapshotBeforeWrite } from "./rollback.ts";
 import type { SettingsManager } from "./settings-manager.ts";
+import { type BashFileChangeTracker, formatChangesForModel } from "./tools/bash-file-changes.ts";
 import type { BashJobs } from "./tools/bash-jobs.ts";
 import { resolveToCwd } from "./tools/path-utils.ts";
 
@@ -42,6 +43,8 @@ export interface ToolCallHooksHost {
 	/** Read at each call, so an extension reload swaps in the new runner without reinstalling hooks. */
 	readonly extensionRunner: ExtensionRunner;
 	readonly bashJobs: BashJobs;
+	/** Finds the files bash calls change; its result goes into the bash tool result. */
+	readonly bashFileChanges: BashFileChangeTracker;
 	permissionRules(): CompiledPermissionRules;
 	reviewAutoAction(toolName: string, args: unknown, toolCallId: string): Promise<string | undefined>;
 }
@@ -138,9 +141,17 @@ export function installToolCallHooks(agent: Agent, host: ToolCallHooksHost): voi
 	agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
 		// A job that exited during the run is announced in the next tool result, which the
 		// next request carries anyway. Steering would cost an extra request after a final answer.
+		const fileChanges = host.bashFileChanges.take(toolCall.id);
+		if (fileChanges) {
+			result = {
+				...result,
+				content: [...result.content, { type: "text", text: formatChangesForModel(fileChanges) }],
+				details: { ...result.details, fileChanges },
+			};
+		}
 		const jobNotice = host.bashJobs.takeExitNotices();
 		if (jobNotice) result = { ...result, content: [...result.content, { type: "text", text: jobNotice }] };
-		const unchanged = jobNotice ? { content: result.content } : undefined;
+		const unchanged = jobNotice || fileChanges ? { content: result.content, details: result.details } : undefined;
 		const runner = host.extensionRunner;
 		if (!runner.hasHandlers("tool_result")) {
 			return unchanged;
