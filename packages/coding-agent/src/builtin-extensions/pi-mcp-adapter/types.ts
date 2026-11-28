@@ -108,35 +108,19 @@ export interface UiHostContext {
 
 export type UiDisplayMode = "inline" | "fullscreen" | "pip";
 
-// Re-export stream types from the shared lightweight module.
-// This allows the example package to import stream schemas without pulling the full types.ts dependency graph.
-export {
-  UI_STREAM_HOST_CONTEXT_KEY,
-  UI_STREAM_REQUEST_META_KEY,
-  UI_STREAM_RESULT_PATCH_METHOD,
-  SERVER_STREAM_RESULT_PATCH_METHOD,
-  UI_STREAM_STRUCTURED_CONTENT_KEY,
-  uiStreamModeSchema,
-  visualizationStreamPhaseSchema,
-  visualizationStreamFrameTypeSchema,
-  visualizationStreamStatusSchema,
-  uiStreamHostContextSchema,
-  visualizationStreamEnvelopeSchema,
-  uiStreamCallToolResultSchema,
-  uiStreamResultPatchNotificationSchema,
-  serverStreamResultPatchNotificationSchema,
-  getUiStreamHostContext,
-  getVisualizationStreamEnvelope,
-  type UiStreamMode,
-  type VisualizationStreamPhase,
-  type VisualizationStreamFrameType,
-  type VisualizationStreamStatus,
-  type UiStreamHostContext,
-  type VisualizationStreamEnvelope,
-  type UiStreamCallToolResult,
-  type UiStreamResultPatchNotification,
-  type ServerStreamResultPatchNotification,
-  type UiStreamSummary,
+// Stream types only. The schema values stay in ui-stream-types.ts, which imports zod; a value
+// re-export here would load zod for every importer of types.ts, including tool registration.
+export type {
+  UiStreamMode,
+  VisualizationStreamPhase,
+  VisualizationStreamFrameType,
+  VisualizationStreamStatus,
+  UiStreamHostContext,
+  VisualizationStreamEnvelope,
+  UiStreamCallToolResult,
+  UiStreamResultPatchNotification,
+  ServerStreamResultPatchNotification,
+  UiStreamSummary,
 } from "./ui-stream-types.ts";
 
 export interface UiMessageParams {

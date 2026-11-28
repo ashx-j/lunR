@@ -14,7 +14,6 @@ import { logger } from "./logger.ts";
 import type { McpServerManager } from "./server-manager.ts";
 import {
   extractUiPromptText,
-  getVisualizationStreamEnvelope,
   type UiDisplayMode,
   type UiDisplayModeRequest,
   type UiDisplayModeResult,
@@ -28,6 +27,7 @@ import {
   type UiSessionMessages,
   type UiStreamSummary,
 } from "./types.ts";
+import { getVisualizationStreamEnvelope } from "./ui-stream-types.ts";
 
 const MAX_BODY_SIZE = 2 * 1024 * 1024;
 const ABANDONED_GRACE_MS = 60_000;

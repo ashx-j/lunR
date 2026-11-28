@@ -58,9 +58,15 @@ function getAliases(): Record<string, string> {
 	const __dirname = path.dirname(fileURLToPath(import.meta.url));
 	const packageIndex = path.resolve(__dirname, "../..", isNodeBundle ? "node-runtime/index.js" : "index.js");
 
-	const typeboxEntry = require.resolve("typebox");
-	const typeboxCompileEntry = require.resolve("typebox/compile");
-	const typeboxValueEntry = require.resolve("typebox/value");
+	// import.meta.resolve goes through the typebox resolve hook (core/typebox-prebundle.ts), so the
+	// aliases get whichever copy the CLI loads. require.resolve skips that hook on Node 22.
+	const resolveTypebox = (specifier: string): string =>
+		typeof import.meta.resolve === "function"
+			? fileURLToPath(import.meta.resolve(specifier))
+			: require.resolve(specifier);
+	const typeboxEntry = resolveTypebox("typebox");
+	const typeboxCompileEntry = resolveTypebox("typebox/compile");
+	const typeboxValueEntry = resolveTypebox("typebox/value");
 
 	const packagesRoot = path.resolve(__dirname, "../../../../");
 	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {
