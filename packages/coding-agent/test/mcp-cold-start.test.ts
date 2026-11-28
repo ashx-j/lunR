@@ -134,9 +134,9 @@ function createMockPi(cwd: string) {
 	return pi;
 }
 
-async function emit(pi: ReturnType<typeof createMockPi>, event: string) {
+async function emit(pi: ReturnType<typeof createMockPi>, event: string, payload: object = {}) {
 	for (const handler of pi.handlers.get(event) ?? []) {
-		await handler({}, pi.ctx);
+		await handler(payload, pi.ctx);
 	}
 }
 
@@ -238,6 +238,7 @@ describe("mcp cold-start dependency split", () => {
 		vi.doUnmock("../src/builtin-extensions/pi-mcp-adapter/commands.ts");
 		vi.doUnmock("../src/builtin-extensions/pi-mcp-adapter/proxy-modes.ts");
 		vi.doUnmock("../src/builtin-extensions/pi-mcp-adapter/direct-tool-executor.ts");
+		vi.doUnmock("zod");
 		vi.restoreAllMocks();
 	});
 
@@ -354,6 +355,8 @@ describe("mcp cold-start dependency split", () => {
 		vi.doMock("../src/builtin-extensions/pi-mcp-adapter/commands.ts", blockHeavy);
 		vi.doMock("../src/builtin-extensions/pi-mcp-adapter/proxy-modes.ts", blockHeavy);
 		vi.doMock("../src/builtin-extensions/pi-mcp-adapter/direct-tool-executor.ts", blockHeavy);
+		// Only the connection engine validates with zod; loading it at registration cost every print run.
+		vi.doMock("zod", blockHeavy);
 
 		const mod = await import("../src/builtin-extensions/pi-mcp-adapter/index.ts");
 		const pi = createMockPi(agentDir);
@@ -379,6 +382,48 @@ describe("mcp cold-start dependency split", () => {
 		expect(heavyLoaded).toBe(false);
 		await emit(pi, "session_shutdown");
 		expect(heavyLoaded).toBe(false);
+	});
+
+	it("preloads the engine when the first TUI answer starts and servers are configured, never in print mode", async () => {
+		const agentDir = tempAgentDir();
+		const serverDef = { command: "true", lifecycle: "lazy" };
+		const configPath = writeConfig(agentDir, { mcpServers: { lazy: serverDef } });
+		writeCache(agentDir, {
+			lazy: {
+				configHash: computeServerHash(serverDef),
+				cachedAt: Date.now(),
+				tools: [{ name: "ping", description: "Ping" }],
+				resources: [],
+			},
+		});
+		process.argv = ["node", "lunr", "--mcp-config", configPath];
+		let loadCount = 0;
+		mockHeavyModules({
+			onInitModuleLoad: () => {
+				loadCount += 1;
+			},
+		});
+
+		const mod = await import("../src/builtin-extensions/pi-mcp-adapter/index.ts");
+		const pi = createMockPi(agentDir);
+		mod.default(pi);
+		await emit(pi, "session_start");
+		// The preload is the only thing the message_start handler schedules.
+		const timeouts = vi.spyOn(globalThis, "setTimeout");
+		const assistantStart = { type: "message_start", message: { role: "assistant" } };
+		await emit(pi, "message_start", assistantStart);
+		pi.ctx.mode = "tui";
+		await emit(pi, "message_start", { type: "message_start", message: { role: "user" } });
+		expect(timeouts).not.toHaveBeenCalled();
+		expect(loadCount).toBe(0);
+
+		await emit(pi, "message_start", assistantStart);
+		expect(timeouts).toHaveBeenCalledTimes(1);
+		await vi.waitFor(() => expect(loadCount).toBe(1));
+		const scheduled = timeouts.mock.calls.length;
+		await emit(pi, "message_start", assistantStart);
+		expect(timeouts.mock.calls.length).toBe(scheduled);
+		await emit(pi, "session_shutdown");
 	});
 
 	it("loads heavy runtime once on first tool use and retries after init failure", async () => {

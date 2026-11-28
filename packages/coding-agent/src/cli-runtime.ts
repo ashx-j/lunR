@@ -2,14 +2,18 @@
 import { enableCompileCache } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "./cli/args.ts";
 import { readPipedStdin, readsStdinBeforeTurn } from "./cli/piped-stdin.ts";
 import { isNodeBundle, VERSION } from "./config.ts";
+import { installTypeboxPrebundle } from "./core/typebox-prebundle.ts";
 import type { InteractiveView } from "./startup/interactive-view.ts";
 import { resolvePreloadLaunchMode } from "./startup/launch-routing.ts";
 import { markStartupMilestone } from "./startup/startup-milestones.ts";
 
 markStartupMilestone("process_entry");
+// Before anything imports typebox, so the process loads one prebuilt copy of it.
+if (isNodeBundle) installTypeboxPrebundle(fileURLToPath(new URL("./node-runtime/typebox/", import.meta.url)));
 const isDevChannel = process.env.PI_CODING_AGENT_DEV === "1";
 process.title = isDevChannel ? "lunr-dev" : "lunr";
 const args = process.argv.slice(2);

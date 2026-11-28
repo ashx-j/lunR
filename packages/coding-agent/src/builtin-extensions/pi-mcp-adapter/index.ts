@@ -308,6 +308,8 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     type: "string",
   });
 
+  let hasConfiguredServers = false;
+  let enginePreloadStarted = false;
   pi.on("session_start", async (_event, ctx) => {
     const generation = ++lifecycleGeneration;
     sessionAbort.abort(new Error("MCP session changed"));
@@ -333,6 +335,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     const configPath = (pi.getFlag("mcp-config") as string | undefined) ?? earlyConfigPath;
     const sessionConfig = loadMcpConfig(configPath, ctx.cwd, ctx.isProjectTrusted());
     const sessionCache = loadMetadataCache();
+    hasConfiguredServers = Object.keys(sessionConfig.mcpServers).length > 0;
     const registered = registerConfiguredTools(sessionConfig, sessionCache);
     // Session replacement can reuse the factory. Retire definitions from its prior config.
     const active = pi.getActiveTools().filter(name => !registeredDirectTools.has(name) && name !== "mcp");
@@ -343,6 +346,17 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     }
 
     startSessionInit(generation, pi, ctx);
+  });
+
+  // The engine (with zod and the MCP SDK) blocks the event loop for about 100 ms while it imports,
+  // and a lazy server's first call would wait for it. In the TUI with any server configured, import
+  // it when the first answer starts (the assistant message_start, which providers emit when the
+  // response headers arrive): the model is still working and the user is not typing. Eager servers
+  // have already started the import, and a tool call that comes first awaits the same promise.
+  pi.on("message_start", (event, ctx) => {
+    if (enginePreloadStarted || event.message.role !== "assistant" || ctx.mode !== "tui" || !hasConfiguredServers) return;
+    enginePreloadStarted = true;
+    setTimeout(() => void loadHeavyModules().catch(() => {}), 0);
   });
 
   pi.on("session_shutdown", async () => {
