@@ -1,4 +1,5 @@
 import { lstatSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "../config.ts";
@@ -129,25 +130,42 @@ export function credentialArgsReason(input: Record<string, unknown>, cwd: string
 /**
  * The refusal when a bash command names a credential location as a literal word or `--opt=` value
  * (`cat ~/.lunr/agent/auth.json`, `jq . <auth.json`), also relative to a literal `cd <dir>` before
- * it (`cd ~/.lunr/agent && cat auth.json`). Commands without one of the names return after one
- * regex test.
+ * it (`cd ~/.lunr/agent && cat auth.json`). A word or value that starts with `$HOME` or `${HOME}`
+ * is read with the home directory in its place. Commands without one of the names return after
+ * one regex test.
  */
 export function credentialBashReason(command: string, cwd: string): string | undefined {
 	if (!CREDENTIAL_NAME.test(command)) return undefined;
 	let base = cwd;
-	for (const words of literalSegments(command).map((segment) => segment.map(fromMsysPath))) {
+	for (const words of literalSegments(command).map((segment) => segment.map(asBashPath))) {
 		if (words[0] === "cd" && words.length === 2) {
 			base = resolveToCwd(words[1], base);
 			continue;
 		}
 		for (const word of words) {
-			const value = fromMsysPath(word.slice(word.lastIndexOf("=") + 1));
+			const value = asBashPath(word.slice(word.lastIndexOf("=") + 1));
 			if (credentialPathReason(word, base) || (value !== word && value && credentialPathReason(value, base))) {
 				return CREDENTIAL_BLOCK_REASON;
 			}
 		}
 	}
 	return undefined;
+}
+
+const HOME_VARIABLE = /^\$(?:HOME|\{HOME\})(?=\/|$)/;
+
+function asBashPath(word: string): string {
+	return fromMsysPath(expandHome(word));
+}
+
+/**
+ * `$HOME/x` and `${HOME}/x` with the home directory in place of the variable, as bash expands them
+ * bare or inside double quotes. The quotes are gone by now, so a single-quoted `'$HOME/x'`, which
+ * bash leaves alone, is expanded too: that only refuses a path that spells out a saved login.
+ * Other variables and `${HOME:-x}` forms stay as written.
+ */
+function expandHome(word: string): string {
+	return word.replace(HOME_VARIABLE, () => process.env.HOME || homedir());
 }
 
 /**

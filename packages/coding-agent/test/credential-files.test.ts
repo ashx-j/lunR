@@ -174,6 +174,36 @@ describe("lunR's saved logins", () => {
 		expect(await gate(toolName, withProfile(input, toolName))).toBeUndefined();
 	});
 
+	describe("with $HOME pointing at the scratch root", () => {
+		let previousHome: string | undefined;
+		beforeEach(() => {
+			previousHome = process.env.HOME;
+			process.env.HOME = root.replaceAll(sep, "/");
+		});
+		afterEach(() => {
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+		});
+
+		it.each([
+			"cat $HOME/agent/auth.json",
+			'cat "$HOME"/agent/auth.json',
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: a bash variable, not a template
+			'jq . "${HOME}/agent/subscriptions.json"',
+			"cd $HOME/agent && cat auth.json",
+			"base64 --input=$HOME/agent/mcp-oauth/sha256-ab/tokens.json",
+		])("refuses bash %s", async (command) => {
+			expect(await gate("bash", { command })).toEqual({ block: true, reason: CREDENTIAL_BLOCK_REASON });
+		});
+
+		it.each(["cat $HOME/project/auth.json", "cat $HOMEDIR/agent/auth.json", "echo $HOME && cat auth.json"])(
+			"allows bash %s, which reads no saved login",
+			async (command) => {
+				expect(await gate("bash", { command })).toBeUndefined();
+			},
+		);
+	});
+
 	// Inside double quotes bash keeps `\/`: a separator on Windows, part of a file name elsewhere.
 	it("reads a quoted backslash before a slash as bash does", async () => {
 		const reason = await gate("bash", withProfile({ command: 'cat "<profile>\\/auth.json"' }, "bash"));
