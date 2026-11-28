@@ -34,31 +34,36 @@ async function dueJob(prompt: string) {
 
 it("a TUI owner hands a job it cannot deliver to a waiting gateway", async () => {
 	const job = await dueJob("for the gateway");
+	const ran: string[] = [];
+	let gateway: ReturnType<typeof startScheduler> | undefined;
+	// The TUI owns the lease only until its first tick skips the job, which can be shorter than
+	// any poll interval when its acquire finishes after that tick is due. `accepts` runs while
+	// the TUI holds the lease, so the gateway starts there and its first acquire fails: it waits.
 	const tui = startScheduler({
 		intervalMs: 10,
 		handoffBackoffTicks: 1000,
-		accepts: () => false,
+		accepts: () => {
+			gateway ??= startScheduler({
+				intervalMs: 10,
+				runJob: async (_prompt, running) => {
+					ran.push(running.id);
+					return "done";
+				},
+				deliverResult: async () => {},
+			});
+			return false;
+		},
 		runJob: async () => {
 			throw new Error("the TUI must not run it");
 		},
 		deliverResult: async () => {},
 	});
-	await waitUntil(() => tui.isOwner());
-	const ran: string[] = [];
-	const gateway = startScheduler({
-		intervalMs: 10,
-		runJob: async (_prompt, running) => {
-			ran.push(running.id);
-			return "done";
-		},
-		deliverResult: async () => {},
-	});
 	try {
-		await waitUntil(() => gateway.isOwner() && getJob(job.id).repeat.completed === 1);
+		await waitUntil(() => gateway?.isOwner() === true && getJob(job.id).repeat.completed === 1);
 		expect(ran).toEqual([job.id]);
 		expect(tui.isOwner()).toBe(false);
 	} finally {
-		await gateway.stop();
+		await gateway?.stop();
 		await tui.stop();
 	}
 });
